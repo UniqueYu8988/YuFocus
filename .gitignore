@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local runtime data
+.biliarchive.local.json
+.biliarchive.window.json
+.zhiyuli-runtime.log
+output/
+
+# Desktop app build artifacts
+desktop/node_modules/
+desktop/dist/
+desktop/dist-electron/
+desktop/release/
+desktop/*.log
+desktop/*.png
+desktop/*.zip
+desktop/*.exe
+
+# OS / editor
+.DS_Store
+Thumbs.db

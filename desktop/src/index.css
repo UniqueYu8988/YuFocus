@@ -1,0 +1,125 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: "Segoe UI", "PingFang SC", "Microsoft YaHei UI", ui-sans-serif, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
+
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+}
+
+:root {
+  color-scheme: dark;
+  --background: 0 0% 13%;
+  --foreground: 210 10% 94%;
+  --card: 0 0% 9%;
+  --card-foreground: 210 10% 94%;
+  --popover: 0 0% 9%;
+  --popover-foreground: 210 10% 94%;
+  --primary: 210 7% 84%;
+  --primary-foreground: 220 14% 8%;
+  --secondary: 0 0% 14%;
+  --secondary-foreground: 210 10% 92%;
+  --muted: 0 0% 14%;
+  --muted-foreground: 220 4% 60%;
+  --accent: 0 0% 15%;
+  --accent-foreground: 210 10% 94%;
+  --destructive: 0 72% 58%;
+  --destructive-foreground: 210 10% 96%;
+  --border: 0 0% 18%;
+  --input: 0 0% 14%;
+  --ring: 210 7% 84%;
+  --radius: 1rem;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    @apply h-full;
+  }
+
+  body {
+    @apply m-0 bg-background font-sans text-foreground antialiased;
+    background-color: #202020;
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.24);
+  }
+}
+
+@layer utilities {
+  .glass-panel {
+    @apply border border-white/8 bg-white/4 backdrop-blur-2xl;
+  }
+
+  .glass-panel-strong {
+    @apply border border-white/10 bg-white/6 backdrop-blur-2xl;
+  }
+
+  .subtle-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .subtle-scrollbar:hover {
+    scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+  }
+
+  .subtle-scrollbar::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .subtle-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .subtle-scrollbar::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .subtle-scrollbar:hover::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
+    background-clip: padding-box;
+  }
+
+  .app-drag {
+    -webkit-app-region: drag;
+  }
+
+  .app-no-drag {
+    -webkit-app-region: no-drag;
+  }
+}

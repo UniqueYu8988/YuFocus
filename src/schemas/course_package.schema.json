@@ -1,0 +1,494 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onboard-anything.local/schemas/course_package.schema.json",
+  "title": "Onboard Anything Course Package",
+  "description": "Onboard Anything v0.1 蒸馏后课程知识包 Schema。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "package_id",
+    "source",
+    "course",
+    "chapters",
+    "dependency_graph",
+    "assets",
+    "gaps"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "onboard.course-package.v0.1"
+    },
+    "package_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"
+    },
+    "source": {
+      "$ref": "#/$defs/sourceInfo"
+    },
+    "course": {
+      "$ref": "#/$defs/courseInfo"
+    },
+    "chapters": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/chapterNode"
+      }
+    },
+    "dependency_graph": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/dependencyEdge"
+      }
+    },
+    "assets": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/assetRef"
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/informationGap"
+      }
+    }
+  },
+  "$defs": {
+    "sourceInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_type",
+        "source_id",
+        "title",
+        "language",
+        "ingested_at",
+        "text_length"
+      ],
+      "properties": {
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "bilibili_subtitle",
+            "groq_transcript",
+            "merged_text",
+            "manual_text"
+          ]
+        },
+        "source_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "creator": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string",
+          "minLength": 2
+        },
+        "ingested_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "text_length": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "courseInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "overall_goal",
+        "target_audience",
+        "learning_outcomes",
+        "completion_definition"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subtitle": {
+          "type": "string"
+        },
+        "overall_goal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target_audience": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prerequisites": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "learning_outcomes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "completion_definition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "estimated_total_minutes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "chapterNode": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/outlineNode"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "node_type": {
+              "const": "chapter"
+            }
+          }
+        }
+      ]
+    },
+    "outlineNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "node_type",
+        "title",
+        "summary",
+        "order",
+        "learning_objectives",
+        "dependencies",
+        "knowledge",
+        "children",
+        "assets",
+        "gaps"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,63}$"
+        },
+        "node_type": {
+          "type": "string",
+          "enum": [
+            "chapter",
+            "section",
+            "lesson"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "learning_objectives": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "dependencies": {
+          "type": "array",
+          "default": [],
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9._-]{1,63}$"
+          }
+        },
+        "knowledge": {
+          "$ref": "#/$defs/knowledgeBlock"
+        },
+        "children": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/outlineNode"
+          }
+        },
+        "assets": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/assetRef"
+          }
+        },
+        "gaps": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/informationGap"
+          }
+        }
+      }
+    },
+    "knowledgeBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "concepts",
+        "examples",
+        "checkpoints",
+        "common_mistakes"
+      ],
+      "properties": {
+        "concepts": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/conceptItem"
+          }
+        },
+        "examples": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/exampleItem"
+          }
+        },
+        "checkpoints": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "common_mistakes": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "conceptItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "explanation"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,63}$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "explanation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "exampleItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "scenario",
+        "takeaway"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,63}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scenario": {
+          "type": "string",
+          "minLength": 1
+        },
+        "takeaway": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "dependencyEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to",
+        "kind"
+      ],
+      "properties": {
+        "from": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,63}$"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,63}$"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "prerequisite",
+            "recommended",
+            "parallel"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "assetRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "asset_type",
+        "title",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,63}$"
+        },
+        "asset_type": {
+          "type": "string",
+          "enum": [
+            "image",
+            "audio",
+            "video",
+            "slide",
+            "link",
+            "document",
+            "other"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uri": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "missing",
+            "planned",
+            "attached"
+          ]
+        },
+        "related_node_ids": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9._-]{1,63}$"
+          }
+        }
+      }
+    },
+    "informationGap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "gap_type",
+        "severity",
+        "description"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,63}$"
+        },
+        "gap_type": {
+          "type": "string",
+          "enum": [
+            "visual_context",
+            "diagram_missing",
+            "screen_text_missing",
+            "demo_step_missing",
+            "notation_missing",
+            "other"
+          ]
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "affected_node_ids": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9._-]{1,63}$"
+          }
+        }
+      }
+    }
+  }
+}
