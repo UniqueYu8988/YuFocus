@@ -1,5 +1,6 @@
 import { LoaderCircle, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { AppChrome } from '@/components/AppChrome'
 import { CourseOutlinePane } from '@/components/CourseOutlinePane'
 import { WorkspacePane, type WorkspaceView } from '@/components/WorkspacePane'
 import { Badge } from '@/components/ui/badge'
@@ -12,6 +13,7 @@ import { useLearningStore } from '@/store'
 function App() {
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('hub')
   const [windowFocused, setWindowFocused] = useState(true)
+  const [windowMaximized, setWindowMaximized] = useState(false)
   const autoOpenedPackageRef = useRef<string | null>(null)
 
   const bootState = useLearningStore((state) => state.bootState)
@@ -26,6 +28,7 @@ function App() {
   const hydrateApp = useLearningStore((state) => state.hydrateApp)
   const setRuntimeSettings = useLearningStore((state) => state.setRuntimeSettings)
   const dismissToast = useLearningStore((state) => state.dismissToast)
+  const openDeepLinkedNode = useLearningStore((state) => state.openDeepLinkedNode)
 
   useEffect(() => {
     void hydrateApp()
@@ -37,6 +40,21 @@ function App() {
     })
     return unsubscribe
   }, [])
+
+  useEffect(() => {
+    const unsubscribe = window.desktopAPI.onWindowMaximizedChanged((payload) => {
+      setWindowMaximized(Boolean(payload.maximized))
+    })
+    return unsubscribe
+  }, [])
+
+  useEffect(() => {
+    const unsubscribe = window.desktopAPI.onDeepLinkOpen((payload) => {
+      void openDeepLinkedNode(payload.packageId, payload.nodeId)
+      setWorkspaceView('learn')
+    })
+    return unsubscribe
+  }, [openDeepLinkedNode])
 
   useEffect(() => {
     if (!courseData || !currentNodeId) {
@@ -54,7 +72,7 @@ function App() {
 
   if (bootState === 'booting') {
     return (
-      <div className="flex h-screen items-center justify-center overflow-hidden bg-background p-6">
+      <div className="work-surface flex h-screen items-center justify-center overflow-hidden p-6">
         <Card className="glass-panel-strong w-full max-w-lg">
           <CardContent className="flex items-center gap-4 p-6">
             <div className="flex size-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.05] text-foreground/85">
@@ -71,11 +89,19 @@ function App() {
   }
 
   return (
-    <div className={cn('relative flex h-screen overflow-hidden text-foreground transition-colors duration-200', windowFocused ? 'bg-[#202020]' : 'bg-[#1b1b1b]')}>
+    <div className={cn('relative flex h-screen flex-col overflow-hidden text-foreground transition-colors duration-200', windowFocused ? 'chrome-mica' : 'chrome-mica-unfocused')}>
+      <AppChrome
+        windowFocused={windowFocused}
+        isMaximized={windowMaximized}
+        onMinimize={() => void window.desktopAPI.minimize()}
+        onToggleMaximize={() => void window.desktopAPI.toggleMaximize()}
+        onClose={() => void window.desktopAPI.close()}
+      />
+
       {distillRequestState === 'loading' || distillError ? (
         <Card
           className={cn(
-            'glass-panel-strong absolute left-[268px] top-4 z-20 w-[min(360px,calc(100vw-19rem))] overflow-hidden rounded-[22px]',
+            'glass-panel-strong absolute left-[252px] top-12 z-20 w-[min(360px,calc(100vw-19rem))] overflow-hidden rounded-[22px]',
             distillError && 'border-destructive/25',
           )}
         >
@@ -121,7 +147,7 @@ function App() {
       ) : null}
 
       {toast ? (
-        <Card className="glass-panel-strong absolute right-4 top-4 z-20 w-[min(320px,calc(100vw-2rem))] rounded-[22px]">
+        <Card className="glass-panel-strong absolute right-4 top-12 z-20 w-[min(320px,calc(100vw-2rem))] rounded-[22px]">
           <CardContent className="flex items-start gap-3 p-3.5">
             <div
               className={cn(
@@ -148,16 +174,18 @@ function App() {
         </Card>
       ) : null}
 
-      <CourseOutlinePane workspaceView={workspaceView} onSelectView={setWorkspaceView} windowFocused={windowFocused} />
-      <WorkspacePane
-        view={workspaceView}
-        runtimeSettings={runtimeSettings}
-        windowFocused={windowFocused}
-        onRuntimeSettingsSaved={(next) => {
-          setRuntimeSettings(next)
-        }}
-        onRequestLearn={() => setWorkspaceView('learn')}
-      />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <CourseOutlinePane workspaceView={workspaceView} onSelectView={setWorkspaceView} windowFocused={windowFocused} />
+        <WorkspacePane
+          view={workspaceView}
+          runtimeSettings={runtimeSettings}
+          windowFocused={windowFocused}
+          onRuntimeSettingsSaved={(next) => {
+            setRuntimeSettings(next)
+          }}
+          onRequestLearn={() => setWorkspaceView('learn')}
+        />
+      </div>
     </div>
   )
 }

@@ -25,7 +25,7 @@ function renderInline(text: string) {
       parts.push(
         <code
           key={`${offset}-code`}
-          className="rounded-md border border-white/8 bg-black/20 px-1.5 py-0.5 font-mono text-[0.9em] text-foreground/88"
+          className="rounded-md border border-white/8 bg-[#202020] px-1.5 py-0.5 font-mono text-[0.9em] text-foreground/88"
         >
           {token.slice(1, -1)}
         </code>,
@@ -66,6 +66,11 @@ function parseMarkdown(markdown: string) {
     const line = lines[index]
 
     if (!line.trim()) {
+      index += 1
+      continue
+    }
+
+    if (/^\s*([-*_]\s*){3,}$/.test(line.trim())) {
       index += 1
       continue
     }
@@ -149,8 +154,17 @@ export function MarkdownRenderer({ content, className }: { content: string; clas
         if (block.type === 'heading') {
           const Tag = block.level <= 2 ? 'h2' : 'h3'
           return (
-            <Tag key={`h-${index}`} className={cn(block.level <= 2 ? 'text-base font-semibold' : 'text-sm font-semibold text-foreground/88')}>
-              {renderInline(block.text)}
+            <Tag
+              key={`h-${index}`}
+              className={cn(
+                'flex items-center gap-2 text-balance',
+                block.level <= 2
+                  ? 'rounded-xl border border-white/8 bg-[#202020] px-3 py-2 text-[16px] font-semibold tracking-tight text-foreground'
+                  : 'pt-1 text-[13px] font-semibold tracking-tight text-foreground/92',
+              )}
+            >
+              {block.level <= 2 ? <span aria-hidden className="text-[15px] opacity-85">✨</span> : null}
+              <span>{renderInline(block.text)}</span>
             </Tag>
           )
         }
@@ -161,7 +175,7 @@ export function MarkdownRenderer({ content, className }: { content: string; clas
 
         if (block.type === 'blockquote') {
           return (
-            <blockquote key={`q-${index}`} className="rounded-r-2xl border-l-2 border-white/16 bg-white/[0.04] px-4 py-3 text-muted-foreground">
+            <blockquote key={`q-${index}`} className="rounded-r-2xl border-l-2 border-white/16 bg-[#1c1c1c] px-4 py-3 text-muted-foreground">
               <p>{renderInline(block.text)}</p>
             </blockquote>
           )
@@ -179,9 +193,9 @@ export function MarkdownRenderer({ content, className }: { content: string; clas
 
         if (block.type === 'table') {
           return (
-            <div key={`t-${index}`} className="overflow-x-auto rounded-2xl border border-white/8 bg-black/15">
+            <div key={`t-${index}`} className="overflow-x-auto rounded-2xl border border-white/8 bg-[#1a1a1a]">
               <table className="min-w-full border-collapse text-left text-sm">
-                <thead className="bg-white/6 text-foreground">
+                <thead className="bg-[#222222] text-foreground">
                   <tr>
                     {block.headers.map((header, headerIndex) => (
                       <th key={`th-${index}-${headerIndex}`} className="border-b border-white/8 px-4 py-3 font-medium">
@@ -207,7 +221,7 @@ export function MarkdownRenderer({ content, className }: { content: string; clas
         }
 
         return (
-          <pre key={`c-${index}`} className="overflow-x-auto rounded-2xl border border-white/8 bg-black/20 p-4">
+          <pre key={`c-${index}`} className="overflow-x-auto rounded-2xl border border-white/8 bg-[#1a1a1a] p-4">
             <code className="font-mono text-[13px] leading-6 text-foreground/88" data-lang={block.lang || undefined}>
               {block.text}
             </code>

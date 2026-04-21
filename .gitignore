@@ -9,6 +9,9 @@ __pycache__/
 .biliarchive.window.json
 .zhiyuli-runtime.log
 output/
+tmp-obsidian-vault/
+tmp-obsidian-vault-2/
+tmp-obsidian-vault*/
 
 # Desktop app build artifacts
 desktop/node_modules/

@@ -14,8 +14,10 @@ if (-not $portableExe) {
 
 $baseName = [System.IO.Path]::GetFileNameWithoutExtension($portableExe.Name)
 $productName = $baseName -replace '_v.*$', ''
-$readmePath = Join-Path $releaseDir 'README_v0.1.txt'
-$shareZipPath = Join-Path $releaseDir ($productName + '_v0.1_share.zip')
+$versionMatch = [regex]::Match($baseName, '_v(?<version>.+?)_x64$')
+$versionLabel = if ($versionMatch.Success) { $versionMatch.Groups['version'].Value } else { 'latest' }
+$readmePath = Join-Path $releaseDir ("README_v{0}.txt" -f $versionLabel)
+$shareZipPath = Join-Path $releaseDir ($productName + "_v" + $versionLabel + "_share.zip")
 $stagingDir = Join-Path $releaseDir 'share-staging'
 
 if (Test-Path -LiteralPath $stagingDir) {

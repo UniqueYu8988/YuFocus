@@ -114,13 +114,69 @@ export type CoachTurnResult = {
 
 export type CoachRequestState = 'idle' | 'loading' | 'error'
 
-export type NodeSessionEvaluation = 'correct' | 'incorrect' | null
+export type NodeSessionEvaluation = 'correct' | 'partial' | 'incorrect' | null
+
+export type QuizAttemptInsight = {
+  id: string
+  nodeTitle: string
+  question: string | null
+  answer: string
+  verdict: Exclude<NodeSessionEvaluation, null>
+  matchedKeywords: string[]
+  missingKeywords: string[]
+  cautionNotes: string[]
+  createdAt: number
+}
+
+export type StageReplayInsight = {
+  recentMistakeCount: number
+  focusNodeTitles: string[]
+  focusQuestions: string[]
+  focusKeywords: string[]
+  cautionNotes: string[]
+  followupQuestions: string[]
+}
+
+export type TeachingIntent = 'default' | 'reframe' | 'deepen'
+
+export type LearningMilestoneKind =
+  | 'node_complete'
+  | 'stage_complete'
+  | 'correction_recovery'
+  | 'course_complete'
+
+export type LearningMilestoneEvent = {
+  id: string
+  kind: LearningMilestoneKind
+  title: string
+  detail: string
+  createdAt: number
+  nodeId?: string | null
+  stageId?: string | null
+  progressPercent?: number
+}
+
+export type AchievementBadgeCode =
+  | 'first_step'
+  | 'steady_stride'
+  | 'stage_breaker'
+  | 'comeback'
+  | 'midway'
+  | 'course_finisher'
+
+export type AchievementBadge = {
+  code: AchievementBadgeCode
+  label: string
+  description: string
+  tone: 'neutral' | 'info' | 'success' | 'accent'
+}
 
 export type NodeLearningSession = {
   nodeId: string
   learningStatus: LearningStatus
   messages: CoachMessage[]
   activeQuestion: string | null
+  attemptHistory: QuizAttemptInsight[]
   lastUserAnswer: string
   lastEvaluation: NodeSessionEvaluation
   requestState: CoachRequestState
@@ -146,6 +202,7 @@ export type LearningRecord = {
   completedNodeIds: string[]
   failedNodeIds: string[]
   nodeSessions: Record<string, PersistedNodeLearningSession>
+  milestoneEvents: LearningMilestoneEvent[]
   progressPercent: number
   isArchived: boolean
   createdAt: number
@@ -153,11 +210,19 @@ export type LearningRecord = {
   lastOpenedAt: number
 }
 
-export type LearningRecordSummary = Omit<LearningRecord, 'courseText' | 'nodeSessions' | 'completedNodeIds' | 'failedNodeIds' | 'currentNodeId'> & {
+export type LearningRecordSummary = Omit<LearningRecord, 'courseText' | 'nodeSessions' | 'completedNodeIds' | 'failedNodeIds' | 'currentNodeId' | 'milestoneEvents'> & {
   currentNodeId: string | null
   currentNodeTitle: string | null
   completedCount: number
   sessionCount: number
+  partialCount: number
+  incorrectCount: number
+  hotspotNodeTitle: string | null
+  dominantChallenge: 'stable' | 'partial-heavy' | 'incorrect-heavy'
+  stageCompletedCount: number
+  totalStageCount: number
+  recentMilestones: LearningMilestoneEvent[]
+  achievementBadges: AchievementBadge[]
 }
 
 export type LearningLibraryPayload = {

@@ -1,21 +1,25 @@
 # -*- coding: utf-8 -*-
-"""无字幕时的音频下载与 Groq 转写兜底。"""
+"""无字幕时的音频下载与转写兜底。"""
 
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+import hashlib
+import json
 import math
 import os
 import re
+import shutil
 import subprocess
-import tempfile
-from typing import Callable
+from typing import Any, Callable
 
 import imageio_ffmpeg
 from yt_dlp import YoutubeDL
 
 import config
 import groq_client
+import local_audio_client
 
 
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
@@ -23,8 +27,36 @@ TARGET_AUDIO_MAX_BYTES = 24 * 1024 * 1024
 TARGET_SAMPLE_RATE = 16000
 TARGET_CHANNELS = 1
 TARGET_BITRATE = "32k"
+LOCAL_SENSEVOICE_MAX_CHUNK_SECONDS = max(
+    90.0,
+    float(os.getenv("ONBOARD_LOCAL_SENSEVOICE_MAX_CHUNK_SECONDS", "240") or "240"),
+)
+GROQ_MAX_CHUNK_SECONDS = max(
+    120.0,
+    float(os.getenv("ONBOARD_GROQ_MAX_CHUNK_SECONDS", "480") or "480"),
+)
+AUDIO_PREPARE_WORKERS = max(
+    1,
+    int(os.getenv("ONBOARD_AUDIO_PREPARE_WORKERS", "2") or "2"),
+)
+GROQ_AUDIO_TRANSCRIBE_WORKERS = max(
+    1,
+    int(os.getenv("ONBOARD_GROQ_AUDIO_TRANSCRIBE_WORKERS", "3") or "3"),
+)
+GROQ_AUDIO_CHUNK_WORKERS = max(
+    1,
+    int(os.getenv("ONBOARD_GROQ_AUDIO_CHUNK_WORKERS", "3") or "3"),
+)
+LOCAL_AUDIO_TRANSCRIBE_WORKERS = max(
+    1,
+    int(os.getenv("ONBOARD_LOCAL_AUDIO_TRANSCRIBE_WORKERS", "1") or "1"),
+)
+AUDIO_PREPARE_CACHE_VERSION = "audio-prepare.v1"
+TRANSCRIPT_CHUNK_CACHE_VERSION = "audio-transcript-chunk.v1"
+PAGE_TRANSCRIPT_CACHE_VERSION = "audio-transcript-page.v1"
 
 ProgressCallback = Callable[[str, int], None]
+PageResultCallback = Callable[[dict[str, Any]], None]
 
 
 @dataclass
@@ -37,6 +69,20 @@ class TranscriptionBundle:
     source_api: str
     note: str
     model: str
+
+
+@dataclass
+class PreparedPageAudio:
+    page_no: int
+    page_label: str
+    chunks: list[dict[str, Any]]
+
+
+@dataclass
+class TranscribedPageResult:
+    page_no: int
+    page_label: str
+    entries: list[dict[str, Any]]
 
 
 def _emit(progress_callback: ProgressCallback | None, message: str, percent: int) -> None:
@@ -69,6 +115,24 @@ def _run_ffmpeg(args: list[str], description: str) -> None:
         detail = (result.stderr or result.stdout or "").strip().splitlines()
         hint = detail[-1] if detail else "未知 ffmpeg 错误"
         raise RuntimeError(f"{description}失败：{hint}")
+
+
+def _audio_profile(provider_api: str) -> dict[str, Any]:
+    if provider_api == "local_sensevoice":
+        return {
+            "extension": "wav",
+            "encode_args": ["-c:a", "pcm_s16le"],
+        }
+    return {
+        "extension": "m4a",
+        "encode_args": ["-c:a", "aac", "-b:a", TARGET_BITRATE],
+    }
+
+
+def _max_chunk_seconds(provider_api: str) -> float:
+    if provider_api == "local_sensevoice":
+        return LOCAL_SENSEVOICE_MAX_CHUNK_SECONDS
+    return GROQ_MAX_CHUNK_SECONDS
 
 
 def _probe_duration_seconds(file_path: str) -> float:
@@ -111,6 +175,46 @@ def _build_page_url(video_info: dict, page_no: int) -> str:
     return f"https://www.bilibili.com/video/{bvid}?p={page_no}"
 
 
+def _normalize_provider() -> str:
+    provider = (config.TRANSCRIPTION_PROVIDER or "groq").strip().lower()
+    if provider in {"local", "local_sensevoice", "sensevoice", "cuda"}:
+        return "local_sensevoice"
+    return "groq"
+
+
+def _resolve_transcription_backend() -> tuple[str, str, str]:
+    provider = _normalize_provider()
+    if provider == "local_sensevoice":
+        if not local_audio_client.has_local_engine():
+            root_display = local_audio_client.get_root_display() or "未填写"
+            raise RuntimeError(f"未找到可用的本地 SenseVoice 环境，请检查目录：{root_display}")
+        return "本地 SenseVoice", "local_sensevoice", local_audio_client.get_model()
+
+    if not groq_client.has_api_key():
+        raise RuntimeError("未配置 Groq API Key，无法启用音频转写方案。")
+    return "Groq", "groq_whisper", groq_client.get_model()
+
+
+def _transcribe_chunk(
+    provider_api: str,
+    file_path: str,
+    *,
+    prompt: str,
+    language: str | None,
+) -> dict:
+    if provider_api == "local_sensevoice":
+        return local_audio_client.transcribe_audio_file(
+            file_path,
+            prompt=prompt,
+            language=language,
+        )
+    return groq_client.transcribe_audio_file(
+        file_path,
+        prompt=prompt,
+        language=language,
+    )
+
+
 def _write_cookie_file(cookie_path: str) -> str | None:
     sessdata = (config.SESSDATA or "").strip()
     if not sessdata:
@@ -144,6 +248,10 @@ def _download_audio(page_url: str, work_dir: str, file_stem: str) -> str:
         "outtmpl": outtmpl,
         "http_headers": headers,
         "logger": _SilentYtdlpLogger(),
+        "socket_timeout": 60,
+        "retries": 4,
+        "fragment_retries": 4,
+        "extractor_retries": 2,
     }
     if cookie_file:
         options["cookiefile"] = cookie_file
@@ -162,7 +270,8 @@ def _download_audio(page_url: str, work_dir: str, file_stem: str) -> str:
     raise RuntimeError("音频下载完成后未找到输出文件。")
 
 
-def _normalize_audio(input_path: str, output_path: str) -> str:
+def _normalize_audio(input_path: str, output_path: str, *, provider_api: str) -> str:
+    profile = _audio_profile(provider_api)
     _run_ffmpeg(
         [
             "-y",
@@ -173,10 +282,7 @@ def _normalize_audio(input_path: str, output_path: str) -> str:
             str(TARGET_CHANNELS),
             "-ar",
             str(TARGET_SAMPLE_RATE),
-            "-c:a",
-            "aac",
-            "-b:a",
-            TARGET_BITRATE,
+            *profile["encode_args"],
             output_path,
         ],
         "音频压缩",
@@ -190,13 +296,19 @@ def _split_audio_if_needed(
     *,
     start_offset: float = 0.0,
     depth: int = 0,
+    provider_api: str = "groq_whisper",
 ) -> list[dict]:
-    if os.path.getsize(input_path) <= TARGET_AUDIO_MAX_BYTES:
+    duration = _probe_duration_seconds(input_path)
+    max_chunk_seconds = _max_chunk_seconds(provider_api)
+    file_size = os.path.getsize(input_path)
+    if file_size <= TARGET_AUDIO_MAX_BYTES and duration <= max_chunk_seconds:
         return [{"path": input_path, "offset": start_offset}]
 
-    duration = _probe_duration_seconds(input_path)
-    chunk_count = max(2, math.ceil(os.path.getsize(input_path) / TARGET_AUDIO_MAX_BYTES))
+    size_chunk_count = max(1, math.ceil(file_size / TARGET_AUDIO_MAX_BYTES))
+    time_chunk_count = max(1, math.ceil(duration / max_chunk_seconds))
+    chunk_count = max(2, size_chunk_count, time_chunk_count)
     chunk_duration = max(60.0, duration / chunk_count)
+    profile = _audio_profile(provider_api)
 
     chunks: list[dict] = []
     current = 0.0
@@ -204,7 +316,7 @@ def _split_audio_if_needed(
     while current < duration - 0.5:
         remaining = duration - current
         segment_duration = min(chunk_duration, remaining)
-        chunk_path = os.path.join(chunks_dir, f"chunk_{depth}_{index:02d}.m4a")
+        chunk_path = os.path.join(chunks_dir, f"chunk_{depth}_{index:02d}.{profile['extension']}")
         _run_ffmpeg(
             [
                 "-y",
@@ -219,10 +331,7 @@ def _split_audio_if_needed(
                 str(TARGET_CHANNELS),
                 "-ar",
                 str(TARGET_SAMPLE_RATE),
-                "-c:a",
-                "aac",
-                "-b:a",
-                TARGET_BITRATE,
+                *profile["encode_args"],
                 chunk_path,
             ],
             "音频切片",
@@ -234,6 +343,7 @@ def _split_audio_if_needed(
                     chunks_dir,
                     start_offset=start_offset + current,
                     depth=depth + 1,
+                    provider_api=provider_api,
                 )
             )
         else:
@@ -270,84 +380,648 @@ def _payload_to_entries(payload: dict, offset: float) -> list[dict]:
     return []
 
 
+def _safe_slug(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9._-]+", "_", (value or "").strip())
+    return cleaned.strip("._-") or "item"
+
+
+def _audio_prepare_cache_root(video_info: dict, provider_api: str) -> str:
+    output_dir = config.ensure_output_dir()
+    root = os.path.join(
+        output_dir,
+        ".onboard_cache",
+        "audio_prepare",
+        str(video_info.get("bvid") or "unknown").lower(),
+        provider_api,
+    )
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
+def _audio_prepare_cache_paths(video_info: dict, page_no: int, provider_api: str) -> tuple[str, str]:
+    root = _audio_prepare_cache_root(video_info, provider_api)
+    page_dir = os.path.join(root, f"page_{page_no:02d}")
+    manifest_path = os.path.join(page_dir, "manifest.json")
+    return page_dir, manifest_path
+
+
+def _chunk_transcript_cache_dir(video_info: dict, page_no: int, provider_api: str) -> str:
+    page_dir, _ = _audio_prepare_cache_paths(video_info, page_no, provider_api)
+    cache_dir = os.path.join(page_dir, "transcripts")
+    os.makedirs(cache_dir, exist_ok=True)
+    return cache_dir
+
+
+def _provider_model(provider_api: str) -> str:
+    if provider_api == "local_sensevoice":
+        return local_audio_client.get_model()
+    return groq_client.get_model()
+
+
+def _page_chunk_signature(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": os.path.basename(str(chunk.get("path") or "")),
+            "offset": round(float(chunk.get("offset") or 0.0), 3),
+        }
+        for chunk in chunks
+    ]
+
+
+def _page_transcript_cache_path(video_info: dict, page_no: int, provider_api: str) -> str:
+    page_dir, _ = _audio_prepare_cache_paths(video_info, page_no, provider_api)
+    return os.path.join(page_dir, "page-transcript.json")
+
+
+def _load_cached_page_transcript(
+    video_info: dict,
+    *,
+    page_no: int,
+    page_label: str,
+    provider_api: str,
+    prompt: str,
+    language: str | None,
+    chunks: list[dict[str, Any]],
+) -> list[dict[str, Any]] | None:
+    cache_path = _page_transcript_cache_path(video_info, page_no, provider_api)
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as file:
+            payload = json.load(file)
+    except Exception:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    if str(payload.get("version") or "") != PAGE_TRANSCRIPT_CACHE_VERSION:
+        return None
+    if str(payload.get("provider_api") or "") != provider_api:
+        return None
+    if str(payload.get("model") or "") != _provider_model(provider_api):
+        return None
+    if str(payload.get("language") or "") != (language or "").strip():
+        return None
+    if str(payload.get("page_label") or "") != page_label:
+        return None
+    if str(payload.get("prompt") or "") != prompt.strip():
+        return None
+    if payload.get("chunk_signature") != _page_chunk_signature(chunks):
+        return None
+
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        return None
+    normalized_entries: list[dict[str, Any]] = []
+    for item in entries:
+        if not isinstance(item, dict):
+            return None
+        content = str(item.get("content", "")).strip()
+        if not content:
+            continue
+        normalized_entries.append(
+            {
+                "from": float(item.get("from", 0.0)),
+                "to": float(item.get("to", item.get("from", 0.0))),
+                "content": content,
+            }
+        )
+    return normalized_entries or None
+
+
+def _save_cached_page_transcript(
+    video_info: dict,
+    *,
+    page_no: int,
+    page_label: str,
+    provider_api: str,
+    prompt: str,
+    language: str | None,
+    chunks: list[dict[str, Any]],
+    entries: list[dict[str, Any]],
+) -> None:
+    cache_path = _page_transcript_cache_path(video_info, page_no, provider_api)
+    payload = {
+        "version": PAGE_TRANSCRIPT_CACHE_VERSION,
+        "provider_api": provider_api,
+        "model": _provider_model(provider_api),
+        "language": (language or "").strip(),
+        "page_label": page_label,
+        "prompt": prompt.strip(),
+        "chunk_signature": _page_chunk_signature(chunks),
+        "entries": entries,
+    }
+    with open(cache_path, "w", encoding="utf-8") as file:
+        json.dump(payload, file, ensure_ascii=False, indent=2)
+
+
+def _chunk_transcript_cache_path(
+    video_info: dict,
+    *,
+    page_no: int,
+    provider_api: str,
+    chunk_path: str,
+    offset: float,
+    prompt: str,
+    language: str | None,
+) -> str:
+    cache_dir = _chunk_transcript_cache_dir(video_info, page_no, provider_api)
+    key_payload = {
+        "version": TRANSCRIPT_CHUNK_CACHE_VERSION,
+        "provider_api": provider_api,
+        "model": _provider_model(provider_api),
+        "language": (language or "").strip(),
+        "offset": round(float(offset), 3),
+        "chunk_name": os.path.basename(chunk_path),
+        "prompt": prompt.strip(),
+    }
+    serialized = json.dumps(key_payload, ensure_ascii=False, sort_keys=True)
+    digest = hashlib.sha1(serialized.encode("utf-8")).hexdigest()[:16]
+    stem = os.path.splitext(os.path.basename(chunk_path))[0]
+    return os.path.join(cache_dir, f"{_safe_slug(stem)}.{digest}.json")
+
+
+def _load_cached_chunk_entries(
+    video_info: dict,
+    *,
+    page_no: int,
+    provider_api: str,
+    chunk_path: str,
+    offset: float,
+    prompt: str,
+    language: str | None,
+) -> list[dict[str, Any]] | None:
+    cache_path = _chunk_transcript_cache_path(
+        video_info,
+        page_no=page_no,
+        provider_api=provider_api,
+        chunk_path=chunk_path,
+        offset=offset,
+        prompt=prompt,
+        language=language,
+    )
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as file:
+            payload = json.load(file)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if str(payload.get("version") or "") != TRANSCRIPT_CHUNK_CACHE_VERSION:
+        return None
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        return None
+    normalized_entries = []
+    for item in entries:
+        if not isinstance(item, dict):
+            return None
+        content = str(item.get("content", "")).strip()
+        if not content:
+            continue
+        normalized_entries.append(
+            {
+                "from": float(item.get("from", 0.0)),
+                "to": float(item.get("to", item.get("from", 0.0))),
+                "content": content,
+            }
+        )
+    return normalized_entries or None
+
+
+def _save_cached_chunk_entries(
+    video_info: dict,
+    *,
+    page_no: int,
+    provider_api: str,
+    chunk_path: str,
+    offset: float,
+    prompt: str,
+    language: str | None,
+    entries: list[dict[str, Any]],
+) -> None:
+    cache_path = _chunk_transcript_cache_path(
+        video_info,
+        page_no=page_no,
+        provider_api=provider_api,
+        chunk_path=chunk_path,
+        offset=offset,
+        prompt=prompt,
+        language=language,
+    )
+    payload = {
+        "version": TRANSCRIPT_CHUNK_CACHE_VERSION,
+        "provider_api": provider_api,
+        "model": _provider_model(provider_api),
+        "language": (language or "").strip(),
+        "offset": round(float(offset), 3),
+        "entries": entries,
+    }
+    with open(cache_path, "w", encoding="utf-8") as file:
+        json.dump(payload, file, ensure_ascii=False, indent=2)
+
+
+def _load_prepared_page_audio(
+    video_info: dict,
+    *,
+    page_no: int,
+    page_label: str,
+    provider_api: str,
+) -> PreparedPageAudio | None:
+    page_dir, manifest_path = _audio_prepare_cache_paths(video_info, page_no, provider_api)
+    if not os.path.exists(manifest_path):
+        return None
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as file:
+            payload = json.load(file)
+    except Exception:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    if str(payload.get("version") or "") != AUDIO_PREPARE_CACHE_VERSION:
+        return None
+    if int(payload.get("page_no") or 0) != page_no:
+        return None
+    if str(payload.get("provider_api") or "") != provider_api:
+        return None
+    if str(payload.get("max_chunk_seconds") or "") != str(_max_chunk_seconds(provider_api)):
+        return None
+
+    chunks_raw = payload.get("chunks") or []
+    chunks: list[dict[str, Any]] = []
+    for item in chunks_raw:
+        if not isinstance(item, dict):
+            return None
+        relative_path = str(item.get("relative_path") or "").strip()
+        chunk_path = os.path.join(page_dir, relative_path)
+        if not relative_path or not os.path.exists(chunk_path):
+            return None
+        chunks.append({"path": chunk_path, "offset": float(item.get("offset") or 0.0)})
+
+    if not chunks:
+        return None
+    return PreparedPageAudio(page_no=page_no, page_label=page_label, chunks=chunks)
+
+
+def _save_prepared_page_audio(
+    video_info: dict,
+    *,
+    page_no: int,
+    page_label: str,
+    provider_api: str,
+    chunks: list[dict[str, Any]],
+) -> PreparedPageAudio:
+    page_dir, manifest_path = _audio_prepare_cache_paths(video_info, page_no, provider_api)
+    os.makedirs(page_dir, exist_ok=True)
+
+    cached_chunks: list[dict[str, Any]] = []
+    manifest_chunks: list[dict[str, Any]] = []
+    for index, chunk in enumerate(chunks, start=1):
+        source_path = str(chunk.get("path") or "").strip()
+        if not source_path or not os.path.exists(source_path):
+            continue
+        extension = os.path.splitext(source_path)[1] or f".{_audio_profile(provider_api)['extension']}"
+        target_name = f"chunk_{index:02d}{extension}"
+        target_path = os.path.join(page_dir, target_name)
+        if os.path.abspath(source_path) != os.path.abspath(target_path):
+            with open(source_path, "rb") as src, open(target_path, "wb") as dst:
+                dst.write(src.read())
+        offset = float(chunk.get("offset") or 0.0)
+        cached_chunks.append({"path": target_path, "offset": offset})
+        manifest_chunks.append({"relative_path": target_name, "offset": offset})
+
+    payload = {
+        "version": AUDIO_PREPARE_CACHE_VERSION,
+        "page_no": page_no,
+        "page_label": page_label,
+        "provider_api": provider_api,
+        "max_chunk_seconds": _max_chunk_seconds(provider_api),
+        "chunks": manifest_chunks,
+    }
+    with open(manifest_path, "w", encoding="utf-8") as file:
+        json.dump(payload, file, ensure_ascii=False, indent=2)
+
+    return PreparedPageAudio(page_no=page_no, page_label=page_label, chunks=cached_chunks)
+
+
+def _transcribe_prepared_page(
+    video_info: dict,
+    prepared: PreparedPageAudio,
+    *,
+    provider_label: str,
+    provider_api: str,
+    language: str | None,
+    progress_callback: ProgressCallback | None,
+) -> TranscribedPageResult:
+    _emit(
+        progress_callback,
+        f"方案2：正在提交 {prepared.page_label} 到{provider_label} 转写（共 {len(prepared.chunks)} 段）...",
+        72,
+    )
+
+    entries: list[dict[str, Any]] = []
+    prompt = _build_transcription_prompt(video_info, prepared.page_label)
+    cached_page_entries = _load_cached_page_transcript(
+        video_info,
+        page_no=prepared.page_no,
+        page_label=prepared.page_label,
+        provider_api=provider_api,
+        prompt=prompt,
+        language=language,
+        chunks=prepared.chunks,
+    )
+    if cached_page_entries:
+        _emit(
+            progress_callback,
+            f"方案2：{prepared.page_label} 命中整页转写缓存，无需重新提交模型。",
+            76,
+        )
+        return TranscribedPageResult(
+            page_no=prepared.page_no,
+            page_label=prepared.page_label,
+            entries=cached_page_entries,
+        )
+
+    cached_entries_by_chunk: dict[int, list[dict[str, Any]]] = {}
+    pending_chunks: list[tuple[int, dict[str, Any]]] = []
+    for chunk_index, chunk in enumerate(prepared.chunks, start=1):
+        offset = float(chunk["offset"])
+        cached_entries = _load_cached_chunk_entries(
+            video_info,
+            page_no=prepared.page_no,
+            provider_api=provider_api,
+            chunk_path=str(chunk["path"]),
+            offset=offset,
+            prompt=prompt,
+            language=language,
+        )
+        if cached_entries:
+            cached_entries_by_chunk[chunk_index] = cached_entries
+            entries.extend(cached_entries)
+            continue
+        pending_chunks.append((chunk_index, chunk))
+
+    if cached_entries_by_chunk:
+        _emit(
+            progress_callback,
+            (
+                f"方案2：{prepared.page_label} 命中 {len(cached_entries_by_chunk)}/{len(prepared.chunks)} 段转写缓存，"
+                + ("无需重复转写。" if len(cached_entries_by_chunk) == len(prepared.chunks) else "继续补齐剩余片段...")
+            ),
+            76,
+        )
+
+    if not pending_chunks:
+        normalized_entries = [entry for entry in entries if str(entry.get("content", "")).strip()]
+        normalized_entries.sort(key=lambda item: (float(item.get("from", 0.0)), float(item.get("to", 0.0))))
+        if not normalized_entries:
+            raise RuntimeError("未转写出有效文本。")
+        _save_cached_page_transcript(
+            video_info,
+            page_no=prepared.page_no,
+            page_label=prepared.page_label,
+            provider_api=provider_api,
+            prompt=prompt,
+            language=language,
+            chunks=prepared.chunks,
+            entries=normalized_entries,
+        )
+        return TranscribedPageResult(
+            page_no=prepared.page_no,
+            page_label=prepared.page_label,
+            entries=normalized_entries,
+        )
+
+    if provider_api == "groq_whisper" and len(prepared.chunks) > 1:
+        def _transcribe_chunk_job(chunk_index: int, chunk: dict[str, Any]) -> list[dict[str, Any]]:
+            _emit(
+                progress_callback,
+                f"方案2：{provider_label} 并行转写 {prepared.page_label} 第 {chunk_index}/{len(prepared.chunks)} 段...",
+                78,
+            )
+            payload = _transcribe_chunk(
+                provider_api,
+                chunk["path"],
+                prompt=prompt,
+                language=language,
+            )
+            chunk_entries = _payload_to_entries(payload, float(chunk["offset"]))
+            _save_cached_chunk_entries(
+                video_info,
+                page_no=prepared.page_no,
+                provider_api=provider_api,
+                chunk_path=str(chunk["path"]),
+                offset=float(chunk["offset"]),
+                prompt=prompt,
+                language=language,
+                entries=chunk_entries,
+            )
+            return chunk_entries
+
+        chunk_workers = min(len(pending_chunks), GROQ_AUDIO_CHUNK_WORKERS)
+        with ThreadPoolExecutor(max_workers=chunk_workers) as executor:
+            chunk_futures = {
+                executor.submit(_transcribe_chunk_job, chunk_index, chunk): chunk_index
+                for chunk_index, chunk in pending_chunks
+            }
+            for future in as_completed(chunk_futures):
+                entries.extend(future.result())
+    else:
+        for chunk_index, chunk in pending_chunks:
+            _emit(
+                progress_callback,
+                f"方案2：{provider_label} 正在转写 {prepared.page_label} 第 {chunk_index}/{len(prepared.chunks)} 段...",
+                78,
+            )
+            payload = _transcribe_chunk(
+                provider_api,
+                chunk["path"],
+                prompt=prompt,
+                language=language,
+            )
+            chunk_entries = _payload_to_entries(payload, float(chunk["offset"]))
+            _save_cached_chunk_entries(
+                video_info,
+                page_no=prepared.page_no,
+                provider_api=provider_api,
+                chunk_path=str(chunk["path"]),
+                offset=float(chunk["offset"]),
+                prompt=prompt,
+                language=language,
+                entries=chunk_entries,
+            )
+            entries.extend(chunk_entries)
+
+    normalized_entries = [entry for entry in entries if str(entry.get("content", "")).strip()]
+    normalized_entries.sort(key=lambda item: (float(item.get("from", 0.0)), float(item.get("to", 0.0))))
+    if not normalized_entries:
+        raise RuntimeError("未转写出有效文本。")
+    _save_cached_page_transcript(
+        video_info,
+        page_no=prepared.page_no,
+        page_label=prepared.page_label,
+        provider_api=provider_api,
+        prompt=prompt,
+        language=language,
+        chunks=prepared.chunks,
+        entries=normalized_entries,
+    )
+
+    return TranscribedPageResult(
+        page_no=prepared.page_no,
+        page_label=prepared.page_label,
+        entries=normalized_entries,
+    )
+
+
+def _transcription_worker_count(provider_api: str, page_count: int) -> int:
+    if provider_api == "local_sensevoice":
+        return min(max(1, page_count), LOCAL_AUDIO_TRANSCRIBE_WORKERS)
+    return min(max(1, page_count), GROQ_AUDIO_TRANSCRIBE_WORKERS)
+
+
+def _prepare_page_audio(
+    video_info: dict,
+    page: dict,
+    *,
+    index: int,
+    total_pages: int,
+    provider_api: str,
+    progress_callback: ProgressCallback | None,
+) -> PreparedPageAudio:
+    page_no = int(page.get("page") or index)
+    page_part = str(page.get("part") or "").strip() or f"P{page_no}"
+    page_label = str(page.get("label") or f"P{page_no}：{page_part}")
+    cached = _load_prepared_page_audio(
+        video_info,
+        page_no=page_no,
+        page_label=page_label,
+        provider_api=provider_api,
+    )
+    if cached:
+        _emit(progress_callback, f"方案2：命中 {page_label} 的音频预处理缓存，跳过下载与切片…", 64)
+        return cached
+
+    prepare_root = os.path.join(_audio_prepare_cache_root(video_info, provider_api), "_work")
+    file_stem = _sanitize_stem(f"{video_info['bvid']}_p{page_no}")
+    page_dir = os.path.join(prepare_root, f"page_{page_no:02d}")
+    os.makedirs(page_dir, exist_ok=True)
+    try:
+        _emit(progress_callback, f"方案2：正在下载 {page_label} 的音频（{index}/{total_pages}）...", 54)
+        source_path = _download_audio(_build_page_url(video_info, page_no), page_dir, file_stem)
+
+        normalized_ext = _audio_profile(provider_api)["extension"]
+        normalized_path = os.path.join(page_dir, f"{file_stem}_16k.{normalized_ext}")
+        _emit(progress_callback, f"方案2：正在压缩 {page_label} 的音频...", 62)
+        _normalize_audio(source_path, normalized_path, provider_api=provider_api)
+
+        chunk_dir = os.path.join(page_dir, "chunks")
+        os.makedirs(chunk_dir, exist_ok=True)
+        chunks = _split_audio_if_needed(normalized_path, chunk_dir, provider_api=provider_api)
+        return _save_prepared_page_audio(
+            video_info,
+            page_no=page_no,
+            page_label=page_label,
+            provider_api=provider_api,
+            chunks=chunks,
+        )
+    finally:
+        shutil.rmtree(page_dir, ignore_errors=True)
+
+
 def transcribe_video_pages(
     video_info: dict,
     pages: list[dict],
     progress_callback: ProgressCallback | None = None,
+    page_result_callback: PageResultCallback | None = None,
 ) -> TranscriptionBundle:
+    provider_label, provider_api, provider_model = _resolve_transcription_backend()
     if not pages:
-        return TranscriptionBundle([], 0, [], 0, "未启用音频转写", "groq_whisper", "没有需要转写的分P。", groq_client.get_model())
-    if not groq_client.has_api_key():
-        raise RuntimeError("未配置 Groq API Key，无法启用音频转写方案。")
+        return TranscriptionBundle([], 0, [], 0, "未启用音频转写", provider_api, "没有需要转写的分P。", provider_model)
 
     language = _guess_language(video_info)
     transcribed_segments: list[dict] = []
     pages_without_text: list[str] = []
     total_entries = 0
 
-    with tempfile.TemporaryDirectory(prefix="zhiyuli-audio-") as temp_dir:
+    prepare_futures: dict[Future[PreparedPageAudio], tuple[int, dict]] = {}
+    transcribe_workers = _transcription_worker_count(provider_api, len(pages))
+
+    with ThreadPoolExecutor(max_workers=min(AUDIO_PREPARE_WORKERS, max(1, len(pages)))) as executor:
         for index, page in enumerate(pages, start=1):
-            page_no = int(page.get("page") or index)
-            page_part = str(page.get("part") or "").strip() or f"P{page_no}"
-            page_label = str(page.get("label") or f"P{page_no}：{page_part}")
-            file_stem = _sanitize_stem(f"{video_info['bvid']}_p{page_no}")
-            page_dir = os.path.join(temp_dir, f"page_{page_no:02d}")
-            os.makedirs(page_dir, exist_ok=True)
+            future = executor.submit(
+                _prepare_page_audio,
+                video_info,
+                page,
+                index=index,
+                total_pages=len(pages),
+                provider_api=provider_api,
+                progress_callback=progress_callback,
+            )
+            prepare_futures[future] = (index, page)
 
-            try:
-                _emit(progress_callback, f"方案2：正在下载 {page_label} 的音频（{index}/{len(pages)}）...", 54)
-                source_path = _download_audio(_build_page_url(video_info, page_no), page_dir, file_stem)
-
-                normalized_path = os.path.join(page_dir, f"{file_stem}_16k.m4a")
-                _emit(progress_callback, f"方案2：正在压缩 {page_label} 的音频...", 62)
-                _normalize_audio(source_path, normalized_path)
-
-                chunk_dir = os.path.join(page_dir, "chunks")
-                os.makedirs(chunk_dir, exist_ok=True)
-                chunks = _split_audio_if_needed(normalized_path, chunk_dir)
-                _emit(progress_callback, f"方案2：正在提交 {page_label} 到 Groq 转写（共 {len(chunks)} 段）...", 72)
-
-                entries: list[dict] = []
-                prompt = _build_transcription_prompt(video_info, page_label)
-                for chunk_index, chunk in enumerate(chunks, start=1):
-                    _emit(
-                        progress_callback,
-                        f"方案2：Groq 正在转写 {page_label} 第 {chunk_index}/{len(chunks)} 段...",
-                        78,
-                    )
-                    payload = groq_client.transcribe_audio_file(
-                        chunk["path"],
-                        prompt=prompt,
-                        language=language,
-                    )
-                    entries.extend(_payload_to_entries(payload, float(chunk["offset"])))
-
-                entries = [entry for entry in entries if str(entry.get("content", "")).strip()]
-                if not entries:
+        transcribe_futures: dict[Future[TranscribedPageResult], str] = {}
+        with ThreadPoolExecutor(max_workers=transcribe_workers) as transcribe_executor:
+            for future in as_completed(prepare_futures):
+                index, page = prepare_futures[future]
+                page_no = int(page.get("page") or index)
+                page_part = str(page.get("part") or "").strip() or f"P{page_no}"
+                page_label = str(page.get("label") or f"P{page_no}：{page_part}")
+                try:
+                    prepared = future.result()
+                except Exception as exc:
                     pages_without_text.append(page_label)
-                    _emit(progress_callback, f"方案2：{page_label} 未转写出有效文本，已跳过。", 80)
+                    _emit(progress_callback, f"方案2：{page_label} 音频准备失败：{exc}", 68)
                     continue
 
-                total_entries += len(entries)
-                transcribed_segments.append(
-                    {
-                        "page": page_no,
-                        "label": page_label,
-                        "entries": entries,
-                    }
+                transcribe_future = transcribe_executor.submit(
+                    _transcribe_prepared_page,
+                    video_info,
+                    prepared,
+                    provider_label=provider_label,
+                    provider_api=provider_api,
+                    language=language,
+                    progress_callback=progress_callback,
                 )
-                _emit(progress_callback, f"方案2：{page_label} 转写完成，共 {len(entries)} 条文本。", 82)
-            except Exception as exc:
-                pages_without_text.append(page_label)
-                _emit(progress_callback, f"方案2：{page_label} 转写失败：{exc}", 82)
+                transcribe_futures[transcribe_future] = prepared.page_label
+
+            for future in as_completed(transcribe_futures):
+                page_label = transcribe_futures[future]
+                try:
+                    result = future.result()
+                    total_entries += len(result.entries)
+                    segment = {
+                        "page": result.page_no,
+                        "label": result.page_label,
+                        "entries": result.entries,
+                    }
+                    transcribed_segments.append(segment)
+                    if page_result_callback:
+                        page_result_callback(
+                            {
+                                "page": result.page_no,
+                                "label": result.page_label,
+                                "entries": result.entries,
+                                "provider_label": provider_label,
+                                "provider_api": provider_api,
+                                "provider_model": provider_model,
+                            }
+                        )
+                    _emit(progress_callback, f"方案2：{result.page_label} 转写完成，共 {len(result.entries)} 条文本。", 82)
+                except Exception as exc:
+                    pages_without_text.append(page_label)
+                    _emit(progress_callback, f"方案2：{page_label} 转写失败：{exc}", 82)
 
     subtitles: list[dict] = []
     if transcribed_segments:
         transcribed_segments.sort(key=lambda item: int(item.get("page") or 0))
         subtitles = [
             {
-                "lang": "音频转写",
-                "lan": "zh-groq-transcript",
+                "lang": f"{provider_label}音频转写",
+                "lan": f"zh-{provider_api}-transcript",
                 "entries": [entry for segment in transcribed_segments for entry in segment["entries"]],
                 "page_segments": [
                     {
@@ -361,7 +1035,7 @@ def transcribe_video_pages(
         ]
 
     note = (
-        f"已使用 {groq_client.get_model()} 转写 {len(transcribed_segments)}/{len(pages)} 个分P，"
+        f"已使用 {provider_model} 转写 {len(transcribed_segments)}/{len(pages)} 个分P，"
         f"共得到 {total_entries} 条文本。"
     )
     if pages_without_text:
@@ -372,8 +1046,8 @@ def transcribe_video_pages(
         pages_transcribed=len(transcribed_segments),
         pages_without_text=pages_without_text,
         entry_count=total_entries,
-        source_type="Groq 音频转写",
-        source_api="groq_whisper",
+        source_type=f"{provider_label} 音频转写",
+        source_api=provider_api,
         note=note,
-        model=groq_client.get_model(),
+        model=provider_model,
     )

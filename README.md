@@ -52,7 +52,7 @@
 ## 目录结构
 
 ```text
-Onboard_Anything/
+视界专注/
 ├─ assets/                     # 图标等资源
 ├─ desktop/                    # Electron + React 桌面端
 │  ├─ electron/                # 主进程与 preload
@@ -233,8 +233,8 @@ npm run build:portable
 
 生成后产物位于：
 
-- `desktop/release/视界专注_v0.1.0_x64.exe`
-- `desktop/release/视界专注_v0.1_share.zip`
+- `desktop/release/视界专注_v2.0.0_x64.exe`
+- `desktop/release/视界专注_v2.0.0_share.zip`
 
 ## 当前使用流程
 

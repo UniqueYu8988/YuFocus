@@ -1,8 +1,8 @@
 {
   "name": "shijie-focus-desktop",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "视界专注 v0.1 桌面客户端",
+  "description": "视界专注 v2.0 桌面客户端",
   "author": "Yu",
   "main": "dist-electron/main.js",
   "scripts": {

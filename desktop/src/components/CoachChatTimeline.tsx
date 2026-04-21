@@ -28,14 +28,19 @@ export function CoachChatTimeline() {
 
   return (
     <div ref={containerRef} className="subtle-scrollbar h-full min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
-      <div className="mx-auto flex max-w-4xl flex-col gap-2.5 pb-4">
+      <div className="flex w-full flex-col gap-2.5 pb-4">
         {visibleMessages.length ? (
           visibleMessages.map((message) => (
             <article
               key={message.id}
               className={cn('flex w-full', message.role === 'user' ? 'justify-end' : 'justify-start')}
             >
-              <div className={cn('flex max-w-[86%] flex-col gap-1', message.role === 'user' && 'items-end')}>
+              <div
+                className={cn(
+                  'flex flex-col gap-1',
+                  message.role === 'coach' ? 'max-w-[86%]' : 'max-w-[72%] items-end',
+                )}
+              >
                 <Card
                   className={cn(
                     'rounded-[20px] border-white/7 shadow-none',
@@ -52,9 +57,9 @@ export function CoachChatTimeline() {
             </article>
           ))
         ) : (
-          <Card className="glass-panel border-dashed border-white/8 bg-white/[0.02]">
+          <Card className="border-dashed border-white/8 bg-[#1a1a1a] shadow-none">
             <CardContent className="flex flex-col items-center justify-center gap-3 p-8 text-center">
-              <div className="flex size-11 items-center justify-center rounded-2xl border border-white/7 bg-white/[0.04] text-muted-foreground">
+              <div className="flex size-11 items-center justify-center rounded-2xl border border-white/7 bg-[#222222] text-muted-foreground">
                 <MessageSquareDashed size={18} />
               </div>
               <div className="space-y-1">

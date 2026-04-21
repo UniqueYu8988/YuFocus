@@ -27,6 +27,7 @@ class CommentProgress:
 
 CommentProgressCallback = Callable[[CommentProgress], None]
 SUB_REPLY_WORKERS = 4
+SUBTITLE_PAGE_WORKERS = max(1, int(getattr(config, "SUBTITLE_PAGE_WORKERS", 6) or 6))
 REQUEST_RETRIES = 3
 
 _SESSION = requests.Session()
@@ -509,22 +510,33 @@ def get_subtitles_bundle(video_info: dict) -> dict:
     pages_without_subtitles: list[dict] = []
 
     _log(f"正在获取字幕（默认合并全部分P，共 {len(pages)} 个）...")
-    for page in pages:
+    page_results: list[tuple[int, dict, list[dict]]] = []
+
+    def _fetch_page(page_index: int, page: dict) -> tuple[int, dict, list[dict]]:
         cid = int(page.get("cid") or 0)
         if not cid:
-            continue
+            return page_index, _build_page_descriptor(page), []
 
         page_info = _build_page_descriptor(page)
-        page_no = page_info["page"]
-        page_part = page_info["part"]
         page_label = page_info["label"]
         _log(f"正在获取 {page_label} 的字幕...")
-        page_subtitles = _fetch_subtitles_for_cid(aid, cid)
+        return page_index, page_info, _fetch_subtitles_for_cid(aid, cid)
+
+    with ThreadPoolExecutor(max_workers=min(SUBTITLE_PAGE_WORKERS, max(1, len(pages)))) as executor:
+        future_map = {
+            executor.submit(_fetch_page, page_index, page): page_index
+            for page_index, page in enumerate(pages)
+        }
+        for future in as_completed(future_map):
+            page_results.append(future.result())
+
+    for _page_index, page_info, page_subtitles in sorted(page_results, key=lambda item: item[0]):
         if not page_subtitles:
             pages_without_subtitles.append(page_info)
             continue
 
         pages_with_subtitles += 1
+        page_label = str(page_info.get("label") or f"P{page_info.get('page') or _page_index}")
         for subtitle in page_subtitles:
             track_key = subtitle.get("lan") or subtitle.get("lang") or "unknown"
             track = combined_tracks.setdefault(

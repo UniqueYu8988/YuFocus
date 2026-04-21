@@ -68,7 +68,7 @@ def main() -> int:
     if not args.video:
         parser.error("请提供 BV 号或视频链接。")
 
-    emit_progress("Onboard_Anything 已完成工程开辟，等待接入新蒸馏管线。", 100)
+    emit_progress("视界专注 已完成工程开辟，等待接入新蒸馏管线。", 100)
 
     if args.result_json:
         print(

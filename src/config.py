@@ -54,6 +54,15 @@ GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1"
 GROQ_TRANSCRIPTION_MODEL = (
     os.environ.get("GROQ_TRANSCRIPTION_MODEL", "whisper-large-v3-turbo").strip() or "whisper-large-v3-turbo"
 )
+TRANSCRIPTION_PROVIDER = (os.environ.get("ONBOARD_TRANSCRIPTION_PROVIDER", "groq").strip() or "groq").lower()
+LOCAL_TRANSCRIPTION_ROOT = os.environ.get("ONBOARD_LOCAL_TRANSCRIPTION_ROOT", "").strip()
+LOCAL_TRANSCRIPTION_PYTHON = os.environ.get("ONBOARD_LOCAL_TRANSCRIPTION_PYTHON", "").strip()
+LOCAL_TRANSCRIPTION_MODEL_ID = (
+    os.environ.get("ONBOARD_LOCAL_TRANSCRIPTION_MODEL_ID", "iic/SenseVoiceSmall").strip() or "iic/SenseVoiceSmall"
+)
+LOCAL_TRANSCRIPTION_DEVICE = os.environ.get("ONBOARD_LOCAL_TRANSCRIPTION_DEVICE", "cuda:0").strip() or "cuda:0"
+LOCAL_TRANSCRIPTION_LANGUAGE = os.environ.get("ONBOARD_LOCAL_TRANSCRIPTION_LANGUAGE", "zh").strip() or "zh"
+LOCAL_TRANSCRIPTION_TIMEOUT = int(os.environ.get("ONBOARD_LOCAL_TRANSCRIPTION_TIMEOUT", "600") or "600")
 
 BASE_HEADERS = {
     "User-Agent": (
@@ -136,8 +145,14 @@ def get_runtime_settings() -> dict[str, str]:
         "distiller_api_base_url": DISTILLER_BASE_URL,
         "distiller_api_key": DISTILLER_API_KEY,
         "distiller_model": DISTILLER_MODEL,
+        "transcription_provider": TRANSCRIPTION_PROVIDER,
         "groq_api_key": GROQ_API_KEY,
         "groq_transcription_model": GROQ_TRANSCRIPTION_MODEL,
+        "local_transcription_root": LOCAL_TRANSCRIPTION_ROOT,
+        "local_transcription_python": LOCAL_TRANSCRIPTION_PYTHON,
+        "local_transcription_model_id": LOCAL_TRANSCRIPTION_MODEL_ID,
+        "local_transcription_device": LOCAL_TRANSCRIPTION_DEVICE,
+        "local_transcription_language": LOCAL_TRANSCRIPTION_LANGUAGE,
     }
 
 

@@ -4,7 +4,11 @@ import {
   DEFAULT_COACH_MODEL,
   DEFAULT_DISTILLER_MODEL,
   DEFAULT_GROQ_TRANSCRIPTION_MODEL,
+  DEFAULT_LOCAL_TRANSCRIPTION_DEVICE,
+  DEFAULT_LOCAL_TRANSCRIPTION_LANGUAGE,
+  DEFAULT_LOCAL_TRANSCRIPTION_MODEL_ID,
   DEFAULT_MINIMAX_BASE_URL,
+  DEFAULT_TRANSCRIPTION_PROVIDER,
 } from '@/lib/coachPreferences'
 import {
   Dialog,
@@ -31,14 +35,23 @@ type SettingsModalProps = {
 function buildInitialDraft(runtimeSettings: RuntimeSettingsFallback) {
   return {
     sessdata: runtimeSettings?.sessdata || '',
+    obsidian_vault_path: runtimeSettings?.obsidian_vault_path || '',
+    obsidian_export_folder: runtimeSettings?.obsidian_export_folder || '视界专注',
+    obsidian_auto_sync: runtimeSettings?.obsidian_auto_sync ?? true,
     coach_api_base_url: runtimeSettings?.coach_api_base_url || DEFAULT_MINIMAX_BASE_URL,
     coach_api_key: runtimeSettings?.coach_api_key || '',
     coach_model: runtimeSettings?.coach_model || DEFAULT_COACH_MODEL,
     distiller_api_base_url: runtimeSettings?.distiller_api_base_url || DEFAULT_MINIMAX_BASE_URL,
     distiller_api_key: runtimeSettings?.distiller_api_key || '',
     distiller_model: runtimeSettings?.distiller_model || DEFAULT_DISTILLER_MODEL,
+    transcription_provider: runtimeSettings?.transcription_provider || DEFAULT_TRANSCRIPTION_PROVIDER,
     groq_api_key: runtimeSettings?.groq_api_key || '',
     groq_transcription_model: runtimeSettings?.groq_transcription_model || DEFAULT_GROQ_TRANSCRIPTION_MODEL,
+    local_transcription_root: runtimeSettings?.local_transcription_root || '',
+    local_transcription_python: runtimeSettings?.local_transcription_python || '',
+    local_transcription_model_id: runtimeSettings?.local_transcription_model_id || DEFAULT_LOCAL_TRANSCRIPTION_MODEL_ID,
+    local_transcription_device: runtimeSettings?.local_transcription_device || DEFAULT_LOCAL_TRANSCRIPTION_DEVICE,
+    local_transcription_language: runtimeSettings?.local_transcription_language || DEFAULT_LOCAL_TRANSCRIPTION_LANGUAGE,
     output_dir: runtimeSettings?.output_dir || '',
   }
 }
@@ -55,11 +68,11 @@ function SettingsSection({
   children: ReactNode
 }) {
   return (
-    <Card className="glass-panel border-white/8">
+    <Card className="border-white/8 bg-[#1b1b1b] shadow-none">
       <CardContent className="space-y-4 p-5">
         <div className="space-y-1.5">
           <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <span className="flex size-8 items-center justify-center rounded-xl border border-white/8 bg-black/10 text-foreground/78">
+            <span className="flex size-8 items-center justify-center rounded-xl border border-white/8 bg-[#202020] text-foreground/78">
               {icon}
             </span>
             {title}
@@ -186,7 +199,7 @@ export function SettingsModal({ open, runtimeSettings, onSaved, onClose }: Setti
           ) : null}
         </div>
 
-        <DialogFooter className="border-t border-white/8 bg-black/10 pt-5">
+        <DialogFooter className="border-t border-white/8 bg-[#1b1b1b] pt-5">
           <Button variant="outline" onClick={onClose}>
             取消
           </Button>
