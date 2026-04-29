@@ -1,4 +1,4 @@
-export type LearningStatus = 'teaching' | 'quizzing' | 'correcting' | 'completed'
+export type LearningStatus = 'teaching' | 'quizzing' | 'completed'
 
 export type CoachMessageRole = 'system' | 'coach' | 'user'
 
@@ -21,6 +21,44 @@ export type KnowledgeBlock = {
   examples: CourseExample[]
   checkpoints: string[]
   common_mistakes: string[]
+  source_scope?: string[]
+  teaching_expansion?: string[]
+  practical_steps?: string[]
+  practice_tasks?: string[]
+  transfer_prompts?: string[]
+  enrichment_notes?: string[]
+}
+
+export type LessonProfile =
+  | 'concept'
+  | 'operation'
+  | 'tool_config'
+  | 'exam'
+  | 'case_analysis'
+  | 'strategy'
+  | 'mixed'
+
+export type TeacherReadyContent = {
+  lesson_profile?: LessonProfile
+  display_hints?: string[]
+  teaching_markdown?: string
+  quiz_question?: string
+  standard_answer?: string
+  key_points?: string[]
+  common_mistakes?: string[]
+  memory_hook?: string
+}
+
+export type SourceRef = {
+  kind: 'material_block' | 'subtitle_segment' | 'transcript_excerpt' | 'material_package' | 'note' | 'other'
+  label: string
+  block_id?: string
+  time_range?: {
+    from?: number | null
+    to?: number | null
+  }
+  excerpt?: string
+  uri?: string
 }
 
 export type AssetRef = {
@@ -47,6 +85,8 @@ export type CourseNode = {
   summary: string
   order: number
   learning_objectives: string[]
+  teacher_ready_content?: TeacherReadyContent
+  source_refs?: SourceRef[]
   dependencies: string[]
   knowledge: KnowledgeBlock
   children: CourseNode[]
@@ -116,33 +156,9 @@ export type CoachRequestState = 'idle' | 'loading' | 'error'
 
 export type NodeSessionEvaluation = 'correct' | 'partial' | 'incorrect' | null
 
-export type QuizAttemptInsight = {
-  id: string
-  nodeTitle: string
-  question: string | null
-  answer: string
-  verdict: Exclude<NodeSessionEvaluation, null>
-  matchedKeywords: string[]
-  missingKeywords: string[]
-  cautionNotes: string[]
-  createdAt: number
-}
-
-export type StageReplayInsight = {
-  recentMistakeCount: number
-  focusNodeTitles: string[]
-  focusQuestions: string[]
-  focusKeywords: string[]
-  cautionNotes: string[]
-  followupQuestions: string[]
-}
-
-export type TeachingIntent = 'default' | 'reframe' | 'deepen'
-
 export type LearningMilestoneKind =
   | 'node_complete'
   | 'stage_complete'
-  | 'correction_recovery'
   | 'course_complete'
 
 export type LearningMilestoneEvent = {
@@ -160,7 +176,6 @@ export type AchievementBadgeCode =
   | 'first_step'
   | 'steady_stride'
   | 'stage_breaker'
-  | 'comeback'
   | 'midway'
   | 'course_finisher'
 
@@ -176,7 +191,6 @@ export type NodeLearningSession = {
   learningStatus: LearningStatus
   messages: CoachMessage[]
   activeQuestion: string | null
-  attemptHistory: QuizAttemptInsight[]
   lastUserAnswer: string
   lastEvaluation: NodeSessionEvaluation
   requestState: CoachRequestState
@@ -200,7 +214,6 @@ export type LearningRecord = {
   courseText: string
   currentNodeId: string | null
   completedNodeIds: string[]
-  failedNodeIds: string[]
   nodeSessions: Record<string, PersistedNodeLearningSession>
   milestoneEvents: LearningMilestoneEvent[]
   progressPercent: number
@@ -210,15 +223,11 @@ export type LearningRecord = {
   lastOpenedAt: number
 }
 
-export type LearningRecordSummary = Omit<LearningRecord, 'courseText' | 'nodeSessions' | 'completedNodeIds' | 'failedNodeIds' | 'currentNodeId' | 'milestoneEvents'> & {
+export type LearningRecordSummary = Omit<LearningRecord, 'courseText' | 'nodeSessions' | 'completedNodeIds' | 'currentNodeId' | 'milestoneEvents'> & {
   currentNodeId: string | null
   currentNodeTitle: string | null
   completedCount: number
   sessionCount: number
-  partialCount: number
-  incorrectCount: number
-  hotspotNodeTitle: string | null
-  dominantChallenge: 'stable' | 'partial-heavy' | 'incorrect-heavy'
   stageCompletedCount: number
   totalStageCount: number
   recentMilestones: LearningMilestoneEvent[]

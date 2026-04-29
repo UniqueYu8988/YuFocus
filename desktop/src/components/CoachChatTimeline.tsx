@@ -1,61 +1,318 @@
-import { useEffect, useMemo, useRef } from 'react'
-import { MessageSquareDashed } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { LoaderCircle, MessageSquareDashed, Square, Volume2 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useLearningStore } from '@/store'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
+import { buildLessonSpeechMarkdown, estimateMiniMaxSpeechCharacters, formatMiniMaxCharacters } from '@/lib/tts'
+import teacherAvatar from '@/assets/teacher-avatar.svg'
+import studentAvatar from '@/assets/student-avatar.svg'
+
+function hasRenderableCoachContent(content: string) {
+  const withoutCodeFences = content.replace(/```[\s\S]*?```/g, ' ')
+  const withoutHeadings = withoutCodeFences.replace(/^\s*#{1,6}\s+/gm, '')
+  const withoutRules = withoutHeadings.replace(/^\s*([-*_]\s*){3,}\s*$/gm, ' ')
+  const withoutListMarkers = withoutRules.replace(/^\s*([-*]|\d+\.)\s+/gm, '')
+  const normalized = withoutListMarkers.replace(/[`>*|]/g, ' ').replace(/\s+/g, ' ').trim()
+  return normalized.length > 0
+}
 
 export function CoachChatTimeline() {
+  const coachDisplayName = '知知老师'
   const currentNodeId = useLearningStore((state) => state.currentNodeId)
+  const currentNode = useLearningStore((state) =>
+    state.currentNodeId ? state.nodeMap[state.currentNodeId] ?? null : null,
+  )
   const currentSession = useLearningStore((state) =>
     state.currentNodeId ? state.nodeSessions[state.currentNodeId] ?? null : null,
   )
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const previousNodeIdRef = useRef<string | null>(null)
+  const previousMessageIdsRef = useRef<string[]>([])
+  const scrollNodeIdRef = useRef<string | null>(null)
+  const scrollMessageCountRef = useRef(0)
+  const revealTimersRef = useRef<number[]>([])
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const [revealedMessageIds, setRevealedMessageIds] = useState<string[]>([])
+  const [ttsState, setTtsState] = useState<{ messageId: string; status: 'loading' | 'playing' } | null>(null)
+  const pushToast = useLearningStore((state) => state.pushToast)
 
   const visibleMessages = useMemo(
-    () => (currentSession?.messages ?? []).filter((message) => message.role !== 'system'),
+    () =>
+      (currentSession?.messages ?? []).filter((message) => {
+        if (message.role === 'system') return false
+        if (message.role !== 'coach') return true
+        return hasRenderableCoachContent(message.content)
+      }),
     [currentSession?.messages],
+  )
+  const visibleMessageIds = useMemo(() => visibleMessages.map((message) => message.id), [visibleMessages])
+  const requestState = currentSession?.requestState ?? 'idle'
+  const hiddenCoachMessageCount = useMemo(
+    () =>
+      visibleMessages.filter((message) => message.role === 'coach' && !revealedMessageIds.includes(message.id)).length,
+    [revealedMessageIds, visibleMessages],
+  )
+  const showTypingBubble = requestState === 'loading' || hiddenCoachMessageCount > 0
+  const lessonSpeechId = currentNodeId ? `lesson:${currentNodeId}` : 'lesson'
+
+  useEffect(() => {
+    return () => {
+      revealTimersRef.current.forEach((timer) => window.clearTimeout(timer))
+      revealTimersRef.current = []
+      audioRef.current?.pause()
+      audioRef.current = null
+    }
+  }, [])
+
+  const stopSpeech = () => {
+    audioRef.current?.pause()
+    audioRef.current = null
+    setTtsState(null)
+  }
+
+  const playSpeech = async (speechId: string, content: string) => {
+    if (ttsState?.messageId === speechId) {
+      stopSpeech()
+      return
+    }
+
+    stopSpeech()
+    setTtsState({ messageId: speechId, status: 'loading' })
+    try {
+      const result = await window.desktopAPI.synthesizeSpeech({
+        text: content,
+        nodeId: currentNodeId,
+      })
+      if (!result.cached) {
+        pushToast(
+          '语音已生成',
+          result.provider === 'minimax'
+            ? `本节消耗约 ${formatMiniMaxCharacters(result.characters)} MiniMax 字符；今日本地估算剩余 ${formatMiniMaxCharacters(result.usage.remainingCharacters)}。`
+            : `本节已用 MiMo 生成，约 ${formatMiniMaxCharacters(result.characters)} TTS 字符；缓存命中不会重复调用。`,
+          'success',
+        )
+      }
+      const audio = new Audio(result.dataUrl)
+      audioRef.current = audio
+      audio.onended = () => {
+        if (audioRef.current === audio) {
+          audioRef.current = null
+          setTtsState(null)
+        }
+      }
+      audio.onerror = () => {
+        if (audioRef.current === audio) {
+          audioRef.current = null
+          setTtsState(null)
+        }
+        pushToast('朗读失败', '音频播放失败，请检查系统音频设置。', 'error')
+      }
+      audio.ontimeupdate = () => {
+        const container = containerRef.current
+        if (!container || !Number.isFinite(audio.duration) || audio.duration <= 0) return
+        const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
+        container.scrollTo({
+          top: maxScrollTop * Math.min(1, audio.currentTime / audio.duration),
+          behavior: 'smooth',
+        })
+      }
+      setTtsState({ messageId: speechId, status: 'playing' })
+      await audio.play()
+    } catch (error) {
+      setTtsState(null)
+      pushToast('朗读失败', error instanceof Error ? error.message : String(error), 'error')
+    }
+  }
+
+  useEffect(() => {
+    const currentIds = visibleMessageIds
+    const previousIds = previousMessageIdsRef.current
+    const sameNode = previousNodeIdRef.current === currentNodeId
+
+    revealTimersRef.current.forEach((timer) => window.clearTimeout(timer))
+    revealTimersRef.current = []
+
+    if (!sameNode) {
+      setRevealedMessageIds(currentIds)
+      previousNodeIdRef.current = currentNodeId
+      previousMessageIdsRef.current = currentIds
+      return
+    }
+
+    const addedMessages = visibleMessages.filter((message) => !previousIds.includes(message.id))
+    if (addedMessages.length === 0) {
+      previousMessageIdsRef.current = currentIds
+      return
+    }
+
+    const baseIds = currentIds.filter((id) => previousIds.includes(id))
+    const shouldStaggerCoachMessages = addedMessages.every((message) => message.role === 'coach')
+
+    if (!shouldStaggerCoachMessages) {
+      setRevealedMessageIds(currentIds)
+      previousMessageIdsRef.current = currentIds
+      return
+    }
+
+    setRevealedMessageIds(baseIds)
+    addedMessages.forEach((message, index) => {
+      const timer = window.setTimeout(() => {
+        setRevealedMessageIds((current) => (current.includes(message.id) ? current : [...current, message.id]))
+      }, 260 + index * 240)
+      revealTimersRef.current.push(timer)
+    })
+
+    previousMessageIdsRef.current = currentIds
+  }, [currentNodeId, visibleMessageIds, visibleMessages])
+
+  const renderedMessages = useMemo(
+    () => visibleMessages.filter((message) => revealedMessageIds.includes(message.id)),
+    [revealedMessageIds, visibleMessages],
+  )
+  const lessonSpeechText = useMemo(() => (currentNode ? buildLessonSpeechMarkdown(currentNode) : ''), [currentNode])
+  const lessonSpeechCharacters = useMemo(
+    () => estimateMiniMaxSpeechCharacters(lessonSpeechText),
+    [lessonSpeechText],
   )
 
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
+
+    const isNewNode = scrollNodeIdRef.current !== currentNodeId
+    const hasNewMessageInSameNode =
+      !isNewNode && renderedMessages.length > scrollMessageCountRef.current
+
+    scrollNodeIdRef.current = currentNodeId
+    scrollMessageCountRef.current = renderedMessages.length
+
+    if (isNewNode) {
+      container.scrollTo({
+        top: 0,
+        behavior: 'auto',
+      })
+      return
+    }
+
+    if (!hasNewMessageInSameNode && requestState !== 'loading' && hiddenCoachMessageCount === 0) return
+
     container.scrollTo({
       top: container.scrollHeight,
       behavior: 'smooth',
     })
-  }, [currentNodeId, visibleMessages.length])
+  }, [currentNodeId, renderedMessages.length, requestState, hiddenCoachMessageCount])
 
   return (
-    <div ref={containerRef} className="subtle-scrollbar h-full min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
-      <div className="flex w-full flex-col gap-2.5 pb-4">
-        {visibleMessages.length ? (
-          visibleMessages.map((message) => (
-            <article
-              key={message.id}
-              className={cn('flex w-full', message.role === 'user' ? 'justify-end' : 'justify-start')}
+    <div
+      ref={containerRef}
+      className="subtle-scrollbar h-full min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-t-[24px] bg-[#181818] pr-1"
+    >
+      <div className="flex w-full flex-col gap-3 pt-2 pb-4">
+        {lessonSpeechText ? (
+          <div className="pointer-events-none sticky -left-16 top-0 z-20 -mr-1 flex justify-end rounded-t-[24px] bg-transparent pb-1 pl-16 pr-1 pt-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="pointer-events-auto h-8 rounded-xl bg-[#181818]/96 px-3 text-[11px] shadow-[0_8px_18px_rgba(0,0,0,0.16)]"
+              onClick={() => void playSpeech(lessonSpeechId, lessonSpeechText)}
+              title={`只朗读本节正文，预计 ${lessonSpeechCharacters} TTS 字符；小测和标准答案不默认朗读。`}
             >
-              <div
+              {ttsState?.messageId === lessonSpeechId && ttsState.status === 'loading' ? (
+                <LoaderCircle className="size-3.5 animate-spin" />
+              ) : ttsState?.messageId === lessonSpeechId && ttsState.status === 'playing' ? (
+                <Square className="size-3.5" />
+              ) : (
+                <Volume2 className="size-3.5" />
+              )}
+              {ttsState?.messageId === lessonSpeechId ? '停止朗读' : `朗读本节 · ${formatMiniMaxCharacters(lessonSpeechCharacters)}`}
+            </Button>
+          </div>
+        ) : null}
+
+        {renderedMessages.length ? (
+          renderedMessages.map((message, index) => {
+            const previousMessage = index > 0 ? renderedMessages[index - 1] : null
+            const nextMessage = index < renderedMessages.length - 1 ? renderedMessages[index + 1] : null
+            const showAvatar = previousMessage?.role !== message.role
+            const isGroupStart = previousMessage?.role !== message.role
+            const isGroupEnd = nextMessage?.role !== message.role
+            const groupLabel = message.role === 'coach' ? coachDisplayName : ''
+
+            return (
+              <article
+                key={message.id}
                 className={cn(
-                  'flex flex-col gap-1',
-                  message.role === 'coach' ? 'max-w-[86%]' : 'max-w-[72%] items-end',
+                  'chat-message-enter flex w-full',
+                  message.role === 'user' ? 'justify-end' : 'justify-start',
+                  isGroupStart ? 'mt-1' : 'mt-[-4px]',
                 )}
               >
-                <Card
+                <div
                   className={cn(
-                    'rounded-[20px] border-white/7 shadow-none',
-                    message.role === 'coach'
-                      ? 'bg-[#1d1d1d]'
-                      : 'border-white/8 bg-[#202020]',
+                    'flex min-w-0 items-start gap-2',
+                    message.role === 'coach' ? 'max-w-[94%]' : 'max-w-[72%] ml-auto flex-row-reverse',
                   )}
                 >
-                  <CardContent className="p-3.5">
-                    <MarkdownRenderer content={message.content} />
-                  </CardContent>
-                </Card>
-              </div>
-            </article>
-          ))
+                  {showAvatar ? (
+                    <div
+                      className={cn(
+                        'flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/[0.08] bg-[#202224]',
+                        message.role === 'coach' ? 'mt-[20px]' : 'mt-[2px]',
+                        message.role === 'coach'
+                          ? 'shadow-[0_8px_18px_rgba(0,0,0,0.12),0_0_0_1px_rgba(255,255,255,0.02)_inset]'
+                          : 'shadow-[0_8px_16px_rgba(0,0,0,0.10),0_0_0_1px_rgba(255,255,255,0.02)_inset]',
+                      )}
+                    >
+                      <img
+                        src={message.role === 'coach' ? teacherAvatar : studentAvatar}
+                        alt={message.role === 'coach' ? '老师头像' : '学生头像'}
+                        className="size-full object-cover"
+                      />
+                    </div>
+                  ) : (
+                    <div className="size-9 shrink-0" aria-hidden />
+                  )}
+
+                  <div className={cn('min-w-0 max-w-full', message.role === 'user' && 'flex flex-col items-end')}>
+                    {showAvatar && groupLabel ? (
+                      <div
+                        className={cn(
+                          'mb-1 pl-3 text-[12px] font-medium tracking-[0.03em] text-muted-foreground/72',
+                          message.role === 'user' && 'text-right',
+                        )}
+                      >
+                        {groupLabel}
+                      </div>
+                    ) : null}
+
+                    {message.role === 'coach' ? (
+                      <div className="inline-flex max-w-full flex-col rounded-[22px] border border-white/[0.06] bg-[#181818] px-4 py-3.5 shadow-[0_8px_22px_rgba(0,0,0,0.10)]">
+                        <MarkdownRenderer
+                          content={message.content}
+                          hideLeadHeading
+                          className="space-y-3"
+                        />
+                      </div>
+                    ) : (
+                      <div
+                        className={cn(
+                          'w-fit max-w-full border border-sky-200/[0.12] bg-[linear-gradient(180deg,rgba(31,41,54,0.98),rgba(24,31,41,0.98))] px-4 py-3 shadow-[0_0_0_1px_rgba(125,211,252,0.04)_inset]',
+                          isGroupStart ? 'rounded-t-[22px]' : 'rounded-t-[17px]',
+                          !isGroupEnd && 'rounded-b-[18px]',
+                          isGroupEnd && 'rounded-b-[22px]',
+                        )}
+                      >
+                        <MarkdownRenderer content={message.content} />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </article>
+            )
+          })
         ) : (
           <Card className="border-dashed border-white/8 bg-[#1a1a1a] shadow-none">
             <CardContent className="flex flex-col items-center justify-center gap-3 p-8 text-center">
@@ -64,11 +321,41 @@ export function CoachChatTimeline() {
               </div>
               <div className="space-y-1">
                 <div className="text-sm font-medium text-foreground">教练已经就位</div>
-                <p className="text-sm leading-6 text-muted-foreground">选中一节小关后，这里会开始讲解、提问、纠错和推进。</p>
+                <p className="text-sm leading-6 text-muted-foreground">选中一节小关后，这里会开始讲解、提问、补正和推进。</p>
               </div>
             </CardContent>
           </Card>
         )}
+
+        {showTypingBubble ? (
+          <article className="chat-message-enter flex w-full justify-start">
+            <div className="flex min-w-0 max-w-[94%] items-start gap-2">
+              <div className="mt-[20px] flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/[0.08] bg-[#202224] shadow-[0_8px_18px_rgba(0,0,0,0.12),0_0_0_1px_rgba(255,255,255,0.02)_inset]">
+                <img
+                  src={teacherAvatar}
+                  alt="老师头像"
+                  className="size-full object-cover"
+                />
+              </div>
+
+              <div className="min-w-0 max-w-full">
+                <div className="mb-1 pl-3 text-[12px] font-medium tracking-[0.03em] text-muted-foreground/72">{coachDisplayName}</div>
+                <div className="w-fit min-w-0 max-w-full">
+                  <div className="max-w-[280px] rounded-[24px] border border-white/[0.075] bg-[linear-gradient(180deg,rgba(29,29,30,0.98),rgba(26,26,27,0.98))] px-4 py-3.5 shadow-[0_0_0_1px_rgba(255,255,255,0.025)_inset]">
+                    <div className="flex items-center gap-1.5">
+                      <span className="typing-dot size-2 rounded-full bg-foreground/70" />
+                      <span className="typing-dot size-2 rounded-full bg-foreground/58 [animation-delay:120ms]" />
+                      <span className="typing-dot size-2 rounded-full bg-foreground/46 [animation-delay:240ms]" />
+                      <span className="ml-2 whitespace-nowrap text-[12px] text-muted-foreground">
+                        {requestState === 'loading' ? '老师正在组织这一段讲解…' : '老师正在继续往下说…'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </article>
+        ) : null}
       </div>
     </div>
   )

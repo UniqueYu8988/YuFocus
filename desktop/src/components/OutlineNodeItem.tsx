@@ -1,31 +1,15 @@
-import { Check, ChevronDown, CircleDot, Lock } from 'lucide-react'
+import { AudioLines, Check, CheckCircle2, ChevronDown, CircleDot, LoaderCircle, Lock } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { buildLessonSpeechMarkdown, estimateMiniMaxSpeechCharacters, formatMiniMaxCharacters } from '@/lib/tts'
 import { cn } from '@/lib/utils'
 import { useLearningStore } from '@/store'
 
-function collectStudyDescendants(
-  nodeId: string,
-  nodeMap: ReturnType<typeof useLearningStore.getState>['nodeMap'],
-) {
-  const collected: string[] = []
-  const stack = [nodeId]
-
-  while (stack.length > 0) {
-    const currentId = stack.pop()
-    if (!currentId) continue
-    const currentNode = nodeMap[currentId]
-    if (!currentNode) continue
-
-    if (currentNode.childIds.length === 0) {
-      collected.push(currentId)
-      continue
-    }
-
-    stack.push(...currentNode.childIds)
-  }
-
-  return collected
+type TtsWarmState = {
+  status: 'idle' | 'warming' | 'ready' | 'error'
+  done: number
+  total: number
+  characters: number
 }
 
 export function OutlineNodeItem({ nodeId }: { nodeId: string }) {
@@ -36,19 +20,23 @@ export function OutlineNodeItem({ nodeId }: { nodeId: string }) {
   const isNodeUnlocked = useLearningStore((state) => state.isNodeUnlocked)
   const isNodeCompleted = useLearningStore((state) => state.isNodeCompleted)
   const isStudyNode = useLearningStore((state) => state.isStudyNode)
-  const failedNodeIds = useLearningStore((state) => state.failedNodeIds)
-  const completedNodeIds = useLearningStore((state) => state.completedNodeIds)
+  const pushToast = useLearningStore((state) => state.pushToast)
   const [expanded, setExpanded] = useState(() => false)
+  const [ttsWarmState, setTtsWarmState] = useState<TtsWarmState>({ status: 'idle', done: 0, total: 0, characters: 0 })
 
   if (!node) return null
 
   const unlocked = isNodeUnlocked(node.id)
   const completed = isNodeCompleted(node.id)
   const active = currentNodeId === node.id
-  const failed = failedNodeIds.includes(node.id)
   const hasChildren = node.childIds.length > 0
   const learnable = isStudyNode(node.id)
-  const showBranchProgress = hasChildren && node.depth <= 1
+  const canPreheatSpeech = learnable && !hasChildren
+  const lessonSpeechText = useMemo(() => buildLessonSpeechMarkdown(node), [node])
+  const estimatedSpeechCharacters = useMemo(
+    () => estimateMiniMaxSpeechCharacters(lessonSpeechText),
+    [lessonSpeechText],
+  )
 
   const statusIcon = completed ? <Check size={13} /> : unlocked ? <CircleDot size={13} /> : <Lock size={13} />
   const isInActivePath = useMemo(() => {
@@ -60,29 +48,6 @@ export function OutlineNodeItem({ nodeId }: { nodeId: string }) {
     }
     return false
   }, [currentNodeId, node.id, nodeMap])
-  const descendantStudyNodeIds = useMemo(
-    () => (hasChildren ? collectStudyDescendants(node.id, nodeMap) : []),
-    [hasChildren, node.id, nodeMap],
-  )
-  const branchTotalCount = descendantStudyNodeIds.length
-  const branchCompletedCount = useMemo(
-    () => descendantStudyNodeIds.filter((studyNodeId) => completedNodeIds.includes(studyNodeId)).length,
-    [completedNodeIds, descendantStudyNodeIds],
-  )
-  const branchUnlockedCount = useMemo(
-    () => descendantStudyNodeIds.filter((studyNodeId) => isNodeUnlocked(studyNodeId)).length,
-    [descendantStudyNodeIds, isNodeUnlocked],
-  )
-  const branchProgressPercent = branchTotalCount > 0 ? Math.round((branchCompletedCount / branchTotalCount) * 100) : 0
-  const branchUnlockedPercent = branchTotalCount > 0 ? Math.round((branchUnlockedCount / branchTotalCount) * 100) : 0
-  const branchStatusLabel =
-    branchCompletedCount >= branchTotalCount && branchTotalCount > 0
-      ? '已完成'
-      : isInActivePath
-        ? '进行中'
-        : branchUnlockedCount > 0
-          ? '已展开'
-          : '未开始'
 
   useEffect(() => {
     if (hasChildren && isInActivePath) {
@@ -90,23 +55,98 @@ export function OutlineNodeItem({ nodeId }: { nodeId: string }) {
     }
   }, [hasChildren, isInActivePath])
 
+  useEffect(() => {
+    let cancelled = false
+    if (!canPreheatSpeech || !lessonSpeechText) {
+      setTtsWarmState({ status: 'idle', done: 0, total: 0, characters: 0 })
+      return () => {
+        cancelled = true
+      }
+    }
+
+    setTtsWarmState((current) => ({
+      ...current,
+      status: current.status === 'warming' ? 'warming' : 'idle',
+      characters: estimatedSpeechCharacters,
+    }))
+    void window.desktopAPI.checkSpeechCache({ text: lessonSpeechText, nodeId: node.id }).then((cacheStatus) => {
+      if (cancelled) return
+      setTtsWarmState((current) =>
+        current.status === 'warming'
+          ? current
+          : {
+              status: cacheStatus.cached ? 'ready' : 'idle',
+              done: cacheStatus.cached ? 1 : 0,
+              total: 1,
+              characters: cacheStatus.characters || estimatedSpeechCharacters,
+            },
+      )
+    }).catch(() => {
+      if (cancelled) return
+      setTtsWarmState((current) => ({ ...current, status: current.status === 'warming' ? 'warming' : 'idle' }))
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [canPreheatSpeech, estimatedSpeechCharacters, lessonSpeechText, node.id])
+
+  const preheatLessonSpeech = async () => {
+    if (ttsWarmState.status === 'warming' || !canPreheatSpeech) return
+    setTtsWarmState({ status: 'warming', done: 0, total: 1, characters: estimatedSpeechCharacters })
+
+    try {
+      const cacheStatus = await window.desktopAPI.checkSpeechCache({ text: lessonSpeechText, nodeId: node.id })
+      let synthesizeResult: Awaited<ReturnType<typeof window.desktopAPI.synthesizeSpeech>> | null = null
+      if (!cacheStatus.cached) {
+        synthesizeResult = await window.desktopAPI.synthesizeSpeech({ text: lessonSpeechText, nodeId: node.id })
+      }
+      const usage = synthesizeResult?.usage ?? cacheStatus.usage
+      const characters = synthesizeResult?.characters || cacheStatus.characters || estimatedSpeechCharacters
+      setTtsWarmState({
+        status: 'ready',
+        done: 1,
+        total: 1,
+        characters,
+      })
+      pushToast(
+        cacheStatus.cached ? '语音已在缓存中' : '语音预热完成',
+        cacheStatus.cached
+          ? `「${node.title}」已使用本地缓存，不消耗今日额度。`
+          : synthesizeResult?.provider === 'minimax'
+            ? `「${node.title}」消耗约 ${formatMiniMaxCharacters(characters)} MiniMax 字符；今日本地估算剩余 ${formatMiniMaxCharacters(usage.remainingCharacters)}。`
+            : `「${node.title}」已用 MiMo 生成，约 ${formatMiniMaxCharacters(characters)} TTS 字符；缓存命中不会重复调用。`,
+        'success',
+      )
+    } catch (error) {
+      setTtsWarmState((current) => ({ ...current, status: 'error' }))
+      pushToast('语音预热失败', error instanceof Error ? error.message : String(error), 'error')
+    }
+  }
+
+  const ttsWarmTitle =
+    ttsWarmState.status === 'warming'
+      ? '正在预热本节语音'
+      : ttsWarmState.status === 'ready'
+        ? `本节语音已预热，重复播放不消耗额度，约 ${formatMiniMaxCharacters(ttsWarmState.characters || estimatedSpeechCharacters)} TTS 字符`
+        : `预热本节正文语音，预计 ${formatMiniMaxCharacters(ttsWarmState.characters || estimatedSpeechCharacters)} TTS 字符`
+
   return (
     <div className="space-y-1">
       <div
         className={cn(
           'group relative flex items-center gap-2 overflow-hidden rounded-lg border px-2 py-1.5 transition-all duration-300',
           active &&
-            'outline-node-active border-sky-400/20 bg-[linear-gradient(135deg,rgba(56,189,248,0.16),rgba(56,189,248,0.06))]',
-          !active && 'border-transparent hover:border-white/8 hover:bg-white/[0.024]',
-          failed && !active && 'border-amber-500/15 bg-amber-500/6',
-          isInActivePath && !active && 'border-white/[0.04] bg-white/[0.018]',
+            'outline-node-active border-sky-400/18 bg-[linear-gradient(135deg,rgba(56,189,248,0.14),rgba(56,189,248,0.045))]',
+          !active && 'border-transparent hover:border-white/[0.06] hover:bg-white/[0.014]',
+          isInActivePath && !active && 'border-white/[0.035] bg-white/[0.012]',
         )}
         style={{ marginLeft: `${node.depth * 8}px` }}
       >
         {active ? (
           <>
             <span className="pointer-events-none absolute inset-0 rounded-lg bg-sky-400/[0.03]" />
-            <span className="pointer-events-none absolute inset-y-0 left-0 w-16 bg-[radial-gradient(circle_at_left,rgba(125,211,252,0.22),transparent_70%)]" />
+            <span className="pointer-events-none absolute inset-y-0 left-0 w-16 bg-[radial-gradient(circle_at_left,rgba(125,211,252,0.18),transparent_72%)]" />
           </>
         ) : null}
 
@@ -118,103 +158,117 @@ export function OutlineNodeItem({ nodeId }: { nodeId: string }) {
             unlocked && 'text-foreground/78',
             completed && 'text-emerald-300',
             !unlocked && 'text-muted-foreground/70',
-            active && 'outline-node-active-icon scale-[1.03] text-sky-100',
+            active && 'text-sky-100',
           )}
           onClick={() => setCurrentNode(node.id)}
-          disabled={!unlocked || !learnable}
+          disabled={!learnable}
           aria-label={`进入 ${node.title}`}
+          title={unlocked ? `进入 ${node.title}` : `预览 ${node.title}`}
         >
-          {active ? (
-            <>
-              <span className="absolute inset-[-2px] rounded-full border border-sky-200/15" />
-            </>
-          ) : null}
           {statusIcon}
         </Button>
 
         <div className="min-w-0 flex-1">
           {hasChildren ? (
-            <button
-              type="button"
-              onClick={() => setExpanded((value) => !value)}
-              aria-expanded={expanded}
-              aria-label={expanded ? `收起 ${node.title}` : `展开 ${node.title}`}
-              className="flex w-full items-center justify-between gap-3 rounded-lg text-left"
-            >
-              <span
-                className={cn(
-                  'truncate text-[11px] font-medium text-foreground/95 transition-colors',
-                  active && 'text-sky-50',
-                  !unlocked && 'text-muted-foreground',
-                )}
+            <div className="flex w-full items-center gap-1 rounded-lg">
+              <button
+                type="button"
+                onClick={() => setExpanded((value) => !value)}
+                aria-expanded={expanded}
+                aria-label={expanded ? `收起 ${node.title}` : `展开 ${node.title}`}
+                className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-lg text-left"
               >
-                {node.title}
-              </span>
-              <ChevronDown
-                size={12}
-                className={cn(
-                  'shrink-0 text-muted-foreground transition-transform duration-200',
-                  expanded && 'rotate-180 text-foreground',
-                )}
-              />
-            </button>
+                <span
+                  className={cn(
+                    'truncate text-[11px] font-medium text-foreground/95 transition-colors',
+                    active && 'text-sky-50',
+                    !unlocked && 'text-muted-foreground',
+                  )}
+                >
+                  {node.title}
+                </span>
+                <ChevronDown
+                  size={12}
+                  className={cn(
+                    'shrink-0 text-muted-foreground transition-transform duration-200',
+                    expanded && 'rotate-180 text-foreground',
+                  )}
+                />
+              </button>
+            </div>
           ) : (
-            <button
-              type="button"
-              onClick={() => setCurrentNode(node.id)}
-              disabled={!unlocked || !learnable}
-              aria-label={`进入 ${node.title}`}
-              className="flex w-full items-center justify-between gap-3 rounded-lg text-left disabled:cursor-not-allowed"
-            >
-              <span
-                className={cn(
-                  'truncate text-[11px] font-medium text-foreground/95 transition-colors',
-                  active && 'text-sky-50',
-                  !unlocked && 'text-muted-foreground',
-                )}
+            <div className="flex w-full items-center gap-1 rounded-lg">
+              <button
+                type="button"
+                onClick={() => setCurrentNode(node.id)}
+                disabled={!learnable}
+                aria-label={unlocked ? `进入 ${node.title}` : `预览 ${node.title}`}
+                title={unlocked ? `进入 ${node.title}` : `预览 ${node.title}`}
+                className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-lg text-left disabled:cursor-not-allowed"
               >
-                {node.title}
-              </span>
-            </button>
-          )}
-
-          {showBranchProgress ? (
-            <div className="mt-1.5 flex items-center gap-2 pr-5">
-              <div className="relative h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
-                {branchUnlockedCount > 0 ? (
-                  <span
-                    className="absolute inset-y-0 left-0 rounded-full bg-white/[0.12]"
-                    style={{ width: `${Math.max(branchUnlockedPercent, 12)}%` }}
-                  />
-                ) : null}
-                {branchCompletedCount > 0 ? (
+                <span
+                  className={cn(
+                    'truncate text-[11px] font-medium text-foreground/95 transition-colors',
+                    active && 'text-sky-50',
+                    !unlocked && 'text-muted-foreground',
+                  )}
+                >
+                  {node.title}
+                </span>
+              </button>
+              {canPreheatSpeech ? (
+                <div className="flex shrink-0 items-center gap-1">
                   <span
                     className={cn(
-                      'absolute inset-y-0 left-0 rounded-full shadow-[0_0_12px_rgba(125,211,252,0.28)] transition-all duration-300',
-                      isInActivePath ? 'bg-sky-300/95' : 'bg-sky-300/75',
+                      'hidden text-[9px] tabular-nums text-muted-foreground/55 group-hover:inline',
+                      active && 'inline text-sky-100/70',
+                      ttsWarmState.status === 'ready' && 'inline text-emerald-200/80',
                     )}
-                    style={{ width: `${Math.max(branchProgressPercent, branchProgressPercent > 0 ? 14 : 0)}%` }}
-                  />
-                ) : null}
-              </div>
-              <div
-                className={cn(
-                  'shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-medium tracking-[0.08em]',
-                  branchStatusLabel === '已完成' && 'border-emerald-400/15 bg-emerald-400/[0.08] text-emerald-200',
-                  branchStatusLabel === '进行中' && 'border-sky-400/15 bg-sky-400/[0.08] text-sky-100',
-                  branchStatusLabel === '已展开' && 'border-white/[0.07] bg-white/[0.04] text-foreground/72',
-                  branchStatusLabel === '未开始' && 'border-white/[0.06] bg-transparent text-muted-foreground',
-                )}
-              >
-                {branchStatusLabel}
-              </div>
+                    title={ttsWarmTitle}
+                  >
+                    {formatMiniMaxCharacters(ttsWarmState.characters || estimatedSpeechCharacters)}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className={cn(
+                      'size-6 rounded-lg text-muted-foreground opacity-70 transition hover:text-foreground group-hover:opacity-100',
+                      ttsWarmState.status === 'ready' && 'text-emerald-300 opacity-100',
+                      ttsWarmState.status === 'warming' && 'text-sky-200 opacity-100',
+                      ttsWarmState.status === 'error' && 'text-amber-200 opacity-100',
+                    )}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void preheatLessonSpeech()
+                    }}
+                    disabled={ttsWarmState.status === 'warming'}
+                    title={ttsWarmTitle}
+                    aria-label={ttsWarmTitle}
+                  >
+                    {ttsWarmState.status === 'warming' ? (
+                      <LoaderCircle size={12} className="animate-spin" />
+                    ) : ttsWarmState.status === 'ready' ? (
+                      <CheckCircle2 size={12} />
+                    ) : (
+                      <AudioLines size={12} />
+                    )}
+                  </Button>
+                </div>
+              ) : null}
             </div>
-          ) : null}
+          )}
         </div>
       </div>
 
+      {canPreheatSpeech && ttsWarmState.status === 'warming' ? (
+        <div className="px-2 text-[10px] text-sky-100/70" style={{ marginLeft: `${node.depth * 8 + 28}px` }}>
+          正在预热本节正文 · 约 {formatMiniMaxCharacters(ttsWarmState.characters || estimatedSpeechCharacters)} TTS 字符
+        </div>
+      ) : null}
+
       {hasChildren && expanded ? (
-        <div className="ml-3 space-y-1 border-l border-white/[0.05] pl-2">
+        <div className="ml-3 space-y-1 border-l border-white/[0.035] pl-2">
           {node.childIds.map((childId) => (
             <OutlineNodeItem key={childId} nodeId={childId} />
           ))}

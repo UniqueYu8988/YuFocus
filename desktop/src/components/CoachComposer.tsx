@@ -1,24 +1,25 @@
 import { ArrowRight, ArrowUp, Sparkles } from 'lucide-react'
-import { FormEvent, useState } from 'react'
+import { FormEvent, KeyboardEvent, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
 import { useLearningStore } from '@/store'
 
 type CoachComposerProps = {
   progressText: string
-  onStartQuiz: () => void
+  statusHint?: string
+  statusTone?: 'neutral' | 'progress' | 'warning' | 'success'
   onGoToNext: () => void
-  canStartQuiz: boolean
   canGoToNext: boolean
   nextLabel: string
 }
 
 export function CoachComposer({
   progressText,
-  onStartQuiz,
+  statusHint,
+  statusTone = 'neutral',
   onGoToNext,
-  canStartQuiz,
   canGoToNext,
   nextLabel,
 }: CoachComposerProps) {
@@ -29,18 +30,24 @@ export function CoachComposer({
   const currentNode = useLearningStore((state) =>
     state.currentNodeId ? state.nodeMap[state.currentNodeId] ?? null : null,
   )
+  const currentNodeUnlocked = useLearningStore((state) =>
+    state.currentNodeId ? state.isNodeUnlocked(state.currentNodeId) : false,
+  )
   const submitUserAnswer = useLearningStore((state) => state.submitUserAnswer)
   const [draft, setDraft] = useState('')
 
   const learningStatus = currentSession?.learningStatus ?? 'teaching'
   const coachRequestState = currentSession?.requestState ?? 'idle'
-  const canAnswer =
-    Boolean(currentNodeId) && (learningStatus === 'quizzing' || learningStatus === 'correcting') && coachRequestState !== 'loading'
-  const latestStruggleAttempt =
-    currentSession?.attemptHistory
-      ?.slice()
-      .reverse()
-      .find((attempt) => attempt.verdict === 'incorrect' || attempt.verdict === 'partial') ?? null
+  const canAnswer = Boolean(currentNodeId) && currentNodeUnlocked && learningStatus === 'quizzing' && coachRequestState !== 'loading'
+
+  const statusChipClass =
+    statusTone === 'success'
+      ? 'border-emerald-400/14 bg-emerald-400/[0.07] text-emerald-100/88'
+      : statusTone === 'warning'
+        ? 'border-amber-400/14 bg-amber-400/[0.07] text-amber-100/88'
+        : statusTone === 'progress'
+          ? 'border-sky-400/14 bg-sky-400/[0.07] text-sky-100/88'
+          : 'border-white/[0.06] bg-white/[0.03] text-foreground/72'
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -49,87 +56,90 @@ export function CoachComposer({
     setDraft('')
   }
 
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || event.shiftKey) return
+    event.preventDefault()
+    if (!draft.trim() || !canAnswer) return
+    void submitUserAnswer(draft)
+    setDraft('')
+  }
+
   return (
-    <form onSubmit={onSubmit} className="relative shrink-0 border-t border-white/7 bg-[#181818]">
-      <div className="space-y-2 px-4 pb-3 pt-3">
-        <Textarea
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder={canAnswer ? '在这里回答这道题…' : '先听讲，再点击“开始小测”。'}
-          disabled={!canAnswer}
-          rows={2}
-          className="min-h-[64px] resize-none rounded-[20px] border-white/7 bg-[#121212] px-4 py-3 text-[14px] leading-6 shadow-none"
-        />
+    <form onSubmit={onSubmit} className="relative shrink-0 border-t border-white/[0.06] bg-[#181818]">
+      <div className="space-y-2 px-4 pb-2.5 pt-2.5">
+        <div className="rounded-[22px] border border-white/[0.06] bg-[#141414] p-1.5 shadow-[0_-10px_30px_rgba(0,0,0,0.12)]">
+          <div className="flex items-end gap-2">
+            <div className="flex min-w-0 flex-1 items-start rounded-[18px] border border-white/[0.05] bg-[#101010] px-3 py-2.5">
+              <Textarea
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={onKeyDown}
+                placeholder={
+                  canAnswer
+                    ? '先写下你的回忆，再对照标准答案…'
+                    : currentNodeUnlocked
+                      ? '先阅读这一关，再写下你的回忆。'
+                      : '这一关还未解锁，可以先浏览，按进度学到这里后再答题。'
+                }
+                disabled={!canAnswer}
+                rows={1}
+                className="min-h-[44px] resize-none border-0 bg-transparent px-0 py-0 text-[14px] leading-6 shadow-none focus-visible:ring-0"
+              />
+            </div>
 
-        {latestStruggleAttempt && latestStruggleAttempt.missingKeywords.length > 0 ? (
-          <div
-            className={
-              latestStruggleAttempt.verdict === 'partial'
-                ? 'flex flex-wrap items-center gap-2 rounded-[16px] border border-sky-500/12 bg-sky-500/[0.05] px-3 py-2 text-[11px] text-sky-100/85'
-                : 'flex flex-wrap items-center gap-2 rounded-[16px] border border-amber-500/12 bg-amber-500/[0.05] px-3 py-2 text-[11px] text-amber-100/85'
-            }
-          >
-            <Badge variant={latestStruggleAttempt.verdict === 'partial' ? 'outline' : 'warning'} className="h-5 rounded-full px-2 text-[10px]">
-              {latestStruggleAttempt.verdict === 'partial' ? '继续补半步' : '复盘提示'}
-            </Badge>
-            <span className={latestStruggleAttempt.verdict === 'partial' ? 'text-sky-100/92' : 'text-amber-100/92'}>
-              {latestStruggleAttempt.verdict === 'partial' ? '你刚才已经答到一部分了，再补上：' : '上次这道题还漏掉了：'}
-            </span>
-            <span className={latestStruggleAttempt.verdict === 'partial' ? 'font-medium text-sky-50' : 'font-medium text-amber-50'}>
-              {latestStruggleAttempt.missingKeywords.slice(0, 4).join('、')}
-            </span>
-            {latestStruggleAttempt.cautionNotes.length > 0 ? (
-              <span className={latestStruggleAttempt.verdict === 'partial' ? 'text-sky-200/70' : 'text-amber-200/70'}>
-                · {latestStruggleAttempt.cautionNotes[0]}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex min-w-0 flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
-            <Badge
-              variant={learningStatus === 'correcting' ? 'warning' : learningStatus === 'quizzing' ? 'default' : 'outline'}
-              className="h-6 rounded-full px-2.5 text-[10px]"
-            >
-              <Sparkles className="size-3" />
-              {learningStatus === 'correcting' ? '纠错模式' : learningStatus === 'quizzing' ? '答题模式' : '等待出题'}
-            </Badge>
-            {currentNode ? <span className="truncate">{currentNode.title}</span> : null}
-            <span>{progressText}</span>
-            <span className="hidden sm:inline">{draft.trim() ? `${draft.trim().length} 字` : ''}</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              className="h-9 rounded-xl px-3"
-              onClick={onStartQuiz}
-              disabled={!canStartQuiz}
-            >
-              <Sparkles size={14} />
-              小测
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-9 rounded-xl px-3"
-              onClick={onGoToNext}
-              disabled={!canGoToNext}
-            >
-              <ArrowRight size={14} />
-              {nextLabel}
-            </Button>
             <Button
               type="submit"
               size="icon"
-              className="size-9 rounded-xl shadow-[0_10px_24px_rgba(0,0,0,0.18)]"
+              className="size-10 shrink-0 rounded-[18px] shadow-[0_10px_24px_rgba(0,0,0,0.2)]"
               disabled={!canAnswer || !draft.trim()}
               aria-label="提交回答"
             >
-              <ArrowUp size={15} />
+              <ArrowUp size={16} />
             </Button>
+          </div>
+
+          <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 px-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+              <Badge
+                variant={learningStatus === 'quizzing' ? 'default' : 'outline'}
+                className="h-5 rounded-full px-2 text-[10px]"
+              >
+                <Sparkles className="size-3" />
+                {coachRequestState === 'loading'
+                  ? '整理中'
+                  : !currentNodeUnlocked
+                    ? '预览'
+                  : learningStatus === 'quizzing'
+                    ? '主动回忆'
+                    : '阅读课程'}
+              </Badge>
+              <span className="truncate">{progressText}</span>
+              {statusHint ? (
+                <span
+                  className={cn(
+                    'inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] transition-all',
+                    statusChipClass,
+                  )}
+                >
+                  <span className={cn('size-1.5 rounded-full', statusTone === 'warning' ? 'bg-amber-300' : statusTone === 'success' ? 'bg-emerald-300' : 'bg-sky-300/90')} />
+                  <span className="truncate">{statusHint}</span>
+                </span>
+              ) : null}
+              <span className="hidden sm:inline">{draft.trim() ? `${draft.trim().length} 字` : 'Enter 发送 · Shift+Enter 换行'}</span>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-7 rounded-xl px-2.5 text-[11px]"
+                onClick={onGoToNext}
+                disabled={!canGoToNext}
+              >
+                <ArrowRight size={13} />
+                {nextLabel}
+              </Button>
+            </div>
           </div>
         </div>
       </div>

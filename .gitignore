@@ -8,10 +8,16 @@ __pycache__/
 .biliarchive.local.json
 .biliarchive.window.json
 .zhiyuli-runtime.log
+.shijie-focus.local.json
+.shijie-focus.window.json
+.shijie-focus-runtime.log
+.onboard-tts-cache/
 output/
 tmp-obsidian-vault/
 tmp-obsidian-vault-2/
 tmp-obsidian-vault*/
+.playwright-cli/
+test-results/
 
 # Desktop app build artifacts
 desktop/node_modules/

@@ -58,14 +58,14 @@ function NavEntry({
       className={cn(
         'flex w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition',
         active
-          ? 'border-[#6e84c8]/18 bg-[#5f73ab]/12 text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]'
-          : 'border-transparent text-muted-foreground hover:bg-white/[0.024] hover:text-foreground',
+          ? 'border-[#6e84c8]/20 bg-[#5e73a8]/11 text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]'
+          : 'border-transparent text-muted-foreground hover:bg-white/[0.016] hover:text-foreground',
       )}
     >
       <span
         className={cn(
           'flex size-6.5 shrink-0 items-center justify-center rounded-lg',
-          active ? 'bg-[#90a6df]/10 text-foreground' : 'text-foreground/70',
+          active ? 'bg-[#8ea4de]/9 text-foreground' : 'text-foreground/70',
         )}
       >
         {icon}
@@ -136,17 +136,17 @@ export function CourseOutlinePane({ workspaceView, onSelectView, windowFocused: 
         </nav>
       </div>
 
-      <div className="mt-2 flex min-h-0 flex-1 flex-col overflow-hidden border-t border-white/[0.035] pt-2.5">
+      <div className="mt-2 flex min-h-0 flex-1 flex-col overflow-hidden border-t border-white/[0.02] pt-2.5">
         <div className="flex items-center justify-between px-1 pb-2">
           <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-muted-foreground">主线</div>
           {courseData ? (
-            <div className="flex items-center gap-2 rounded-full border border-white/[0.05] bg-white/[0.025] px-2.5 py-1">
-              <div className="flex h-2 w-[110px] items-center gap-[3px]">
+            <div className="flex items-center gap-2 rounded-full border border-white/[0.04] bg-white/[0.015] px-2.5 py-1">
+              <div className="flex h-2 w-[132px] items-center gap-[3px]">
                 {stageSegments.map((segment) => (
-                  <div key={segment.id} className="relative h-full flex-1 overflow-hidden rounded-full bg-white/[0.06]">
+                  <div key={segment.id} className="relative h-full flex-1 overflow-hidden rounded-full bg-white/[0.04]">
                     {segment.unlockedRatio > 0 ? (
                       <span
-                        className="absolute inset-y-0 left-0 rounded-full bg-white/[0.12]"
+                        className="absolute inset-y-0 left-0 rounded-full bg-white/[0.09]"
                         style={{ width: `${Math.max(segment.unlockedRatio * 100, segment.unlockedRatio > 0 ? 14 : 0)}%` }}
                       />
                     ) : null}
@@ -159,8 +159,7 @@ export function CourseOutlinePane({ workspaceView, onSelectView, windowFocused: 
                   </div>
                 ))}
               </div>
-              <span className="text-[10px] font-medium text-foreground/85">{completedStageCount}/{Math.max(stageSegments.length, 0)} 段</span>
-              <span className="text-[10px] font-medium text-foreground/65">{progress}%</span>
+              <span className="text-[10px] font-medium text-foreground/78">{progress}%</span>
             </div>
           ) : null}
         </div>

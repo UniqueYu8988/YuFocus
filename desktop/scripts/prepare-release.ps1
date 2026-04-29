@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $releaseDir = Join-Path $projectRoot 'release'
-$appName = '视界专注'
+$appName = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('6KeG55WM5LiT5rOo'))
 $packageJsonPath = Join-Path $projectRoot 'package.json'
 $packageJsonRaw = [System.IO.File]::ReadAllText($packageJsonPath, [System.Text.Encoding]::UTF8)
 $versionMatch = [regex]::Match($packageJsonRaw, '"version"\s*:\s*"(?<version>[^"]+)"')
@@ -58,23 +58,8 @@ if (-not (Test-Path -LiteralPath $releaseDir)) {
 }
 
 $releaseReadmePath = Join-Path $releaseDir ("README_v{0}.txt" -f $versionLabel)
-$releaseReadmeContent = @"
-视界专注 v$versionLabel
-
-启动方式：
-1. 双击运行同目录下的 视界专注_v$versionLabel`_x64.exe
-2. 首次使用请先在“设置”中填写教练 API / 蒸馏引擎配置
-3. 可从“课程中心”粘贴 BV 号开始提炼，或导入现成课程包继续学习
-
-当前版本重点：
-- 课程中心 / 学习台 / 设置中心三入口整理
-- 持久化学习档案与课程归档
-- Obsidian 导出与双链笔记同步
-- 更干净的 Obsidian 命名与归档视图
-
-项目仓库：
-https://github.com/UniqueYu8988/YuFocus
-"@
-
-Set-Content -LiteralPath $releaseReadmePath -Value $releaseReadmeContent -Encoding UTF8
+$releaseReadmeTemplateBase64 = '6KeG55WM5LiT5rOoIHZ7e1ZFUlNJT059fQoK5ZCv5Yqo5pa55byP77yaCjEuIOWPjOWHu+i/kOihjOWQjOebruW9leS4i+eahCDop4bnlYzkuJPms6hfdnt7VkVSU0lPTn19X3g2NC5leGUKMi4g6aaW5qyh5L2/55So6K+35YWI5Zyo4oCc6K6+572u4oCd5Lit5aGr5YaZ5pWZ57uDIEFQSSAvIOiSuOmmj+W8leaTjumFjee9rgozLiDlj6/ku47igJzor77nqIvkuK3lv4PigJ3nspjotLQgQlYg5Y+35byA5aeL5o+Q54K877yM5oiW5a+85YWl546w5oiQ6K++56iL5YyF57un57ut5a2m5LmgCgrlvZPliY3niYjmnKzph43ngrnvvJoKLSDor77nqIvkuK3lv4MgLyDlrabkuaDlj7AgLyDorr7nva7kuK3lv4PkuInlhaXlj6PmlbTnkIYKLSDmjIHkuYXljJblrabkuaDmoaPmoYjkuI7or77nqIvlvZLmoaMKLSBPYnNpZGlhbiDlr7zlh7rkuI7lj4zpk77nrJTorrDlkIzmraUKLSDmm7TlubLlh4DnmoQgT2JzaWRpYW4g5ZG95ZCN5LiO5b2S5qGj6KeG5Zu+Cgrpobnnm67ku5PlupPvvJoKaHR0cHM6Ly9naXRodWIuY29tL1VuaXF1ZVl1ODk4OC9ZdUZvY3VzCg=='
+$releaseReadmeContent = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($releaseReadmeTemplateBase64)).Replace('{{VERSION}}', $versionLabel)
+$utf8WithBom = New-Object System.Text.UTF8Encoding($true)
+[System.IO.File]::WriteAllText($releaseReadmePath, $releaseReadmeContent, $utf8WithBom)
 Write-Host "Prepared release readme: $releaseReadmePath"

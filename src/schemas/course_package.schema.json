@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://onboard-anything.local/schemas/course_package.schema.json",
-  "title": "Onboard Anything Course Package",
-  "description": "Onboard Anything v0.1 蒸馏后课程知识包 Schema。",
+  "$id": "https://shijie-focus.local/schemas/course_package.schema.json",
+  "title": "视界专注 Course Package",
+  "description": "视界专注轻量学习台可导入的课程包 Schema。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -76,7 +76,8 @@
           "type": "string",
           "enum": [
             "bilibili_subtitle",
-            "groq_transcript",
+            "local_transcript",
+            "audio_transcript",
             "merged_text",
             "manual_text"
           ]
@@ -227,6 +228,16 @@
             "minLength": 1
           }
         },
+        "teacher_ready_content": {
+          "$ref": "#/$defs/teacherReadyContent"
+        },
+        "source_refs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/sourceRef"
+          }
+        },
         "dependencies": {
           "type": "array",
           "default": [],
@@ -259,6 +270,112 @@
           "items": {
             "$ref": "#/$defs/informationGap"
           }
+        }
+      }
+    },
+    "teacherReadyContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lesson_profile": {
+          "type": "string",
+          "enum": [
+            "concept",
+            "operation",
+            "tool_config",
+            "exam",
+            "case_analysis",
+            "strategy",
+            "mixed"
+          ]
+        },
+        "display_hints": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "teaching_markdown": {
+          "type": "string"
+        },
+        "quiz_question": {
+          "type": "string"
+        },
+        "standard_answer": {
+          "type": "string"
+        },
+        "key_points": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "common_mistakes": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "memory_hook": {
+          "type": "string"
+        }
+      }
+    },
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "label"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "material_block",
+            "subtitle_segment",
+            "transcript_excerpt",
+            "material_package",
+            "note",
+            "other"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "block_id": {
+          "type": "string"
+        },
+        "time_range": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "from": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "to": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          }
+        },
+        "excerpt": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
         }
       }
     },
@@ -295,6 +412,54 @@
           }
         },
         "common_mistakes": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "source_scope": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "teaching_expansion": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "practical_steps": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "practice_tasks": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "transfer_prompts": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "enrichment_notes": {
           "type": "array",
           "default": [],
           "items": {

@@ -8,30 +8,23 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   saveSettings: (payload: unknown) => ipcRenderer.invoke('settings:save', payload),
   loadSettingsStatus: () => ipcRenderer.invoke('settings:status'),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
+  pickMediaFile: () => ipcRenderer.invoke('dialog:pickMediaFile'),
   importCoursePackage: () => ipcRenderer.invoke('course:import'),
   readCoursePackage: (targetPath: string) => ipcRenderer.invoke('course:read', targetPath),
-  runDistillation: (payload: { video: string }) => ipcRenderer.invoke('distill:run', payload),
-  exportCourseToObsidian: (payload: unknown) => ipcRenderer.invoke('obsidian:export-course', payload),
-  openObsidianTarget: (payload: unknown) => ipcRenderer.invoke('obsidian:open-target', payload),
+  runDistillation: (payload: { video?: string; sourceKind?: 'bilibili' | 'local_media'; mediaPath?: string }) => ipcRenderer.invoke('distill:run', payload),
+  listMaterialPackages: () => ipcRenderer.invoke('materials:list'),
   loadLearningLibrary: () => ipcRenderer.invoke('learning:library:load'),
   openLearningRecord: (recordId: string) => ipcRenderer.invoke('learning:library:open', recordId),
   refreshLearningLibraryStructure: () => ipcRenderer.invoke('learning:library:refresh-structure'),
   saveLearningRecord: (payload: unknown) => ipcRenderer.invoke('learning:library:save', payload),
   deleteLearningRecord: (recordId: string) => ipcRenderer.invoke('learning:library:delete', recordId),
-  runArchive: (payload: { video: string; generateAi: boolean }) => ipcRenderer.invoke('archive:run', payload),
+  exportObsidianCourse: (payload: unknown) => ipcRenderer.invoke('obsidian:export', payload),
+  openObsidianCourse: (payload: unknown) => ipcRenderer.invoke('obsidian:open', payload),
+  synthesizeSpeech: (payload: unknown) => ipcRenderer.invoke('tts:synthesize', payload),
+  checkSpeechCache: (payload: unknown) => ipcRenderer.invoke('tts:status', payload),
   openPath: (targetPath: string) => ipcRenderer.invoke('shell:openPath', targetPath),
   showItem: (targetPath: string) => ipcRenderer.invoke('shell:showItem', targetPath),
   openExternal: (targetUrl: string) => ipcRenderer.invoke('shell:openExternal', targetUrl),
-  onArchiveLog: (callback: (message: string) => void) => {
-    const handler = (_event: unknown, message: string) => callback(message)
-    ipcRenderer.on('archive-log', handler)
-    return () => ipcRenderer.removeListener('archive-log', handler)
-  },
-  onArchiveProgress: (callback: (payload: { message: string; percent: number }) => void) => {
-    const handler = (_event: unknown, payload: { message: string; percent: number }) => callback(payload)
-    ipcRenderer.on('archive-progress', handler)
-    return () => ipcRenderer.removeListener('archive-progress', handler)
-  },
   onDistillProgress: (
     callback: (payload: {
       message: string

@@ -1,24 +1,23 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   AudioLines,
   ArchiveRestore,
   Award,
-  Bot,
   Cookie,
+  Clipboard,
   FileUp,
-  FlaskConical,
+  FileVideo,
   FolderOpen,
   GraduationCap,
-  KeyRound,
   Link2,
   Milestone,
+  PackageOpen,
   RefreshCcw,
   Search,
   Server,
   Settings2,
   Sparkles,
   Trash2,
-  LibraryBig,
   WandSparkles,
 } from 'lucide-react'
 import { CoachPane } from '@/components/CoachPane'
@@ -28,13 +27,10 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import {
-  DEFAULT_COACH_MODEL,
-  DEFAULT_DISTILLER_MODEL,
-  DEFAULT_GROQ_TRANSCRIPTION_MODEL,
   DEFAULT_LOCAL_TRANSCRIPTION_DEVICE,
   DEFAULT_LOCAL_TRANSCRIPTION_LANGUAGE,
   DEFAULT_LOCAL_TRANSCRIPTION_MODEL_ID,
-  DEFAULT_MINIMAX_BASE_URL,
+  DEFAULT_RESOURCE_MODE,
   DEFAULT_TRANSCRIPTION_PROVIDER,
 } from '@/lib/coachPreferences'
 import { cn } from '@/lib/utils'
@@ -55,18 +51,20 @@ type WorkspacePaneProps = {
 
 type LibrarySortMode = 'recent' | 'progress' | 'title'
 type ArchiveShelfFilter = 'all' | 'recent' | 'coding' | 'medical' | 'highlighted'
+type MaterialSourceMode = 'bilibili' | 'local_media'
+type MaterialInventory = Awaited<ReturnType<typeof window.desktopAPI.listMaterialPackages>>
 
 const DISTILL_STAGE_ORDER = [
   { id: 'metadata', label: '解析视频' },
   { id: 'subtitle', label: '字幕准备' },
   { id: 'audio', label: '音频补全' },
   { id: 'chunking', label: '文本切片' },
-  { id: 'chunk_distilling', label: '蒸馏分片' },
+  { id: 'chunk_distilling', label: '整理分片' },
   { id: 'batch_reducing', label: '批次归并' },
-  { id: 'synthesizing', label: '最终合成' },
+  { id: 'synthesizing', label: '写入材料' },
   { id: 'cache', label: '缓存直出' },
-  { id: 'injecting', label: '注入界面' },
-  { id: 'complete', label: '回传界面' },
+  { id: 'injecting', label: '写入完成' },
+  { id: 'complete', label: '完成' },
 ] as const
 
 function resolveDistillStagePosition(stage?: string) {
@@ -94,6 +92,8 @@ function formatCacheHint(cacheHint?: string | null) {
       return '后台预热'
     case 'local_fast_synth':
       return '本地快速合成'
+    case 'material_package':
+      return '原材料包'
     default:
       return ''
   }
@@ -106,20 +106,26 @@ function buildInitialDraft(runtimeSettings: RuntimeSettingsFallback) {
     obsidian_vault_path: runtimeSettings?.obsidian_vault_path || '',
     obsidian_export_folder: runtimeSettings?.obsidian_export_folder || '视界专注',
     obsidian_auto_sync: runtimeSettings?.obsidian_auto_sync ?? true,
-    coach_api_base_url: runtimeSettings?.coach_api_base_url || DEFAULT_MINIMAX_BASE_URL,
-    coach_api_key: runtimeSettings?.coach_api_key || '',
-    coach_model: runtimeSettings?.coach_model || DEFAULT_COACH_MODEL,
-    distiller_api_base_url: runtimeSettings?.distiller_api_base_url || DEFAULT_MINIMAX_BASE_URL,
-    distiller_api_key: runtimeSettings?.distiller_api_key || '',
-    distiller_model: runtimeSettings?.distiller_model || DEFAULT_DISTILLER_MODEL,
+    tts_provider: runtimeSettings?.tts_provider || 'none',
+    minimax_api_key: runtimeSettings?.minimax_api_key || '',
+    minimax_tts_endpoint: runtimeSettings?.minimax_tts_endpoint || 'https://api.minimaxi.com/v1/t2a_v2',
+    minimax_tts_model: runtimeSettings?.minimax_tts_model || 'speech-2.8-hd',
+    minimax_tts_voice_id: runtimeSettings?.minimax_tts_voice_id || '',
+    minimax_tts_speed: runtimeSettings?.minimax_tts_speed ?? 1,
+    minimax_tts_volume: runtimeSettings?.minimax_tts_volume ?? 1,
+    minimax_tts_pitch: runtimeSettings?.minimax_tts_pitch ?? 0,
+    mimo_api_key: runtimeSettings?.mimo_api_key || '',
+    mimo_tts_endpoint: runtimeSettings?.mimo_tts_endpoint || 'https://api.xiaomimimo.com/v1/chat/completions',
+    mimo_tts_model: runtimeSettings?.mimo_tts_model || 'mimo-v2.5-tts',
+    mimo_tts_voice_id: runtimeSettings?.mimo_tts_voice_id || '茉莉',
+    mimo_tts_style_prompt: runtimeSettings?.mimo_tts_style_prompt || '用清晰、年轻、温和的中文女声朗读，语速适中，像耐心老师讲课。',
     transcription_provider: runtimeSettings?.transcription_provider || DEFAULT_TRANSCRIPTION_PROVIDER,
-    groq_api_key: runtimeSettings?.groq_api_key || '',
-    groq_transcription_model: runtimeSettings?.groq_transcription_model || DEFAULT_GROQ_TRANSCRIPTION_MODEL,
     local_transcription_root: runtimeSettings?.local_transcription_root || '',
     local_transcription_python: runtimeSettings?.local_transcription_python || '',
     local_transcription_model_id: runtimeSettings?.local_transcription_model_id || DEFAULT_LOCAL_TRANSCRIPTION_MODEL_ID,
     local_transcription_device: runtimeSettings?.local_transcription_device || DEFAULT_LOCAL_TRANSCRIPTION_DEVICE,
     local_transcription_language: runtimeSettings?.local_transcription_language || DEFAULT_LOCAL_TRANSCRIPTION_LANGUAGE,
+    resource_mode: runtimeSettings?.resource_mode || DEFAULT_RESOURCE_MODE,
   }
 }
 
@@ -141,14 +147,10 @@ function formatRelativeTime(timestamp: number) {
   }).format(timestamp)
 }
 
-function formatSyncTime(timestamp: number) {
-  if (!timestamp) return '刚刚'
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(timestamp)
+function formatCompactNumber(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '0'
+  if (value >= 10000) return `${(value / 10000).toFixed(1)} 万`
+  return String(Math.round(value))
 }
 
 function buildRecordSearchText(record: LearningRecordSummary) {
@@ -184,27 +186,6 @@ function getRecordProgressLabel(record: LearningRecordSummary) {
   return `${record.progressPercent}% 已掌握`
 }
 
-function getRecordChallengeMeta(record: LearningRecordSummary) {
-  if (record.dominantChallenge === 'incorrect-heavy') {
-    return {
-      label: '纠错偏多',
-      detail: record.hotspotNodeTitle ? `最常卡在 ${record.hotspotNodeTitle}` : '最近更适合回看错题',
-    }
-  }
-
-  if (record.dominantChallenge === 'partial-heavy') {
-    return {
-      label: '理解补全中',
-      detail: record.hotspotNodeTitle ? `最常差半步的是 ${record.hotspotNodeTitle}` : '最近多是答到一半但还不够稳',
-    }
-  }
-
-  return {
-    label: '推进稳定',
-    detail: record.currentNodeTitle ? `继续推进 ${record.currentNodeTitle}` : '当前没有明显卡点',
-  }
-}
-
 function formatMilestoneTime(timestamp: number) {
   if (!timestamp) return '刚刚'
   const diff = Date.now() - timestamp
@@ -238,7 +219,29 @@ function getAchievementToneClass(tone: LearningRecordSummary['achievementBadges'
     case 'info':
       return 'border-violet-400/18 bg-violet-400/[0.08] text-violet-100'
     default:
-      return 'border-white/8 bg-white/[0.03] text-foreground/85'
+      return 'border-white/[0.07] bg-[#232323] text-foreground/85'
+  }
+}
+
+function getMilestoneToneClass(kind: LearningRecordSummary['recentMilestones'][number]['kind']) {
+  switch (kind) {
+    case 'course_complete':
+      return 'border-emerald-400/16 bg-emerald-400/[0.08] text-emerald-100'
+    case 'stage_complete':
+      return 'border-sky-400/16 bg-sky-400/[0.08] text-sky-100'
+    default:
+      return 'border-white/[0.07] bg-[#232323] text-foreground/82'
+  }
+}
+
+function getMilestoneShortLabel(kind: LearningRecordSummary['recentMilestones'][number]['kind']) {
+  switch (kind) {
+    case 'course_complete':
+      return '结课'
+    case 'stage_complete':
+      return '打通'
+    default:
+      return '通过'
   }
 }
 
@@ -250,25 +253,26 @@ function WorkspaceShell({
   children,
   windowFocused,
 }: {
-  eyebrow: string
+  eyebrow?: string
   title: string
-  description: string
+  description?: string
   actions?: ReactNode
   children: ReactNode
   windowFocused: boolean
 }) {
   return (
     <section className="flex min-h-0 flex-1">
-      <Card className={cn('work-surface flex min-h-0 w-full flex-col overflow-hidden rounded-l-[22px] rounded-r-none border-0 shadow-[-10px_0_28px_rgba(0,0,0,0.1)] transition-colors duration-200', windowFocused ? 'bg-[#181818]' : 'bg-[#171717]')}>
-        <div className="surface-seam-b flex items-start justify-between gap-4 pl-7 pr-5 pb-2.5 pt-3">
-          <div className="space-y-1">
-            <div className="text-[11px] font-medium uppercase tracking-[0.24em] text-muted-foreground">{eyebrow}</div>
-            <h2 className="text-[20px] font-semibold tracking-tight text-foreground">{title}</h2>
-            <p className="max-w-3xl text-[11px] leading-5 text-muted-foreground">{description}</p>
+      <Card className={cn('work-surface relative flex min-h-0 w-full flex-col overflow-hidden rounded-l-[22px] rounded-r-none border-0 shadow-[-14px_0_30px_rgba(0,0,0,0.14)] transition-colors duration-200', windowFocused ? 'bg-[#171717]' : 'bg-[#151515]')}>
+        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(118deg,rgba(56,189,248,0.07),transparent_34%),linear-gradient(244deg,rgba(251,191,36,0.045),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0)_22%)]" />
+        <div className="relative flex items-start justify-between gap-4 pb-1.5 pl-6 pr-5 pt-3.5">
+          <div className="space-y-1.5">
+            {eyebrow ? <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-sky-100/52">{eyebrow}</div> : null}
+            <h2 className="text-[22px] font-semibold tracking-tight text-foreground">{title}</h2>
+            {description ? <p className="max-w-3xl text-[12px] leading-6 text-muted-foreground">{description}</p> : null}
           </div>
           {actions ? <div className="shrink-0">{actions}</div> : null}
         </div>
-        <div className="subtle-scrollbar min-h-0 flex-1 overflow-y-auto px-5 py-4.5">{children}</div>
+        <div className="subtle-scrollbar relative min-h-0 flex-1 overflow-y-auto px-4 py-3">{children}</div>
       </Card>
     </section>
   )
@@ -277,15 +281,17 @@ function WorkspaceShell({
 function Field({
   label,
   icon,
+  className,
   children,
 }: {
   label: string
   icon: ReactNode
+  className?: string
   children: ReactNode
 }) {
   return (
-    <label className="grid gap-2">
-      <span className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+    <label className={cn('grid gap-1.5', className)}>
+      <span className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
         {icon}
         {label}
       </span>
@@ -296,15 +302,21 @@ function Field({
 
 function SettingsBlock({
   title,
+  className,
   children,
 }: {
   title: string
+  className?: string
   children: ReactNode
 }) {
   return (
-    <div className="rounded-[22px] border border-white/7 bg-white/[0.022] p-4.5">
-      <div className="mb-4 text-[12px] font-semibold text-foreground">{title}</div>
-      <div className="grid gap-4">{children}</div>
+    <div className={cn('relative overflow-hidden rounded-[20px] border border-white/[0.075] bg-[linear-gradient(180deg,rgba(32,32,32,0.88),rgba(24,24,24,0.96))] p-3.5 shadow-[0_10px_24px_rgba(0,0,0,0.1)]', className)}>
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-[linear-gradient(90deg,rgba(125,211,252,0.0),rgba(125,211,252,0.38),rgba(251,191,36,0.22),rgba(125,211,252,0.0))]" />
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="text-[12px] font-semibold text-foreground">{title}</div>
+        <div className="h-1.5 w-8 rounded-full bg-white/10" />
+      </div>
+      <div className="grid gap-3">{children}</div>
     </div>
   )
 }
@@ -324,26 +336,26 @@ function LibraryRecordRow({
   onOpenSource: () => void
   onRevealPackage: () => void
 }) {
-  const challengeMeta = getRecordChallengeMeta(record)
-
   return (
     <button
       type="button"
       onClick={onOpen}
       className={cn(
-        'group w-full rounded-[20px] border px-3.5 py-2.5 text-left transition',
+        'group w-full rounded-[22px] border p-4 text-left transition',
         active
-          ? 'border-white/10 bg-white/[0.045]'
+          ? 'border-sky-300/12 bg-[linear-gradient(180deg,rgba(29,38,43,0.72),rgba(24,25,26,0.94))]'
           : record.isArchived
             ? 'border-emerald-500/12 bg-[linear-gradient(180deg,rgba(27,31,28,0.96),rgba(24,26,24,0.96))] hover:bg-[linear-gradient(180deg,rgba(29,34,30,0.98),rgba(24,28,25,0.98))]'
-            : 'border-white/6 bg-[#1b1b1b] hover:bg-[#1e1e1e]',
+            : 'border-white/[0.075] bg-[linear-gradient(180deg,rgba(31,31,31,0.92),rgba(24,24,24,0.96))] hover:border-sky-300/10 hover:bg-[linear-gradient(180deg,rgba(33,37,39,0.94),rgba(24,25,26,0.98))]',
       )}
     >
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start justify-between gap-5">
         <div className="min-w-0 flex-1 space-y-2">
           <div className="flex items-center gap-2">
-            <div className={cn('size-1.5 rounded-full bg-white/35', active && 'bg-white/80')} />
-            <div className="truncate text-[12px] font-semibold text-foreground">{record.title}</div>
+            <div className="flex size-7 shrink-0 items-center justify-center rounded-xl border border-sky-300/12 bg-sky-300/[0.06] text-sky-100">
+              <Award size={13} />
+            </div>
+            <div className="truncate text-[14px] font-semibold text-foreground">{record.title}</div>
             {record.isArchived ? (
               <Badge variant="outline" className="border-emerald-500/15 bg-emerald-500/[0.08] text-emerald-100">
                 <GraduationCap className="size-3" />
@@ -358,20 +370,15 @@ function LibraryRecordRow({
             <span>{formatRelativeTime(record.lastOpenedAt)}</span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 text-[10px]">
-            <Badge variant="outline" className="h-5 rounded-full px-2 text-[10px]">
-              {challengeMeta.label}
-            </Badge>
+          <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+            <span>已完成 {record.completedCount} 节</span>
             {record.totalStageCount > 0 ? (
-              <span className="text-muted-foreground">
+              <span>
                 阶段 {record.stageCompletedCount}/{record.totalStageCount}
               </span>
             ) : null}
-            {record.partialCount > 0 ? <span className="text-muted-foreground">补半步 {record.partialCount} 次</span> : null}
-            {record.incorrectCount > 0 ? <span className="text-muted-foreground">需纠错 {record.incorrectCount} 次</span> : null}
+            <span>{record.sessionCount} 个小节有记录</span>
           </div>
-
-          <div className="text-[10px] leading-5 text-muted-foreground">{challengeMeta.detail}</div>
 
           {record.isArchived ? (
             <div className="rounded-2xl border border-emerald-500/12 bg-emerald-500/[0.045] px-3 py-2 text-[10px] leading-5 text-emerald-100/85">
@@ -396,66 +403,61 @@ function LibraryRecordRow({
             </div>
           ) : null}
 
-          {record.recentMilestones.length > 0 ? (
-            <div className="rounded-2xl border border-white/6 bg-white/[0.018] px-3 py-2">
-              <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                <Milestone size={12} />
-                最近里程碑
-              </div>
-              <div className="mt-1.5 text-[11px] text-foreground/88">{record.recentMilestones[0].title}</div>
-              <div className="mt-0.5 text-[10px] leading-5 text-muted-foreground">
-                {record.recentMilestones[0].detail} · {formatMilestoneTime(record.recentMilestones[0].createdAt)}
-              </div>
-            </div>
-          ) : null}
-
           <div className="flex items-center gap-3">
             <div className="min-w-0 flex-1">
-              <Progress value={record.isArchived ? 100 : record.progressPercent} className="h-1 bg-white/6" />
+              <Progress value={record.isArchived ? 100 : record.progressPercent} className="h-1.5 bg-white/6" />
             </div>
             <span className="text-[10px] text-muted-foreground">{record.isArchived ? '100%' : `${record.progressPercent}%`}</span>
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-8 rounded-xl"
-            onClick={(event) => {
-              event.stopPropagation()
-              onOpenSource()
-            }}
-            disabled={!record.sourceUrl}
-          >
-            <Link2 size={14} />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-8 rounded-xl"
-            onClick={(event) => {
-              event.stopPropagation()
-              onRevealPackage()
-            }}
-            disabled={!record.packagePath && !record.importedCoursePath}
-          >
-            <FolderOpen size={14} />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-8 rounded-xl hover:text-destructive"
-            onClick={(event) => {
-              event.stopPropagation()
-              onDelete()
-            }}
-          >
-            <Trash2 size={14} />
-          </Button>
+        <div className="flex shrink-0 flex-col items-end gap-3">
+          <div className="rounded-2xl border border-white/7 bg-white/[0.025] px-3 py-2 text-right">
+            <div className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">完成度</div>
+            <div className="mt-1 text-[20px] font-semibold text-foreground">
+              {record.isArchived ? 100 : record.progressPercent}%
+            </div>
+          </div>
+          <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-8 rounded-xl"
+              onClick={(event) => {
+                event.stopPropagation()
+                onOpenSource()
+              }}
+              disabled={!record.sourceUrl}
+            >
+              <Link2 size={14} />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-8 rounded-xl"
+              onClick={(event) => {
+                event.stopPropagation()
+                onRevealPackage()
+              }}
+              disabled={!record.packagePath && !record.importedCoursePath}
+            >
+              <FolderOpen size={14} />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-8 rounded-xl hover:text-destructive"
+              onClick={(event) => {
+                event.stopPropagation()
+                onDelete()
+              }}
+            >
+              <Trash2 size={14} />
+            </Button>
+          </div>
         </div>
       </div>
     </button>
@@ -499,24 +501,16 @@ function ArchivedCourseTile({
             <span>{record.stageCompletedCount}/{Math.max(record.totalStageCount, 0)} 阶段</span>
           </div>
 
-          {record.achievementBadges.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              {record.achievementBadges.slice(0, 2).map((badge) => (
-                <span
-                  key={badge.code}
-                  className={cn(
-                    'rounded-full border px-2 py-0.5 text-[10px] font-medium',
-                    getAchievementToneClass(badge.tone),
-                  )}
-                >
-                  {badge.label}
-                </span>
-              ))}
-            </div>
-          ) : null}
-
           <div className="text-[11px] leading-5 text-emerald-100/78">
             {record.recentMilestones[0]?.title ?? '这门课已经沉淀为长期知识资产。'}
+          </div>
+
+          <div className="rounded-2xl border border-white/6 bg-black/10 px-3 py-2">
+            <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.14em] text-emerald-100/55">
+              <span>完成度</span>
+              <span>100%</span>
+            </div>
+            <Progress value={100} className="mt-2 h-1 bg-white/6" />
           </div>
         </div>
 
@@ -552,22 +546,15 @@ export function WorkspacePane({
 }: WorkspacePaneProps) {
   const [settingsDraft, setSettingsDraft] = useState(() => buildInitialDraft(runtimeSettings))
   const [settingsError, setSettingsError] = useState('')
+  const [ttsTestRunning, setTtsTestRunning] = useState(false)
   const [libraryQuery, setLibraryQuery] = useState('')
   const [librarySortMode, setLibrarySortMode] = useState<LibrarySortMode>('recent')
   const [archiveShelfFilter, setArchiveShelfFilter] = useState<ArchiveShelfFilter>('all')
-  const [obsidianExporting, setObsidianExporting] = useState(false)
   const [libraryStructureRefreshing, setLibraryStructureRefreshing] = useState(false)
-  const [obsidianAutoSyncMeta, setObsidianAutoSyncMeta] = useState<{
-    updatedAt: number | null
-    error: string | null
-  }>({ updatedAt: null, error: null })
-  const obsidianAutoSyncSignatureRef = useRef('')
-  const obsidianExportingRef = useRef(false)
+  const [materialSourceMode, setMaterialSourceMode] = useState<MaterialSourceMode>('bilibili')
+  const [materialInventory, setMaterialInventory] = useState<MaterialInventory | null>(null)
 
   const courseData = useLearningStore((state) => state.courseData)
-  const currentNodeId = useLearningStore((state) => state.currentNodeId)
-  const completedNodeIds = useLearningStore((state) => state.completedNodeIds)
-  const failedNodeIds = useLearningStore((state) => state.failedNodeIds)
   const videoInput = useLearningStore((state) => state.videoInput)
   const setVideoInput = useLearningStore((state) => state.setVideoInput)
   const distillCourseFromVideo = useLearningStore((state) => state.distillCourseFromVideo)
@@ -577,7 +564,8 @@ export function WorkspacePane({
   const distillError = useLearningStore((state) => state.distillError)
   const distillOutlinePreview = useLearningStore((state) => state.distillOutlinePreview)
   const distillProgressSnapshot = useLearningStore((state) => state.distillProgressSnapshot)
-  const importCoursePackage = useLearningStore((state) => state.importCoursePackage)
+  const lastMaterialResult = useLearningStore((state) => state.lastMaterialResult)
+  const loadCourseFromText = useLearningStore((state) => state.loadCourseFromText)
   const libraryRecords = useLearningStore((state) => state.libraryRecords)
   const activeRecordId = useLearningStore((state) => state.activeRecordId)
   const openSavedRecord = useLearningStore((state) => state.openSavedRecord)
@@ -586,16 +574,26 @@ export function WorkspacePane({
   const restoreLearningRecord = useLearningStore((state) => state.restoreLearningRecord)
   const setRuntimeSettings = useLearningStore((state) => state.setRuntimeSettings)
   const pushToast = useLearningStore((state) => state.pushToast)
-  const coursePackageId = String(courseData?.package_id ?? '')
-  const completedSignature = completedNodeIds.join('|')
-  const failedSignature = failedNodeIds.join('|')
-  const obsidianVaultPath = runtimeSettings?.obsidian_vault_path || settingsDraft.obsidian_vault_path
-  const obsidianAutoSyncEnabled = runtimeSettings?.obsidian_auto_sync ?? settingsDraft.obsidian_auto_sync ?? true
 
   useEffect(() => {
     setSettingsDraft(buildInitialDraft(runtimeSettings))
     setSettingsError('')
   }, [runtimeSettings, view])
+
+  useEffect(() => {
+    if (view !== 'hub') return
+    let alive = true
+    window.desktopAPI.listMaterialPackages()
+      .then((result) => {
+        if (alive) setMaterialInventory(result)
+      })
+      .catch(() => {
+        if (alive) setMaterialInventory(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [runtimeSettings?.output_dir, view, lastMaterialResult?.materialPath])
 
   const filteredLibraryRecords = useMemo(() => {
     const normalizedQuery = libraryQuery.trim().toLowerCase()
@@ -713,6 +711,31 @@ export function WorkspacePane({
     () => activeLibraryRecords.find((record) => record.id === activeRecordId) ?? activeLibraryRecords[0] ?? null,
     [activeLibraryRecords, activeRecordId],
   )
+  const visibleActiveLibraryRecords = useMemo(
+    () => activeLibraryRecords.filter((record) => record.id !== featuredActiveRecord?.id),
+    [activeLibraryRecords, featuredActiveRecord?.id],
+  )
+  const materialRootDir = useMemo(
+    () => materialInventory?.rootDir || (runtimeSettings?.output_dir ? `${runtimeSettings.output_dir}\\materials` : '请先在设置中配置输出目录'),
+    [materialInventory?.rootDir, runtimeSettings?.output_dir],
+  )
+  const coursePackageRootDir = useMemo(
+    () => materialInventory?.coursePackageRootDir || (runtimeSettings?.output_dir ? `${runtimeSettings.output_dir}\\courses` : '请先在设置中配置输出目录'),
+    [materialInventory?.coursePackageRootDir, runtimeSettings?.output_dir],
+  )
+  const codexPromptText = useMemo(() => {
+    if (!lastMaterialResult?.materialPath) return ''
+    const startHerePath = `${lastMaterialResult.materialPath}\\START_HERE.md`
+    return [
+      `请读取并执行这份视界专注材料包的 START_HERE.md：${startHerePath}`,
+      '目标：生成可直接导入视界专注学习台的 Course Package JSON。',
+      '要求：先设计教学大纲，再分批生成 lesson，最后 strict 打包；不要把字幕证据、原材料分析或制课过程写进学生端正文。',
+    ].join('\n')
+  }, [lastMaterialResult?.materialPath])
+  const expectedFinalCoursePath = useMemo(
+    () => lastMaterialResult?.materialPath ? `${lastMaterialResult.materialPath}\\course_draft\\final.course-package.json` : '',
+    [lastMaterialResult?.materialPath],
+  )
 
   const currentDistillStageIndex = useMemo(
     () => resolveDistillStagePosition(distillProgressSnapshot?.stage),
@@ -728,13 +751,6 @@ export function WorkspacePane({
   const handleOpenRecord = async (recordId: string) => {
     await openSavedRecord(recordId)
     onRequestLearn()
-  }
-
-  const handleImportCourse = async () => {
-    await importCoursePackage()
-    if (useLearningStore.getState().courseData) {
-      onRequestLearn()
-    }
   }
 
   const handleRefreshLibraryStructure = async () => {
@@ -773,190 +789,101 @@ export function WorkspacePane({
   }
 
   const handleDistillCourse = async () => {
-    const beforePackageId = useLearningStore.getState().courseData?.package_id
-    await distillCourseFromVideo()
-    const state = useLearningStore.getState()
-    if (state.courseData && (!beforePackageId || state.courseData.package_id !== beforePackageId) && !state.distillError) {
+    await distillCourseFromVideo({
+      sourceKind: materialSourceMode,
+      mediaPath: materialSourceMode === 'local_media' ? videoInput : undefined,
+    })
+    try {
+      setMaterialInventory(await window.desktopAPI.listMaterialPackages())
+    } catch {
+      // The main task already reports failures through the progress state.
+    }
+  }
+
+  const handlePickLocalMedia = async () => {
+    const result = await window.desktopAPI.pickMediaFile()
+    if (!result) return
+    setMaterialSourceMode('local_media')
+    setVideoInput(result.path)
+    pushToast('已选择本地文件', result.name, 'success')
+  }
+
+  const handleCopyCodexPrompt = async () => {
+    if (!codexPromptText) return
+    try {
+      await navigator.clipboard.writeText(codexPromptText)
+      pushToast('提示词已复制', '新开 Codex 对话后直接粘贴即可。', 'success')
+    } catch {
+      pushToast('复制失败', '可以从原材料包里的 00_new_window_prompt.md 手动复制。', 'error')
+    }
+  }
+
+  const handleImportGeneratedCourse = async () => {
+    if (!expectedFinalCoursePath) return
+    try {
+      const result = await window.desktopAPI.readCoursePackage(expectedFinalCoursePath)
+      await loadCourseFromText(result.text, result.path)
+      await refreshLibrary()
+      pushToast('课包已导入', '已经载入 Codex 输出的 final.course-package.json。', 'success')
       onRequestLearn()
+    } catch (error) {
+      pushToast(
+        '还没有找到最终课包',
+        error instanceof Error ? error.message : '请先让 Codex 完成 course_draft/final.course-package.json。',
+        'error',
+      )
     }
   }
 
   const handleSaveSettings = async () => {
     try {
-        const next = await window.desktopAPI.saveSettings({
-          ...(runtimeSettings ?? {}),
-          ...settingsDraft,
-        })
+      const next = await window.desktopAPI.saveSettings(settingsDraft)
       setRuntimeSettings(next)
       onRuntimeSettingsSaved(next)
       setSettingsError('')
-      pushToast('设置已保存', '新的引擎配置会用于后续提炼和伴学对话', 'success')
+      pushToast('设置已保存', '本地素材整理与学习台配置已更新', 'success')
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : '保存设置失败')
     }
   }
 
-  const handlePickObsidianVault = async () => {
-    const picked = await window.desktopAPI.pickDirectory()
-    if (!picked) return
-    setSettingsDraft((current) => ({ ...current, obsidian_vault_path: picked }))
-  }
-
-  const runObsidianExport = async ({
-    silent = false,
-    allowPickVault = false,
-    signature,
-  }: {
-    silent?: boolean
-    allowPickVault?: boolean
-    signature?: string
-  } = {}) => {
-    if (obsidianExportingRef.current) return null
-    if (!courseData) {
-      if (!silent) {
-        pushToast('没有可同步的课程', '请先提炼或导入一门课程。', 'error')
-      }
-      return null
-    }
-
-    let nextSettings = runtimeSettings
-    if (!nextSettings?.obsidian_vault_path && !settingsDraft.obsidian_vault_path && allowPickVault) {
-      const picked = await window.desktopAPI.pickDirectory()
-      if (!picked) return null
-      nextSettings = await window.desktopAPI.saveSettings({
-        ...(runtimeSettings ?? {}),
-        ...settingsDraft,
-        obsidian_vault_path: picked,
-      })
-      setRuntimeSettings(nextSettings)
-      onRuntimeSettingsSaved(nextSettings)
-      setSettingsDraft(buildInitialDraft(nextSettings))
-    } else if (!nextSettings?.obsidian_vault_path && settingsDraft.obsidian_vault_path) {
-      nextSettings = await window.desktopAPI.saveSettings({
-        ...(runtimeSettings ?? {}),
-        ...settingsDraft,
-      })
-      setRuntimeSettings(nextSettings)
-      onRuntimeSettingsSaved(nextSettings)
-    }
-
-    if (!nextSettings?.obsidian_vault_path) {
-      if (!silent) {
-        pushToast('还没有配置 Vault', '请先选择你的 Obsidian Vault 文件夹。', 'error')
-      }
-      return null
-    }
-
+  const handleTestTts = async () => {
+    if (ttsTestRunning) return
+    setTtsTestRunning(true)
     try {
-      obsidianExportingRef.current = true
-      setObsidianExporting(true)
-      const result = await window.desktopAPI.exportCourseToObsidian({
-        course: courseData as unknown as Record<string, unknown>,
-        currentNodeId,
-        completedNodeIds,
-        failedNodeIds,
+      const next = await window.desktopAPI.saveSettings(settingsDraft)
+      setRuntimeSettings(next)
+      onRuntimeSettingsSaved(next)
+      setSettingsError('')
+      const result = await window.desktopAPI.synthesizeSpeech({
+        text: '视界专注语音测试。现在会用当前设置朗读一小段课程内容。',
+        nodeId: 'settings-tts-test',
       })
-      if (signature) {
-        obsidianAutoSyncSignatureRef.current = signature
-      }
-      setObsidianAutoSyncMeta({ updatedAt: Date.now(), error: null })
-      if (!silent) {
-        pushToast('已同步到 Obsidian', `已写入 ${result.fileCount} 份笔记到 ${result.rootDir}`, 'success')
-      }
-      return result
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '导出 Obsidian 失败'
-      setObsidianAutoSyncMeta({ updatedAt: Date.now(), error: message })
-      if (!silent) {
-        pushToast('同步失败', message, 'error')
-      }
-      return null
-    } finally {
-      obsidianExportingRef.current = false
-      setObsidianExporting(false)
-    }
-  }
-
-  const handleExportToObsidian = async () => {
-    await runObsidianExport({ allowPickVault: true })
-  }
-
-  const handleOpenObsidianTarget = async (target: 'current' | 'board') => {
-    if (!courseData) {
-      pushToast('没有可打开的课程', '请先提炼或导入一门课程。', 'error')
-      return
-    }
-
-    let nextSettings = runtimeSettings
-    if (!nextSettings?.obsidian_vault_path && !settingsDraft.obsidian_vault_path) {
-      const picked = await window.desktopAPI.pickDirectory()
-      if (!picked) return
-      nextSettings = await window.desktopAPI.saveSettings({
-        ...(runtimeSettings ?? {}),
-        ...settingsDraft,
-        obsidian_vault_path: picked,
+      await new Promise<void>((resolve, reject) => {
+        const audio = new Audio(result.dataUrl)
+        audio.onended = () => resolve()
+        audio.onerror = () => reject(new Error('音频播放失败，请检查系统音频设置。'))
+        void audio.play().catch(reject)
       })
-      setRuntimeSettings(nextSettings)
-      onRuntimeSettingsSaved(nextSettings)
-      setSettingsDraft(buildInitialDraft(nextSettings))
-    } else if (!nextSettings?.obsidian_vault_path && settingsDraft.obsidian_vault_path) {
-      nextSettings = await window.desktopAPI.saveSettings({
-        ...(runtimeSettings ?? {}),
-        ...settingsDraft,
-      })
-      setRuntimeSettings(nextSettings)
-      onRuntimeSettingsSaved(nextSettings)
-    }
-
-    try {
-      setObsidianExporting(true)
-      const result = await window.desktopAPI.openObsidianTarget({
-        course: courseData as unknown as Record<string, unknown>,
-        currentNodeId,
-        completedNodeIds,
-        failedNodeIds,
-        target,
-      })
-      setObsidianAutoSyncMeta({ updatedAt: Date.now(), error: null })
       pushToast(
-        target === 'current' ? '已打开当前笔记' : '已打开学习看板',
-        result.openedVia === 'obsidian-uri'
-          ? `已通过 Obsidian 打开：${result.openedPath}`
-          : `已通过本地文件打开：${result.openedPath}`,
+        '试听完成',
+        result.provider === 'mimo'
+          ? `MiMo 已返回音频，音色 ${result.voiceId || '默认'}。`
+          : `MiniMax 已返回音频，今日本地估算剩余 ${result.usage.remainingCharacters}。`,
         'success',
       )
     } catch (error) {
-      const message = error instanceof Error ? error.message : '打开 Obsidian 笔记失败'
-      setObsidianAutoSyncMeta({ updatedAt: Date.now(), error: message })
-      pushToast('打开失败', message, 'error')
+      pushToast('试听失败', error instanceof Error ? error.message : String(error), 'error')
     } finally {
-      setObsidianExporting(false)
+      setTtsTestRunning(false)
     }
   }
 
-  useEffect(() => {
-    if (!obsidianAutoSyncEnabled || !obsidianVaultPath || !coursePackageId) return
-    const signature = `${coursePackageId}::${currentNodeId ?? ''}::${completedSignature}::${failedSignature}`
-    if (signature === obsidianAutoSyncSignatureRef.current) return
-
-    const timeoutHandle = window.setTimeout(() => {
-      obsidianAutoSyncSignatureRef.current = signature
-      void runObsidianExport({
-        silent: true,
-        allowPickVault: false,
-        signature,
-      })
-    }, 1400)
-
-    return () => window.clearTimeout(timeoutHandle)
-  }, [
-    coursePackageId,
-    currentNodeId,
-    completedSignature,
-    failedSignature,
-    obsidianAutoSyncEnabled,
-    obsidianVaultPath,
-  ])
+  const handlePickObsidianVault = async () => {
+    const targetPath = await window.desktopAPI.pickDirectory()
+    if (!targetPath) return
+    setSettingsDraft((current) => ({ ...current, obsidian_vault_path: targetPath }))
+  }
 
   if (view === 'learn') {
     return <CoachPane />
@@ -965,9 +892,8 @@ export function WorkspacePane({
   if (view === 'hub') {
     return (
       <WorkspaceShell
-        eyebrow="课程中心"
-        title="在一个工作区里开始、导入和继续课程"
-        description="第一次上手不必理解多个入口。把视频提炼、课包导入和学习档案都放在这里，减少切换成本。"
+        eyebrow="Courses"
+        title="课程中心"
         windowFocused={windowFocused}
         actions={
           courseData ? (
@@ -978,236 +904,419 @@ export function WorkspacePane({
           ) : undefined
         }
       >
-        <div className="space-y-5">
-          <div className="grid gap-4 xl:grid-cols-2">
-            <Card className="border-white/7 bg-[#1b1b1b] shadow-none">
-              <CardContent className="space-y-4 p-5">
+        <div className="space-y-3">
+          <div className="grid gap-3 lg:grid-cols-12">
+            <Card className="overflow-hidden border-white/[0.075] bg-[linear-gradient(180deg,rgba(31,31,31,0.94),rgba(24,24,24,0.98))] shadow-[0_14px_32px_rgba(0,0,0,0.12)] lg:col-span-12">
+              <CardContent className="space-y-3 p-3.5">
                 <div className="flex items-center gap-2 text-[12px] font-semibold text-foreground">
                   <WandSparkles size={14} />
-                  从 B 站生成新课程
+                  课程制作工作台
                 </div>
-                <Field label="B 站链接或 BV 号" icon={<Link2 size={14} />}>
-                  <Input
-                    value={videoInput}
-                    onChange={(event) => setVideoInput(event.target.value)}
-                    placeholder="例如 BV17ykEBWEjv"
-                    disabled={distillRequestState === 'loading'}
-                  />
-                </Field>
-                <div className="flex flex-wrap items-center gap-3">
-                  <Button className="rounded-xl" onClick={() => void handleDistillCourse()} disabled={distillRequestState === 'loading' || !videoInput.trim()}>
-                    <WandSparkles size={14} />
-                    {distillRequestState === 'loading' ? '正在提炼' : '开始提炼'}
-                  </Button>
-                  {distillRequestState === 'loading' ? (
-                    <Badge variant="outline">{Math.max(0, Math.min(100, Math.round(distillProgressPercent)))}%</Badge>
-                  ) : null}
-                </div>
-                {distillRequestState === 'loading' ? (
-                  <div className="space-y-3">
-                    <Progress value={Math.max(4, Math.min(100, distillProgressPercent || 4))} className="h-1.5 bg-white/7" />
-                    <div className="rounded-[20px] border border-white/8 bg-[#1a1a1a] p-4">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="outline">{distillProgressSnapshot?.stageLabel || '处理中'}</Badge>
-                        <Badge variant="outline">{Math.max(0, Math.min(100, Math.round(distillProgressPercent)))}%</Badge>
-                        {distillProgressSnapshot?.resumed ? <Badge variant="outline">断点续炼</Badge> : null}
-                        {formatCacheHint(distillProgressSnapshot?.cacheHint) ? (
-                          <Badge variant="outline">{formatCacheHint(distillProgressSnapshot?.cacheHint)}</Badge>
+
+                <div className="grid gap-3 xl:grid-cols-[1.35fr_0.9fr]">
+                  <div className="rounded-[22px] border border-sky-300/10 bg-[linear-gradient(180deg,rgba(28,38,43,0.64),rgba(24,25,26,0.96))] p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 text-[12px] font-semibold text-foreground">
+                        <WandSparkles size={14} />
+                        原材料生成
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={materialSourceMode === 'bilibili' ? 'secondary' : 'outline'}
+                          className="rounded-xl"
+                          onClick={() => setMaterialSourceMode('bilibili')}
+                          disabled={distillRequestState === 'loading'}
+                        >
+                          <Link2 size={13} />
+                          B 站
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={materialSourceMode === 'local_media' ? 'secondary' : 'outline'}
+                          className="rounded-xl"
+                          onClick={() => void handlePickLocalMedia()}
+                          disabled={distillRequestState === 'loading'}
+                        >
+                          <FileVideo size={13} />
+                          本地文件
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid gap-2 md:grid-cols-[1fr_auto]">
+                      <Field
+                        label={materialSourceMode === 'local_media' ? '本地视频/音频文件' : 'B 站链接或 BV 号'}
+                        icon={materialSourceMode === 'local_media' ? <FileVideo size={13} /> : <Link2 size={13} />}
+                      >
+                        <Input
+                          value={videoInput}
+                          onChange={(event) => setVideoInput(event.target.value)}
+                          placeholder={materialSourceMode === 'local_media' ? '选择或粘贴本地音视频文件路径' : '例如 BV17ykEBWEjv 或 https://www.bilibili.com/video/...'}
+                          disabled={distillRequestState === 'loading'}
+                        />
+                      </Field>
+                      <div className="grid content-end gap-2 sm:grid-cols-2 md:grid-cols-1">
+                        {materialSourceMode === 'local_media' ? (
+                          <Button variant="outline" className="rounded-xl" onClick={() => void handlePickLocalMedia()} disabled={distillRequestState === 'loading'}>
+                            <FolderOpen size={14} />
+                            选择文件
+                          </Button>
                         ) : null}
+                        <Button className="rounded-xl" onClick={() => void handleDistillCourse()} disabled={distillRequestState === 'loading' || !videoInput.trim()}>
+                          <WandSparkles size={14} />
+                          {distillRequestState === 'loading' ? '正在生成' : '开始生成'}
+                        </Button>
                       </div>
+                    </div>
 
-                      <div className="mt-3 text-[12px] leading-6 text-muted-foreground">
-                        {distillStatusMessage || '正在抓取字幕、切片并重建课程知识树。'}
-                      </div>
-
-                      <div className="mt-4 grid gap-2 md:grid-cols-3">
-                        {DISTILL_STAGE_ORDER.map((item, index) => {
-                          const isActive = distillProgressSnapshot?.stage === item.id
-                          const isDone = index < currentDistillStageIndex
-                          return (
-                            <div
-                              key={item.id}
-                              className={cn(
-                                'rounded-2xl border px-3 py-2 text-[11px] transition',
-                                isActive
-                                  ? 'border-white/14 bg-[#232323] text-foreground'
-                                  : isDone
-                                    ? 'border-white/8 bg-[#1f1f1f] text-foreground/90'
-                                    : 'border-white/6 bg-[#191919] text-muted-foreground',
-                              )}
-                            >
-                              {item.label}
-                            </div>
-                          )
-                        })}
-                      </div>
-
-                      {distillProgressSnapshot &&
-                      (distillProgressSnapshot.audioTotal > 0 ||
-                        distillProgressSnapshot.chunkTotal > 0 ||
-                        distillProgressSnapshot.batchTotal > 0) ? (
-                        <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                          <div className="rounded-2xl border border-white/6 bg-[#1f1f1f] px-3 py-2.5">
-                            <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">音频补全</div>
-                            <div className="mt-1 text-[15px] font-semibold text-foreground">
-                              {distillProgressSnapshot.audioTotal > 0
-                                ? `${distillProgressSnapshot.audioCompleted}/${distillProgressSnapshot.audioTotal}`
-                                : '未启用'}
+                    <div className="mt-4 grid gap-2 md:grid-cols-4">
+                      {DISTILL_STAGE_ORDER.slice(0, 7).map((item, index) => {
+                        const isActive = distillProgressSnapshot?.stage === item.id
+                        const isDone = distillRequestState !== 'loading'
+                          ? false
+                          : index < currentDistillStageIndex
+                        return (
+                          <div
+                            key={item.id}
+                            className={cn(
+                              'relative overflow-hidden rounded-2xl border px-3 py-2 text-[10px] transition',
+                              isActive
+                                ? 'border-sky-300/30 bg-sky-300/[0.11] text-sky-50'
+                                : isDone
+                                  ? 'border-emerald-300/18 bg-emerald-300/[0.08] text-emerald-50'
+                                  : 'border-white/6 bg-black/10 text-muted-foreground',
+                            )}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span>{item.label}</span>
+                              <span className={cn('size-1.5 rounded-full bg-white/18', isActive && 'bg-sky-200', isDone && 'bg-emerald-200')} />
                             </div>
                           </div>
-                          <div className="rounded-2xl border border-white/6 bg-[#1f1f1f] px-3 py-2.5">
-                            <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">知识分片</div>
-                            <div className="mt-1 text-[15px] font-semibold text-foreground">
-                              {distillProgressSnapshot.chunkTotal > 0
-                                ? `${distillProgressSnapshot.chunkCompleted}/${distillProgressSnapshot.chunkTotal}`
-                                : '待开始'}
-                            </div>
+                        )
+                      })}
+                    </div>
+
+                    <div className="mt-3 rounded-[18px] border border-white/7 bg-black/10 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[11px] font-medium text-foreground/88">
+                            {distillRequestState === 'loading'
+                              ? distillProgressSnapshot?.stageLabel || '正在处理'
+                              : lastMaterialResult?.materialPath
+                                ? '最近一次原材料包已就绪'
+                                : '等待开始'}
                           </div>
-                          <div className="rounded-2xl border border-white/6 bg-[#1f1f1f] px-3 py-2.5">
-                            <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">批次归并</div>
-                            <div className="mt-1 text-[15px] font-semibold text-foreground">
-                              {distillProgressSnapshot.batchTotal > 0
-                                ? `${distillProgressSnapshot.batchCompleted}/${distillProgressSnapshot.batchTotal}`
-                                : '按需启用'}
-                            </div>
+                          <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                            {distillRequestState === 'loading'
+                              ? distillStatusMessage || '正在抓取字幕、转写缺失音频、清洗文本并写入 Codex 原材料包。'
+                              : lastMaterialResult?.materialPath || '适合长视频后台慢跑，完成后会在这里显示材料包路径。'}
                           </div>
                         </div>
-                      ) : null}
-                      {distillProgressSnapshot?.cacheHint === 'chunk_prefetch' && (distillProgressSnapshot.chunkTotal > 0 || distillProgressSnapshot.batchTotal > 0) ? (
-                        <div className="mt-3 rounded-2xl border border-white/6 bg-[#1c1c1c] px-3 py-2 text-[12px] text-muted-foreground">
-                          已在后台预热
-                          {distillProgressSnapshot.chunkTotal > 0
-                            ? ` ${distillProgressSnapshot.chunkCompleted}/${distillProgressSnapshot.chunkTotal} 个可蒸馏分片`
-                            : ''}
-                          {distillProgressSnapshot.chunkTotal > 0 && distillProgressSnapshot.batchTotal > 0 ? '，' : ''}
-                          {distillProgressSnapshot.batchTotal > 0
-                            ? ` ${distillProgressSnapshot.batchCompleted}/${distillProgressSnapshot.batchTotal} 个知识批次`
-                            : ''}
-                          {distillProgressSnapshot.prefetchReuseChunkRatio > 0
-                            ? `，预计分片覆盖 ${Math.round(distillProgressSnapshot.prefetchReuseChunkRatio * 100)}%`
-                            : ''}
-                          {distillProgressSnapshot.prefetchReuseBatchRatio > 0
-                            ? `，批次覆盖 ${Math.round(distillProgressSnapshot.prefetchReuseBatchRatio * 100)}%`
-                            : ''}
-                          。
+                        <Badge variant="outline">{Math.max(0, Math.min(100, Math.round(distillProgressPercent || 0)))}%</Badge>
+                      </div>
+                      <Progress value={distillRequestState === 'loading' ? Math.max(4, Math.min(100, distillProgressPercent || 4)) : lastMaterialResult?.materialPath ? 100 : 0} className="mt-3 h-1.5 bg-white/7" />
+                    </div>
+                  </div>
+
+                  <div className="min-h-0 rounded-[22px] border border-white/[0.075] bg-[#1a1a1a] p-3.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-[12px] font-semibold text-foreground">
+                        <ArchiveRestore size={14} />
+                        制作记录
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 rounded-lg px-2 text-[10px]"
+                          onClick={() => runtimeSettings?.output_dir ? void window.desktopAPI.openPath(materialRootDir) : undefined}
+                          title={materialRootDir}
+                        >
+                          <FolderOpen size={12} />
+                          材料
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 rounded-lg px-2 text-[10px]"
+                          onClick={() => runtimeSettings?.output_dir ? void window.desktopAPI.openPath(coursePackageRootDir) : undefined}
+                          title={coursePackageRootDir}
+                        >
+                          <PackageOpen size={12} />
+                          课包
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7 rounded-lg"
+                          onClick={async () => {
+                            try {
+                              setMaterialInventory(await window.desktopAPI.listMaterialPackages())
+                            } catch {
+                              pushToast('刷新失败', '无法读取原材料目录。', 'error')
+                            }
+                          }}
+                        >
+                          <RefreshCcw size={13} />
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                      <span>{materialInventory?.records.length ?? 0} 份材料</span>
+                      <span className="truncate">{coursePackageRootDir}</span>
+                    </div>
+
+                    <div className="subtle-scrollbar mt-3 grid max-h-[390px] gap-2 overflow-y-auto pr-1">
+                      {materialInventory?.records.length ? (
+                        materialInventory.records.map((record) => (
+                          <div key={record.path} className="rounded-[18px] border border-white/6 bg-white/[0.018] p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-[12px] font-medium text-foreground">{record.title}</div>
+                                <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                                  {record.sourceId ? <span>{record.sourceId}</span> : null}
+                                  <span>{record.blockCount} blocks</span>
+                                  <span>{formatCompactNumber(record.textLength)} 字</span>
+                                  <span>{formatRelativeTime(record.updatedAt)}</span>
+                                </div>
+                              </div>
+                              <Badge
+                                variant="outline"
+                                className={record.importReadyCourseExists ? 'border-emerald-400/18 bg-emerald-400/[0.08] text-emerald-100' : ''}
+                              >
+                                {record.importReadyCourseExists ? '可导入' : '待制课'}
+                              </Badge>
+                            </div>
+                            <div className="mt-3 grid grid-cols-3 gap-2">
+                              <Button variant="outline" size="sm" className="rounded-xl px-2" onClick={() => void window.desktopAPI.openPath(record.path)}>
+                                <FolderOpen size={13} />
+                                材料
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="rounded-xl px-2"
+                                onClick={async () => {
+                                  const text = [
+                                    `请读取并执行这份视界专注材料包的 START_HERE.md：${record.startHerePath}`,
+                                    '目标：生成可直接导入视界专注学习台的 Course Package JSON。',
+                                    '要求：先设计教学大纲，再分批生成 lesson，最后 strict 打包；不要把字幕证据、原材料分析或制课过程写进学生端正文。',
+                                  ].join('\n')
+                                  try {
+                                    await navigator.clipboard.writeText(text)
+                                    pushToast('提示词已复制', record.title, 'success')
+                                  } catch {
+                                    pushToast('复制失败', '请打开材料包中的提示文件手动复制。', 'error')
+                                  }
+                                }}
+                              >
+                                <Clipboard size={13} />
+                                提示
+                              </Button>
+                              <Button
+                                size="sm"
+                                className="rounded-xl px-2"
+                                variant={record.importReadyCourseExists ? 'default' : 'outline'}
+                                disabled={!record.importReadyCourseExists}
+                                onClick={async () => {
+                                  try {
+                                    const result = await window.desktopAPI.readCoursePackage(record.importReadyCoursePath)
+                                    await loadCourseFromText(result.text, result.path)
+                                    await refreshLibrary()
+                                    pushToast('课包已导入', record.title, 'success')
+                                    onRequestLearn()
+                                  } catch (error) {
+                                    pushToast('导入失败', error instanceof Error ? error.message : '无法导入最终课包。', 'error')
+                                  }
+                                }}
+                              >
+                                <FileUp size={13} />
+                                导入
+                              </Button>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="rounded-[18px] border border-white/6 bg-white/[0.018] px-4 py-3 text-[12px] leading-6 text-muted-foreground">
+                          还没有生成过原材料包。长视频可以直接在左侧启动，完成后会自动出现在这里。
                         </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {distillRequestState === 'loading' ? (
+                  <div className="space-y-3 rounded-[18px] border border-white/8 bg-[#1a1a1a] p-3.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">{distillProgressSnapshot?.stageLabel || '处理中'}</Badge>
+                      <Badge variant="outline">{Math.max(0, Math.min(100, Math.round(distillProgressPercent)))}%</Badge>
+                      {distillProgressSnapshot?.resumed ? <Badge variant="outline">断点续跑</Badge> : null}
+                      {formatCacheHint(distillProgressSnapshot?.cacheHint) ? (
+                        <Badge variant="outline">{formatCacheHint(distillProgressSnapshot?.cacheHint)}</Badge>
                       ) : null}
                     </div>
-                    {distillOutlinePreview ? (
-                      <div className="rounded-[20px] border border-white/8 bg-[#1a1a1a] p-4">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge variant="outline">骨架已生成</Badge>
-                          <Badge variant="outline">{distillOutlinePreview.pageCount} 个分P</Badge>
-                          <Badge variant="outline">约 {distillOutlinePreview.durationMinutes} 分钟</Badge>
+
+                    <Progress value={Math.max(4, Math.min(100, distillProgressPercent || 4))} className="h-1.5 bg-white/7" />
+
+                    <div className="text-[12px] leading-5 text-muted-foreground">
+                      {distillStatusMessage || '正在抓取字幕、转写缺失音频、清洗文本并写入 Codex 原材料包。'}
+                    </div>
+
+                    <div className="grid gap-2 md:grid-cols-5">
+                      {DISTILL_STAGE_ORDER.map((item, index) => {
+                        const isActive = distillProgressSnapshot?.stage === item.id
+                        const isDone = index < currentDistillStageIndex
+                        return (
+                          <div
+                            key={item.id}
+                            className={cn(
+                              'rounded-2xl border px-3 py-2 text-[10px] transition',
+                              isActive
+                                ? 'border-white/14 bg-[#232323] text-foreground'
+                                : isDone
+                                  ? 'border-white/8 bg-[#1f1f1f] text-foreground/90'
+                                  : 'border-white/6 bg-[#191919] text-muted-foreground',
+                            )}
+                          >
+                            {item.label}
+                          </div>
+                        )
+                      })}
+                    </div>
+
+                    {distillProgressSnapshot &&
+                    (distillProgressSnapshot.audioTotal > 0 ||
+                      distillProgressSnapshot.chunkTotal > 0 ||
+                      distillProgressSnapshot.batchTotal > 0) ? (
+                      <div className="grid gap-2 md:grid-cols-3">
+                        <div className="rounded-2xl border border-white/6 bg-[#1f1f1f] px-3 py-2">
+                          <div className="text-[10px] text-muted-foreground">音频补全</div>
+                          <div className="mt-1 text-[14px] font-semibold text-foreground">
+                            {distillProgressSnapshot.audioTotal > 0
+                              ? `${distillProgressSnapshot.audioCompleted}/${distillProgressSnapshot.audioTotal}`
+                              : '未启用'}
+                          </div>
                         </div>
-                        <div className="mt-3 space-y-1">
-                          <div className="text-sm font-semibold text-foreground">{distillOutlinePreview.title}</div>
-                          <div className="text-[12px] leading-5 text-muted-foreground">{distillOutlinePreview.note}</div>
+                        <div className="rounded-2xl border border-white/6 bg-[#1f1f1f] px-3 py-2">
+                          <div className="text-[10px] text-muted-foreground">材料分片</div>
+                          <div className="mt-1 text-[14px] font-semibold text-foreground">
+                            {distillProgressSnapshot.chunkTotal > 0
+                              ? `${distillProgressSnapshot.chunkCompleted}/${distillProgressSnapshot.chunkTotal}`
+                              : '待开始'}
+                          </div>
                         </div>
-                        <div className="mt-4 grid gap-2">
-                          {distillOutlinePreview.chapters.slice(0, 6).map((chapter) => (
-                            <div key={chapter.id} className="rounded-2xl border border-white/6 bg-[#1f1f1f] px-3 py-2.5">
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="truncate text-[13px] font-medium text-foreground/92">{chapter.title}</div>
-                                <div className="shrink-0 text-[11px] text-muted-foreground">{chapter.lessonCount} 节</div>
-                              </div>
-                              {chapter.lessonTitles.length ? (
-                                <div className="mt-1.5 line-clamp-2 text-[11px] leading-5 text-muted-foreground">
-                                  {chapter.lessonTitles.join(' · ')}
-                                </div>
-                              ) : null}
-                            </div>
-                          ))}
+                        <div className="rounded-2xl border border-white/6 bg-[#1f1f1f] px-3 py-2">
+                          <div className="text-[10px] text-muted-foreground">批次归并</div>
+                          <div className="mt-1 text-[14px] font-semibold text-foreground">
+                            {distillProgressSnapshot.batchTotal > 0
+                              ? `${distillProgressSnapshot.batchCompleted}/${distillProgressSnapshot.batchTotal}`
+                              : '按需启用'}
+                          </div>
                         </div>
+                      </div>
+                    ) : null}
+
+                    {distillProgressSnapshot?.cacheHint === 'chunk_prefetch' && (distillProgressSnapshot.chunkTotal > 0 || distillProgressSnapshot.batchTotal > 0) ? (
+                      <div className="rounded-2xl border border-white/6 bg-[#1c1c1c] px-3 py-2 text-[11px] text-muted-foreground">
+                        已后台预热
+                        {distillProgressSnapshot.chunkTotal > 0
+                          ? ` ${distillProgressSnapshot.chunkCompleted}/${distillProgressSnapshot.chunkTotal} 个分片`
+                          : ''}
+                        {distillProgressSnapshot.chunkTotal > 0 && distillProgressSnapshot.batchTotal > 0 ? '，' : ''}
+                        {distillProgressSnapshot.batchTotal > 0
+                          ? `${distillProgressSnapshot.batchCompleted}/${distillProgressSnapshot.batchTotal} 个批次`
+                          : ''}
+                        。
                       </div>
                     ) : null}
                   </div>
                 ) : null}
+
+                {distillOutlinePreview ? (
+                  <div className="rounded-[18px] border border-white/8 bg-[#1a1a1a] p-3.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">材料骨架已生成</Badge>
+                      <Badge variant="outline">{distillOutlinePreview.pageCount} 个分P</Badge>
+                      <Badge variant="outline">约 {distillOutlinePreview.durationMinutes} 分钟</Badge>
+                    </div>
+                    <div className="mt-2 text-[13px] font-semibold text-foreground">{distillOutlinePreview.title}</div>
+                    <div className="mt-1 text-[11px] leading-5 text-muted-foreground">{distillOutlinePreview.note}</div>
+                    <div className="mt-3 grid gap-2 lg:grid-cols-2">
+                      {distillOutlinePreview.chapters.slice(0, 6).map((chapter) => (
+                        <div key={chapter.id} className="rounded-2xl border border-white/6 bg-[#1f1f1f] px-3 py-2">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="truncate text-[12px] font-medium text-foreground/92">{chapter.title}</div>
+                            <div className="shrink-0 text-[10px] text-muted-foreground">{chapter.lessonCount} 节</div>
+                          </div>
+                          {chapter.lessonTitles.length ? (
+                            <div className="mt-1 line-clamp-2 text-[10px] leading-5 text-muted-foreground">
+                              {chapter.lessonTitles.join(' · ')}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {lastMaterialResult?.materialPath ? (
+                  <div className="grid gap-2 rounded-[18px] border border-emerald-300/12 bg-[linear-gradient(180deg,rgba(28,42,35,0.58),rgba(24,25,26,0.94))] p-3.5 lg:grid-cols-[1fr_auto]">
+                    <div className="min-w-0 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="outline" className="border-emerald-400/18 bg-emerald-400/[0.08] text-emerald-100">
+                          原材料包已就绪
+                        </Badge>
+                        <Badge variant="outline">{lastMaterialResult.chunkCount} 个 blocks</Badge>
+                        <Badge variant="outline">{lastMaterialResult.textSourceType || '本地材料'}</Badge>
+                      </div>
+                      <div className="truncate text-[13px] font-semibold text-foreground">{lastMaterialResult.title}</div>
+                      <div className="truncate rounded-2xl border border-white/6 bg-black/10 px-3 py-2 text-[11px] text-muted-foreground">
+                        {lastMaterialResult.materialPath}
+                      </div>
+                      <div className="text-[11px] leading-5 text-muted-foreground">
+                        下一步新开 Codex 对话，粘贴短提示即可。Codex 完成 strict 打包后，课包会同时出现在材料包和统一课包目录。
+                      </div>
+                      <div className="truncate rounded-2xl border border-white/6 bg-black/10 px-3 py-2 text-[11px] text-muted-foreground">
+                        预期课包：{expectedFinalCoursePath}
+                      </div>
+                    </div>
+                    <div className="grid content-start gap-2 sm:grid-cols-3 lg:grid-cols-1">
+                      <Button variant="outline" className="rounded-xl" onClick={() => void window.desktopAPI.openPath(lastMaterialResult.materialPath!)}>
+                        <FolderOpen size={14} />
+                        打开材料包
+                      </Button>
+                      <Button variant="outline" className="rounded-xl" onClick={() => void window.desktopAPI.showItem(lastMaterialResult.materialPath!)}>
+                        <PackageOpen size={14} />
+                        定位文件夹
+                      </Button>
+                      <Button className="rounded-xl" onClick={() => void handleCopyCodexPrompt()}>
+                        <Clipboard size={14} />
+                        复制制课提示
+                      </Button>
+                      <Button variant="outline" className="rounded-xl" onClick={() => void handleImportGeneratedCourse()}>
+                        <FileUp size={14} />
+                        导入最终课包
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+
                 {distillError ? (
-                  <div className="rounded-[20px] border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground">
+                  <div className="rounded-[18px] border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground">
                     {distillError}
                   </div>
                 ) : null}
               </CardContent>
             </Card>
 
-            <Card className="border-white/7 bg-[#1b1b1b] shadow-none">
-              <CardContent className="space-y-3 p-5">
-                <div className="flex items-center gap-2 text-[12px] font-semibold text-foreground">
-                  <FolderOpen size={14} />
-                  导入现成课包
-                </div>
-                <div className="text-[13px] leading-6 text-muted-foreground">
-                  如果已经有蒸馏好的课程 JSON，就直接导入，不必重新走提炼。
-                </div>
-                <Button className="rounded-xl" onClick={() => void handleImportCourse()}>
-                  <FileUp size={14} />
-                  选择并导入课包
-                </Button>
-              </CardContent>
-            </Card>
-
-            {courseData ? (
-              <Card className="border-white/7 bg-[#1b1b1b] shadow-none xl:col-span-2">
-                <CardContent className="space-y-3 p-5">
-                  <div className="flex items-center gap-2 text-[12px] font-semibold text-foreground">
-                    <LibraryBig size={14} />
-                    同步到 Obsidian
-                  </div>
-                  <div className="text-[13px] leading-6 text-muted-foreground">
-                    把当前课程导出成一组带双链的 Markdown 笔记。开启自动同步后，学习进度也会悄悄回写到 Vault。
-                  </div>
-                  <div className="rounded-[18px] border border-white/6 bg-white/[0.02] px-4 py-3 text-[12px] text-muted-foreground">
-                    <div>Vault：{obsidianVaultPath || '尚未配置'}</div>
-                    <div className="mt-1">
-                      自动同步：{obsidianAutoSyncEnabled ? '已开启' : '已关闭'}
-                      {obsidianAutoSyncMeta.updatedAt ? ` · 上次回写 ${formatSyncTime(obsidianAutoSyncMeta.updatedAt)}` : ''}
-                    </div>
-                    {obsidianAutoSyncMeta.error ? (
-                      <div className="mt-1 text-destructive">最近一次自动同步失败：{obsidianAutoSyncMeta.error}</div>
-                    ) : null}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <Button className="rounded-xl" onClick={() => void handleExportToObsidian()} disabled={obsidianExporting}>
-                      <LibraryBig size={14} />
-                      {obsidianExporting ? '正在同步' : '一键同步到 Obsidian'}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="rounded-xl"
-                      onClick={() => void handleOpenObsidianTarget('current')}
-                      disabled={obsidianExporting}
-                    >
-                      <Link2 size={14} />
-                      打开当前笔记
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="rounded-xl"
-                      onClick={() => void handleOpenObsidianTarget('board')}
-                      disabled={obsidianExporting}
-                    >
-                      <LibraryBig size={14} />
-                      打开学习看板
-                    </Button>
-                    {(runtimeSettings?.obsidian_vault_path || settingsDraft.obsidian_vault_path) ? (
-                      <Button
-                        variant="outline"
-                        className="rounded-xl"
-                        onClick={() => void window.desktopAPI.openPath(runtimeSettings?.obsidian_vault_path || settingsDraft.obsidian_vault_path)}
-                      >
-                        <FolderOpen size={14} />
-                        打开 Vault
-                      </Button>
-                    ) : null}
-                  </div>
-                </CardContent>
-              </Card>
-            ) : null}
           </div>
 
-          <Card className="border-white/7 bg-[#1b1b1b] shadow-none">
-            <CardContent className="space-y-4 p-5">
+          <Card className="overflow-hidden border-white/[0.075] bg-[linear-gradient(180deg,rgba(30,30,31,0.94),rgba(23,23,24,0.98))] shadow-[0_14px_32px_rgba(0,0,0,0.12)]">
+            <CardContent className="space-y-3 p-3.5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 text-[12px] font-semibold text-foreground">
                   <ArchiveRestore size={14} />
@@ -1262,17 +1371,16 @@ export function WorkspacePane({
               </div>
               <div className="grid gap-3">
                 {featuredActiveRecord ? (
-                  <div className="grid gap-3 xl:grid-cols-[1.3fr_1fr]">
-                    <div className="rounded-[20px] border border-white/7 bg-white/[0.022] p-4">
+                  <div className="rounded-[22px] border border-sky-300/10 bg-[linear-gradient(180deg,rgba(29,38,43,0.68),rgba(24,25,26,0.92))] p-5">
                       <div className="flex items-start justify-between gap-4">
                         <div className="space-y-2">
                           <div className="flex items-center gap-2 text-[12px] font-semibold text-foreground">
                             <Award size={14} />
-                            成长回顾
+                            当前课程
                           </div>
                           <div className="text-[15px] font-semibold text-foreground">{featuredActiveRecord.title}</div>
                           <div className="text-[12px] leading-6 text-muted-foreground">
-                            已完成 {featuredActiveRecord.completedCount} 节，打通 {featuredActiveRecord.stageCompletedCount}/{Math.max(featuredActiveRecord.totalStageCount, 0)} 个阶段。
+                            已完成 {featuredActiveRecord.completedCount} 节。
                             {featuredActiveRecord.currentNodeTitle ? ` 当前正在推进《${featuredActiveRecord.currentNodeTitle}》。` : ''}
                           </div>
                         </div>
@@ -1282,58 +1390,37 @@ export function WorkspacePane({
                         </div>
                       </div>
 
-                      {featuredActiveRecord.achievementBadges.length > 0 ? (
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          {featuredActiveRecord.achievementBadges.map((badge) => (
-                            <span
-                              key={badge.code}
-                              className={cn(
-                                'rounded-full border px-2.5 py-1 text-[10px] font-medium',
-                                getAchievementToneClass(badge.tone),
-                              )}
-                              title={badge.description}
-                            >
-                              {badge.label}
-                            </span>
-                          ))}
+                      <div className="mt-4 grid gap-3 md:grid-cols-3">
+                        <div className="rounded-2xl border border-white/[0.06] bg-white/[0.025] px-3 py-2.5">
+                          <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">已完成</div>
+                          <div className="mt-1 text-[16px] font-semibold text-foreground">{featuredActiveRecord.completedCount} 节</div>
                         </div>
-                      ) : null}
-                    </div>
-
-                    <div className="rounded-[20px] border border-white/7 bg-white/[0.022] p-4">
-                      <div className="flex items-center gap-2 text-[12px] font-semibold text-foreground">
-                        <Milestone size={14} />
-                        里程碑时间线
-                      </div>
-                      <div className="mt-3 space-y-3">
-                        {featuredActiveRecord.recentMilestones.length ? (
-                          featuredActiveRecord.recentMilestones.slice(0, 4).map((event, index) => (
-                            <div key={event.id} className="flex gap-3">
-                              <div className="flex flex-col items-center">
-                                <span className="mt-1 size-2 rounded-full bg-sky-300/85" />
-                                {index < Math.min(featuredActiveRecord.recentMilestones.length, 4) - 1 ? (
-                                  <span className="mt-1 h-full w-px bg-white/8" />
-                                ) : null}
-                              </div>
-                              <div className="min-w-0 flex-1 pb-1">
-                                <div className="text-[11px] font-medium text-foreground">{event.title}</div>
-                                <div className="mt-0.5 text-[10px] leading-5 text-muted-foreground">{event.detail}</div>
-                                <div className="mt-0.5 text-[10px] text-muted-foreground/80">{formatMilestoneTime(event.createdAt)}</div>
-                              </div>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="text-[12px] leading-6 text-muted-foreground">
-                            这门课刚刚开始，等你拿下第一小关后，这里就会开始记录真正的成长轨迹。
+                        <div className="rounded-2xl border border-white/[0.06] bg-white/[0.025] px-3 py-2.5">
+                          <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">阶段</div>
+                          <div className="mt-1 text-[16px] font-semibold text-foreground">
+                            {featuredActiveRecord.stageCompletedCount}/{Math.max(featuredActiveRecord.totalStageCount, 0)}
                           </div>
-                        )}
+                        </div>
+                        <div className="rounded-2xl border border-white/[0.06] bg-white/[0.025] px-3 py-2.5">
+                          <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">学习记录</div>
+                          <div className="mt-1 text-[16px] font-semibold text-foreground">{featuredActiveRecord.sessionCount} 小节</div>
+                        </div>
                       </div>
-                    </div>
+
+                      <div className="mt-4 flex items-center gap-3">
+                        <div className="min-w-0 flex-1">
+                          <Progress value={featuredActiveRecord.progressPercent} className="h-1.5 bg-white/6" />
+                        </div>
+                        <Button size="sm" className="rounded-xl" onClick={onRequestLearn}>
+                          <Sparkles size={13} />
+                          继续学习
+                        </Button>
+                      </div>
                   </div>
                 ) : null}
 
-                {activeLibraryRecords.length ? (
-                  activeLibraryRecords.slice(0, 6).map((record) => (
+                {visibleActiveLibraryRecords.length ? (
+                  visibleActiveLibraryRecords.slice(0, 6).map((record) => (
                     <LibraryRecordRow
                       key={record.id}
                       record={record}
@@ -1353,7 +1440,11 @@ export function WorkspacePane({
                   ))
                 ) : (
                   <div className="rounded-[18px] border border-white/6 bg-white/[0.015] px-4 py-3 text-[13px] leading-6 text-muted-foreground">
-                    {libraryQuery.trim() ? '没有匹配到正在推进的课程。' : '还没有任何正在推进的课程。先从上面的 BV 提炼开始也可以。'}
+                    {libraryQuery.trim()
+                      ? '没有匹配到其他正在推进的课程。'
+                      : featuredActiveRecord
+                        ? '当前没有其他正在推进的课程。'
+                        : '还没有任何正在推进的课程。先生成原材料包，再导入 Codex 做好的课包。'}
                   </div>
                 )}
 
@@ -1555,40 +1646,218 @@ export function WorkspacePane({
 
   return (
     <WorkspaceShell
-      eyebrow="设置"
-      title="教练与蒸馏引擎配置"
-      description="设置不再用弹窗承接，而是进入右侧工作区。左栏只保留一个入口，真正的配置和保存动作都在这里完成。"
+      eyebrow="Settings"
+      title="设置"
       windowFocused={windowFocused}
+      actions={
+        <div className="flex gap-2">
+          <Button variant="outline" className="rounded-xl" disabled={ttsTestRunning} onClick={() => void handleTestTts()}>
+            <AudioLines size={14} />
+            {ttsTestRunning ? '试听中' : '试听语音'}
+          </Button>
+          <Button className="rounded-xl" onClick={() => void handleSaveSettings()}>
+            <Settings2 size={14} />
+            保存配置
+          </Button>
+        </div>
+      }
     >
-      <div className="grid gap-4 xl:grid-cols-2">
-        <SettingsBlock title="伴学教练 API">
-          <Field label="API Base URL" icon={<Server size={14} />}>
-            <Input value={settingsDraft.coach_api_base_url} onChange={(event) => setSettingsDraft((current) => ({ ...current, coach_api_base_url: event.target.value }))} />
-          </Field>
-          <Field label="API Key" icon={<KeyRound size={14} />}>
-            <Input type="password" value={settingsDraft.coach_api_key} onChange={(event) => setSettingsDraft((current) => ({ ...current, coach_api_key: event.target.value }))} />
-          </Field>
-          <Field label="Model Name" icon={<Bot size={14} />}>
-            <Input value={settingsDraft.coach_model} onChange={(event) => setSettingsDraft((current) => ({ ...current, coach_model: event.target.value }))} />
-          </Field>
+      <div className="grid items-start gap-3 lg:grid-cols-12">
+        <SettingsBlock title="TTS 语音朗读" className="lg:col-span-7">
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="md:col-span-2 rounded-2xl border border-sky-300/10 bg-sky-300/[0.04] px-3 py-2 text-[11px] leading-5 text-sky-50/78">
+              当前策略：小节级预热，只读正文，音频永久缓存。MiMo 适合限免测试，MiniMax 作为稳定备用。
+            </div>
+            <div className="grid gap-2 md:col-span-2">
+              <div className="text-[10px] font-medium text-muted-foreground">朗读引擎</div>
+              <div className="grid gap-2 md:grid-cols-3">
+                <Button
+                  type="button"
+                  variant={settingsDraft.tts_provider === 'mimo' ? 'default' : 'outline'}
+                  className="justify-start rounded-xl"
+                  onClick={() => setSettingsDraft((current) => ({ ...current, tts_provider: 'mimo' }))}
+                >
+                  <AudioLines size={14} />
+                  MiMo V2.5
+                </Button>
+                <Button
+                  type="button"
+                  variant={settingsDraft.tts_provider === 'minimax' ? 'default' : 'outline'}
+                  className="justify-start rounded-xl"
+                  onClick={() => setSettingsDraft((current) => ({ ...current, tts_provider: 'minimax' }))}
+                >
+                  <AudioLines size={14} />
+                  MiniMax Speech 2.8
+                </Button>
+                <Button
+                  type="button"
+                  variant={settingsDraft.tts_provider === 'none' ? 'default' : 'outline'}
+                  className="justify-start rounded-xl"
+                  onClick={() => setSettingsDraft((current) => ({ ...current, tts_provider: 'none' }))}
+                >
+                  暂不启用
+                </Button>
+              </div>
+            </div>
+
+            <Field label="MiMo API Key" icon={<Server size={14} />} className="md:col-span-2">
+              <Input
+                type="password"
+                value={settingsDraft.mimo_api_key}
+                onChange={(event) => setSettingsDraft((current) => ({ ...current, mimo_api_key: event.target.value }))}
+                placeholder="小米 MiMo 开放平台 API Key"
+              />
+            </Field>
+            <Field label="MiMo 音色" icon={<AudioLines size={14} />}>
+              <Input
+                value={settingsDraft.mimo_tts_voice_id}
+                onChange={(event) => setSettingsDraft((current) => ({ ...current, mimo_tts_voice_id: event.target.value }))}
+                placeholder="茉莉"
+              />
+            </Field>
+            <Field label="MiMo 模型" icon={<AudioLines size={14} />}>
+              <Input
+                value={settingsDraft.mimo_tts_model}
+                onChange={(event) => setSettingsDraft((current) => ({ ...current, mimo_tts_model: event.target.value }))}
+                placeholder="mimo-v2.5-tts"
+              />
+            </Field>
+            <Field label="MiMo 接口地址" icon={<Server size={14} />} className="md:col-span-2">
+              <Input
+                value={settingsDraft.mimo_tts_endpoint}
+                onChange={(event) => setSettingsDraft((current) => ({ ...current, mimo_tts_endpoint: event.target.value }))}
+                placeholder="https://api.xiaomimimo.com/v1/chat/completions"
+              />
+            </Field>
+            <Field label="MiMo 朗读风格" icon={<AudioLines size={14} />} className="md:col-span-2">
+              <Input
+                value={settingsDraft.mimo_tts_style_prompt}
+                onChange={(event) => setSettingsDraft((current) => ({ ...current, mimo_tts_style_prompt: event.target.value }))}
+                placeholder="用清晰、年轻、温和的中文女声朗读，语速适中，像耐心老师讲课。"
+              />
+            </Field>
+
+            <Field label="MiniMax API Key" icon={<Server size={14} />} className="md:col-span-2">
+              <Input
+                type="password"
+                value={settingsDraft.minimax_api_key}
+                onChange={(event) => setSettingsDraft((current) => ({ ...current, minimax_api_key: event.target.value }))}
+                placeholder="填入后才会在点击朗读时调用"
+              />
+            </Field>
+            <Field label="Voice ID" icon={<AudioLines size={14} />}>
+              <Input
+                value={settingsDraft.minimax_tts_voice_id}
+                onChange={(event) => setSettingsDraft((current) => ({ ...current, minimax_tts_voice_id: event.target.value }))}
+                placeholder="你选好的音色 voice_id"
+              />
+            </Field>
+            <Field label="模型" icon={<AudioLines size={14} />}>
+              <Input
+                value={settingsDraft.minimax_tts_model}
+                onChange={(event) => setSettingsDraft((current) => ({ ...current, minimax_tts_model: event.target.value }))}
+                placeholder="speech-2.8-hd"
+              />
+            </Field>
+            <Field label="接口地址" icon={<Server size={14} />} className="md:col-span-2">
+              <Input
+                value={settingsDraft.minimax_tts_endpoint}
+                onChange={(event) => setSettingsDraft((current) => ({ ...current, minimax_tts_endpoint: event.target.value }))}
+                placeholder="https://api.minimaxi.com/v1/t2a_v2"
+              />
+            </Field>
+            <div className="grid gap-3 md:col-span-2 md:grid-cols-3">
+              <Field label="语速" icon={<AudioLines size={14} />}>
+                <Input
+                  type="number"
+                  min="0.5"
+                  max="2"
+                  step="0.05"
+                  value={settingsDraft.minimax_tts_speed}
+                  onChange={(event) => setSettingsDraft((current) => ({ ...current, minimax_tts_speed: Number(event.target.value) }))}
+                />
+              </Field>
+              <Field label="音量" icon={<AudioLines size={14} />}>
+                <Input
+                  type="number"
+                  min="0.1"
+                  max="5"
+                  step="0.1"
+                  value={settingsDraft.minimax_tts_volume}
+                  onChange={(event) => setSettingsDraft((current) => ({ ...current, minimax_tts_volume: Number(event.target.value) }))}
+                />
+              </Field>
+              <Field label="音高" icon={<AudioLines size={14} />}>
+                <Input
+                  type="number"
+                  min="-12"
+                  max="12"
+                  step="1"
+                  value={settingsDraft.minimax_tts_pitch}
+                  onChange={(event) => setSettingsDraft((current) => ({ ...current, minimax_tts_pitch: Number(event.target.value) }))}
+                />
+              </Field>
+            </div>
+          </div>
         </SettingsBlock>
 
-        <SettingsBlock title="生肉炼丹引擎">
-          <Field label="Distiller Base URL" icon={<Server size={14} />}>
-            <Input value={settingsDraft.distiller_api_base_url} onChange={(event) => setSettingsDraft((current) => ({ ...current, distiller_api_base_url: event.target.value }))} />
-          </Field>
-          <Field label="Distiller API Key" icon={<FlaskConical size={14} />}>
-            <Input type="password" value={settingsDraft.distiller_api_key} onChange={(event) => setSettingsDraft((current) => ({ ...current, distiller_api_key: event.target.value }))} />
-          </Field>
-          <Field label="Distiller Model" icon={<FlaskConical size={14} />}>
-            <Input value={settingsDraft.distiller_model} onChange={(event) => setSettingsDraft((current) => ({ ...current, distiller_model: event.target.value }))} />
-          </Field>
-        </SettingsBlock>
-
-        <SettingsBlock title="音频转写引擎">
+        <SettingsBlock title="Obsidian 同步" className="lg:col-span-5">
           <div className="grid gap-3">
-            <div className="text-[12px] font-medium text-muted-foreground">当前方案</div>
-            <div className="grid grid-cols-2 gap-2">
+            <Field label="Vault 路径" icon={<FolderOpen size={14} />}>
+              <div className="flex gap-2">
+                <Input
+                  value={settingsDraft.obsidian_vault_path}
+                  onChange={(event) => setSettingsDraft((current) => ({ ...current, obsidian_vault_path: event.target.value }))}
+                  placeholder="选择你的 Obsidian Vault 文件夹"
+                />
+                <Button type="button" variant="outline" className="shrink-0 rounded-xl" onClick={() => void handlePickObsidianVault()}>
+                  选择
+                </Button>
+              </div>
+            </Field>
+            <Field label="导出目录" icon={<FolderOpen size={14} />}>
+              <Input
+                value={settingsDraft.obsidian_export_folder}
+                onChange={(event) => setSettingsDraft((current) => ({ ...current, obsidian_export_folder: event.target.value }))}
+                placeholder="视界专注"
+              />
+            </Field>
+            <Button
+              type="button"
+              variant={settingsDraft.obsidian_auto_sync ? 'default' : 'outline'}
+              className="justify-start rounded-xl"
+              onClick={() => setSettingsDraft((current) => ({ ...current, obsidian_auto_sync: !current.obsidian_auto_sync }))}
+            >
+              <FolderOpen size={14} />
+              {settingsDraft.obsidian_auto_sync ? '保存进度时同步：已预留' : '保存进度时同步：关闭'}
+            </Button>
+          </div>
+        </SettingsBlock>
+
+        <SettingsBlock title="后台资源模式" className="lg:col-span-12">
+          <div className="grid gap-2 md:grid-cols-3">
+            {[
+              { id: 'fast', title: '快速制作' },
+              { id: 'balanced', title: '均衡模式' },
+              { id: 'background', title: '后台慢速' },
+            ].map((mode) => (
+              <Button
+                key={mode.id}
+                type="button"
+                variant={settingsDraft.resource_mode === mode.id ? 'default' : 'outline'}
+                className="h-10 justify-start rounded-xl px-4 text-left"
+                onClick={() => setSettingsDraft((current) => ({ ...current, resource_mode: mode.id }))}
+              >
+                {mode.title}
+              </Button>
+            ))}
+          </div>
+        </SettingsBlock>
+
+        <SettingsBlock title="音频转写引擎" className="lg:col-span-8">
+          <div className="grid gap-3">
+            <div className="text-[10px] font-medium text-muted-foreground">当前方案</div>
+            <div className="grid gap-2">
               <Button
                 variant={settingsDraft.transcription_provider === 'local_sensevoice' ? 'default' : 'outline'}
                 className="justify-start rounded-xl"
@@ -1597,34 +1866,25 @@ export function WorkspacePane({
                 <AudioLines size={14} />
                 本地 SenseVoice
               </Button>
-              <Button
-                variant={settingsDraft.transcription_provider === 'groq' ? 'default' : 'outline'}
-                className="justify-start rounded-xl"
-                onClick={() => setSettingsDraft((current) => ({ ...current, transcription_provider: 'groq' }))}
-              >
-                <AudioLines size={14} />
-                Groq Whisper
-              </Button>
             </div>
           </div>
 
-          {settingsDraft.transcription_provider === 'local_sensevoice' ? (
-            <>
-              <Field label="本地引擎目录" icon={<FolderOpen size={14} />}>
+          <div className="grid gap-3 md:grid-cols-2">
+              <Field label="本地引擎目录" icon={<FolderOpen size={14} />} className="md:col-span-2">
                 <Input
                   value={settingsDraft.local_transcription_root}
                   onChange={(event) => setSettingsDraft((current) => ({ ...current, local_transcription_root: event.target.value }))}
                   placeholder="例如 C:\\Users\\Yu\\AI\\Cuda"
                 />
               </Field>
-              <Field label="Python 路径（可留空自动探测）" icon={<Server size={14} />}>
+              <Field label="Python 路径" icon={<Server size={14} />} className="md:col-span-2">
                 <Input
                   value={settingsDraft.local_transcription_python}
                   onChange={(event) => setSettingsDraft((current) => ({ ...current, local_transcription_python: event.target.value }))}
                   placeholder="例如 C:\\Users\\Yu\\AI\\Cuda\\.venv\\Scripts\\python.exe"
                 />
               </Field>
-              <div className="grid gap-4 md:grid-cols-3">
+              <div className="grid gap-3 md:col-span-2 md:grid-cols-3">
                 <Field label="模型 ID" icon={<AudioLines size={14} />}>
                   <Input
                     value={settingsDraft.local_transcription_model_id}
@@ -1647,89 +1907,20 @@ export function WorkspacePane({
                   />
                 </Field>
               </div>
-            </>
-          ) : (
-            <>
-              <Field label="Groq API Key" icon={<AudioLines size={14} />}>
-                <Input type="password" value={settingsDraft.groq_api_key} onChange={(event) => setSettingsDraft((current) => ({ ...current, groq_api_key: event.target.value }))} />
-              </Field>
-              <Field label="Transcription Model" icon={<AudioLines size={14} />}>
-                <Input value={settingsDraft.groq_transcription_model} onChange={(event) => setSettingsDraft((current) => ({ ...current, groq_transcription_model: event.target.value }))} />
-              </Field>
-            </>
-          )}
+          </div>
         </SettingsBlock>
 
-        <SettingsBlock title="B 站凭据">
+        <SettingsBlock title="B 站凭据" className="lg:col-span-4">
           <Field label="SESSDATA" icon={<Cookie size={14} />}>
             <Input type="password" value={settingsDraft.sessdata} onChange={(event) => setSettingsDraft((current) => ({ ...current, sessdata: event.target.value }))} />
           </Field>
         </SettingsBlock>
 
-        <SettingsBlock title="Obsidian 联动">
-          <Field label="Vault 路径" icon={<FolderOpen size={14} />}>
-            <Input
-              value={settingsDraft.obsidian_vault_path}
-              onChange={(event) => setSettingsDraft((current) => ({ ...current, obsidian_vault_path: event.target.value }))}
-              placeholder="选择你的 Obsidian Vault 文件夹"
-            />
-          </Field>
-          <Field label="导出子目录" icon={<LibraryBig size={14} />}>
-            <Input
-              value={settingsDraft.obsidian_export_folder}
-              onChange={(event) => setSettingsDraft((current) => ({ ...current, obsidian_export_folder: event.target.value }))}
-              placeholder="例如 视界专注"
-            />
-          </Field>
-          <div className="rounded-[18px] border border-white/6 bg-white/[0.02] px-4 py-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="space-y-1">
-                <div className="text-[13px] font-semibold text-foreground">自动同步进度到 Obsidian</div>
-                <div className="text-[12px] leading-5 text-muted-foreground">
-                  开启后，每次学习节点推进、完成或失败状态变化，都会在后台防抖回写到 Vault。
-                </div>
-              </div>
-              <Button
-                type="button"
-                variant={settingsDraft.obsidian_auto_sync ? 'secondary' : 'outline'}
-                className="rounded-xl"
-                onClick={() => setSettingsDraft((current) => ({ ...current, obsidian_auto_sync: !current.obsidian_auto_sync }))}
-              >
-                {settingsDraft.obsidian_auto_sync ? '已开启' : '已关闭'}
-              </Button>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" className="rounded-xl" onClick={() => void handlePickObsidianVault()}>
-              <FolderOpen size={14} />
-              选择 Vault
-            </Button>
-            {settingsDraft.obsidian_vault_path ? (
-              <Button
-                type="button"
-                variant="outline"
-                className="rounded-xl"
-                onClick={() => void window.desktopAPI.openPath(settingsDraft.obsidian_vault_path)}
-              >
-                <Link2 size={14} />
-                打开 Vault
-              </Button>
-            ) : null}
-          </div>
-        </SettingsBlock>
-
         {settingsError ? (
-          <div className="rounded-[20px] border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground xl:col-span-2">
+          <div className="rounded-[20px] border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground lg:col-span-12">
             {settingsError}
           </div>
         ) : null}
-
-        <div className="flex justify-end xl:col-span-2">
-          <Button className="rounded-xl" onClick={() => void handleSaveSettings()}>
-            <Settings2 size={14} />
-            保存配置
-          </Button>
-        </div>
       </div>
     </WorkspaceShell>
   )

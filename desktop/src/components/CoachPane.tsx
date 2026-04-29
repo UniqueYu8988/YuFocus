@@ -1,27 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
-  Award,
   ArrowRight,
-  BookOpenCheck,
-  BrainCircuit,
-  Compass,
-  History,
   FolderSync,
-  Flame,
-  Gauge,
-  Milestone,
-  Orbit,
-  RefreshCcw,
   Sparkles,
   Trophy,
-  TrendingUp,
 } from 'lucide-react'
 import { CoachChatTimeline } from '@/components/CoachChatTimeline'
 import { CoachComposer } from '@/components/CoachComposer'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { getNextNodeId } from '@/lib/courseTree'
+import { getNextSequentialNodeId } from '@/lib/courseTree'
 import { cn } from '@/lib/utils'
 import { useLearningStore } from '@/store'
 
@@ -48,16 +37,6 @@ function collectStageStudyNodeIds(nodeId: string, nodeMap: Record<string, { chil
   return collected
 }
 
-function formatRelativeMilestoneTime(timestamp: number | null) {
-  if (!timestamp) return '刚刚'
-  const diff = Date.now() - timestamp
-  const hour = 60 * 60 * 1000
-  const day = 24 * hour
-  if (diff < hour) return `${Math.max(1, Math.round(diff / (60 * 1000)))} 分钟前`
-  if (diff < day) return `${Math.max(1, Math.round(diff / hour))} 小时前`
-  return new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(timestamp)
-}
-
 function getBadgeToneClass(tone: 'neutral' | 'info' | 'success' | 'accent') {
   switch (tone) {
     case 'success':
@@ -67,7 +46,7 @@ function getBadgeToneClass(tone: 'neutral' | 'info' | 'success' | 'accent') {
     case 'info':
       return 'border-violet-400/15 bg-violet-400/[0.08] text-violet-100'
     default:
-      return 'border-white/8 bg-white/[0.03] text-foreground/82'
+      return 'border-white/[0.07] bg-[#232323] text-foreground/82'
   }
 }
 
@@ -91,17 +70,15 @@ export function CoachPane() {
   const currentSession = useLearningStore((state) =>
     state.currentNodeId ? state.nodeSessions[state.currentNodeId] ?? null : null,
   )
-  const startQuizForCurrentNode = useLearningStore((state) => state.startQuizForCurrentNode)
-  const reteachCurrentNode = useLearningStore((state) => state.reteachCurrentNode)
-  const goToNextNode = useLearningStore((state) => state.goToNextNode)
-  const getCurrentStageReplay = useLearningStore((state) => state.getCurrentStageReplay)
   const getCurrentAchievementBadges = useLearningStore((state) => state.getCurrentAchievementBadges)
+  const goToNextNode = useLearningStore((state) => state.goToNextNode)
   const getRecentMilestones = useLearningStore((state) => state.getRecentMilestones)
-  const getMomentumSnapshot = useLearningStore((state) => state.getMomentumSnapshot)
-  const stageCelebration = useLearningStore((state) => state.stageCelebration)
-  const dismissStageCelebration = useLearningStore((state) => state.dismissStageCelebration)
+  const pushToast = useLearningStore((state) => state.pushToast)
+  const isCurrentNodeUnlocked = useLearningStore((state) =>
+    state.currentNodeId ? state.isNodeUnlocked(state.currentNodeId) : false,
+  )
+  const [obsidianSyncing, setObsidianSyncing] = useState(false)
   const currentNode = currentNodeId ? nodeMap[currentNodeId] ?? null : null
-  const stageReplay = getCurrentStageReplay()
   const effectiveCompletedNodeIds = useMemo(() => {
     if (!currentNodeId || !currentSession) return completedNodeIds
     const currentNodeCompleted =
@@ -120,8 +97,8 @@ export function CoachPane() {
   const totalStudyCount = orderedStudyNodeIds.length
   const progressPercent = totalStudyCount > 0 ? Math.round((effectiveCompletedNodeIds.length / totalStudyCount) * 100) : 0
   const nextNodeId = useMemo(
-    () => getNextNodeId(orderedStudyNodeIds, nodeMap, effectiveCompletedNodeIds),
-    [effectiveCompletedNodeIds, nodeMap, orderedStudyNodeIds],
+    () => getNextSequentialNodeId(orderedStudyNodeIds, currentNodeId),
+    [currentNodeId, orderedStudyNodeIds],
   )
   const isCourseCompleted = totalStudyCount > 0 && effectiveCompletedNodeIds.length >= totalStudyCount
   const remainingCount = Math.max(0, totalStudyCount - effectiveCompletedNodeIds.length)
@@ -133,10 +110,6 @@ export function CoachPane() {
     }
     return cursor
   }, [currentNode, nodeMap])
-  const stageObjectives = useMemo(
-    () => currentStage?.learning_objectives.filter(Boolean).slice(0, 3) ?? [],
-    [currentStage],
-  )
   const stageTitle = currentStage ? stripStagePrefix(currentStage.title) || currentStage.title : ''
   const currentStageStudyNodeIds = useMemo(
     () => (currentStage ? collectStageStudyNodeIds(currentStage.id, nodeMap) : []),
@@ -147,42 +120,66 @@ export function CoachPane() {
     [currentStageStudyNodeIds, effectiveCompletedNodeIds],
   )
   const stageTotalCount = currentStageStudyNodeIds.length
-  const stageProgressPercent = stageTotalCount > 0 ? Math.round((stageCompletedCount / stageTotalCount) * 100) : 0
-  const stageCompleted = stageTotalCount > 0 && stageCompletedCount >= stageTotalCount
-  const stageMomentumLabel =
-    stageCompleted
-      ? '本阶段已打通'
-      : stageCompletedCount > 0
-        ? `本阶段推进中 · 已拿下 ${stageCompletedCount}/${stageTotalCount}`
-        : '本阶段刚开始'
   const achievementBadges = getCurrentAchievementBadges()
-  const recentMilestones = getRecentMilestones(3)
   const archiveMilestones = getRecentMilestones(10)
-  const momentumSnapshot = getMomentumSnapshot()
   const completionMilestone =
     archiveMilestones.find((event) => event.kind === 'course_complete') ?? null
   const completionNarrative =
-    achievementBadges.some((badge) => badge.code === 'comeback')
-      ? '这门课不是一路平推拿下的，而是经历过卡顿、纠错，再慢慢打磨成真正掌握。'
-      : achievementBadges.some((badge) => badge.code === 'stage_breaker')
+    false
+      ? ''
+      : archiveMilestones.some((event) => event.kind === 'stage_complete')
         ? '你是靠一段一段稳稳推进，把整门课完整打通下来的。'
         : '你把这门课完整学完了，而且路径非常干净，说明理解链路已经相当顺。'
-  const seenBadgeCodesRef = useRef<string[]>([])
-  const [freshBadgeCodes, setFreshBadgeCodes] = useState<string[]>([])
-
-  useEffect(() => {
-    const nextCodes = achievementBadges.map((badge) => badge.code)
-    const previousCodes = seenBadgeCodesRef.current
-    const unlocked = nextCodes.filter((code) => !previousCodes.includes(code))
-    if (unlocked.length > 0) {
-      setFreshBadgeCodes(unlocked)
-      const timeout = window.setTimeout(() => setFreshBadgeCodes([]), 1800)
-      seenBadgeCodesRef.current = nextCodes
-      return () => window.clearTimeout(timeout)
+  const lightweightStatusHint = useMemo(() => {
+    if (!isCurrentNodeUnlocked) {
+      return '预览模式：按顺序学到这里后再答题'
     }
-    seenBadgeCodesRef.current = nextCodes
-    return
-  }, [achievementBadges])
+    if (currentSession?.learningStatus === 'completed' && nextNodeId) {
+      return '这一关已掌握，点击下一节继续'
+    }
+    if (currentSession?.learningStatus === 'quizzing') {
+      return '先写下你的回忆，再对照标准答案和关键点'
+    }
+    return '先阅读这一关，再写下自己的回忆'
+  }, [
+    currentSession?.learningStatus,
+    isCurrentNodeUnlocked,
+    nextNodeId,
+  ])
+  const lightweightStatusTone: 'neutral' | 'progress' | 'warning' | 'success' =
+    !isCurrentNodeUnlocked
+      ? 'warning'
+      : currentSession?.learningStatus === 'completed'
+        ? 'success'
+        : currentSession?.learningStatus === 'quizzing'
+          ? 'progress'
+          : 'neutral'
+
+  const syncObsidian = async (target: 'current' | 'board' | 'index') => {
+    if (!courseData) return
+    setObsidianSyncing(true)
+    try {
+      const result = await window.desktopAPI.openObsidianCourse({
+        course: courseData as unknown as Record<string, unknown>,
+        currentNodeId,
+        completedNodeIds: effectiveCompletedNodeIds,
+        target,
+      })
+      pushToast(
+        'Obsidian 已同步',
+        target === 'current'
+          ? `已打开当前小节笔记：${result.openedPath}`
+          : target === 'board'
+            ? `已打开学习看板：${result.openedPath}`
+            : `已打开课程总览：${result.openedPath}`,
+        'success',
+      )
+    } catch (error) {
+      pushToast('Obsidian 同步失败', error instanceof Error ? error.message : String(error), 'error')
+    } finally {
+      setObsidianSyncing(false)
+    }
+  }
 
   if (!currentNode || !currentSession) {
     return (
@@ -191,17 +188,17 @@ export function CoachPane() {
           <CardContent className="w-full max-w-4xl space-y-8 p-8">
             <div className="mx-auto flex max-w-xl flex-col items-center gap-4 text-center">
               <div className="flex size-16 items-center justify-center rounded-[24px] border border-white/8 bg-white/[0.035] text-foreground/78">
-                <Compass size={24} />
+                <Sparkles size={24} />
               </div>
               <div className="space-y-2">
                 <div className="text-[11px] font-medium uppercase tracking-[0.28em] text-muted-foreground">开始学习</div>
                 <h2 className="text-[32px] font-semibold tracking-tight text-foreground">准备开始一门新课程</h2>
                 <p className="text-[13px] leading-7 text-muted-foreground">
-                  左侧输入 BV 开始提炼，或者从学习档案直接续上。这里会始终保持为唯一主舞台，课程讲解、提问、纠错和推进都会连续发生在这一侧。
+                  左侧输入 BV 开始提炼，或者从学习档案直接续上。这里会始终保持为唯一主舞台，课程讲解、主动回忆、标准答案对照和推进都会连续发生在这一侧。
                 </p>
                 <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
                   <Badge variant="outline">BV 到课程树</Badge>
-                  <Badge variant="outline">AI 教练带学</Badge>
+                  <Badge variant="outline">本地闯关学习</Badge>
                   <Badge variant="outline">进度自动保存</Badge>
                 </div>
               </div>
@@ -210,7 +207,7 @@ export function CoachPane() {
             <div className="mx-auto flex max-w-3xl flex-wrap items-center justify-center gap-2.5">
               {[
                 ['提炼或导入', '从 B 站视频自动蒸馏成知识树，或者导入现成课包。'],
-                ['跟着 AI 教练闯关', '每一小关都会经历讲解、提问、纠错和通过四个阶段。'],
+                ['轻量闯关学习', '每一小关都会经历讲解、主动回忆、标准答案对照和通过四个阶段。'],
                 ['自动保存', '关闭应用也不会丢，回来会恢复到你上次的进度位置。'],
               ].map(([title, description]) => (
                 <div
@@ -233,49 +230,45 @@ export function CoachPane() {
     )
   }
 
-  const learningStatusLabel = {
-    teaching: '讲解中',
-    quizzing: '提问中',
-    correcting: '纠错中',
-    completed: '已掌握',
-  }[currentSession.learningStatus]
-
   return (
     <section className="flex min-h-0 flex-1">
       <Card className="work-surface flex min-h-0 w-full flex-col overflow-hidden rounded-l-[24px] rounded-r-none border-0 bg-[#181818] shadow-[-14px_0_34px_rgba(0,0,0,0.12)]">
-        <CardHeader className="pl-7 pr-5 py-2.5">
-          <div className="flex min-h-[60px] flex-wrap items-center justify-between gap-3">
-            <div className="min-w-0 flex-1 space-y-1">
+        <CardHeader className="pl-7 pr-5 py-2">
+          <div className="flex min-h-[52px] flex-wrap items-center justify-between gap-2.5">
+            <div className="min-w-0 flex-1 space-y-0.5">
               <div>
-                <CardTitle className="text-[19px] leading-tight tracking-tight">{currentNode.title}</CardTitle>
+                <CardTitle className="flex items-center gap-2 text-[18px] leading-tight tracking-tight">
+                  <span aria-hidden className="text-[14px] opacity-90">✨</span>
+                  <span>{currentNode.title}</span>
+                </CardTitle>
               </div>
-              <div className="flex flex-wrap items-center gap-2 text-[10px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-white/7 bg-white/[0.03] px-2 py-0.5 text-[10px] normal-case tracking-normal">
-                  <Orbit className="size-3.5" />
-                  当前小关
-                </span>
-                <span className="max-w-[220px] truncate text-muted-foreground/80">{courseData?.course.title ?? '未载入课程'}</span>
-                <Badge variant="outline" className="h-5 rounded-full px-2 text-[10px]">
+              <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                {currentStage ? `${stageTitle} · ` : ''}
                   {progressPercent}% 已完成
-                </Badge>
-                <Badge
-                  variant={currentSession.learningStatus === 'completed' ? 'success' : currentSession.learningStatus === 'correcting' ? 'warning' : 'outline'}
-                  className={cn('h-5 rounded-full px-2 text-[10px]', currentSession.requestState === 'loading' && 'animate-pulse')}
-                >
-                  <BrainCircuit className="size-3" />
-                  <span>{currentSession.requestState === 'loading' ? `${learningStatusLabel} · 思考中` : learningStatusLabel}</span>
-                </Badge>
+                {!isCurrentNodeUnlocked ? ' · 预览中' : ''}
+                {currentSession.requestState === 'loading' ? ' · 老师思考中' : ''}
               </div>
             </div>
 
-            <div className="flex shrink-0 flex-wrap items-center gap-2 self-center">
-              <Button variant="ghost" className="h-7 rounded-2xl px-3 text-[11px]" onClick={() => void reteachCurrentNode('reframe')}>
-                <RefreshCcw size={14} />
-                换个说法
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-8 rounded-xl px-3 text-[11px]"
+                onClick={() => void syncObsidian('board')}
+                disabled={obsidianSyncing}
+              >
+                <FolderSync size={13} />
+                同步 Obsidian
               </Button>
-              <Button variant="ghost" className="h-7 rounded-2xl px-3 text-[11px]" onClick={() => void reteachCurrentNode('deepen')}>
-                <Sparkles size={14} />
-                讲深一点
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-8 rounded-xl px-3 text-[11px]"
+                onClick={() => void syncObsidian('current')}
+                disabled={obsidianSyncing}
+              >
+                打开笔记
               </Button>
             </div>
           </div>
@@ -283,193 +276,6 @@ export function CoachPane() {
           {currentSession.error ? (
             <div className="rounded-2xl border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground">
               {currentSession.error}
-            </div>
-          ) : null}
-
-          {stageReplay ? (
-            <div className="flex flex-wrap items-center gap-2 rounded-[18px] border border-amber-500/10 bg-amber-500/[0.04] px-3.5 py-2.5 text-[11px] text-amber-100/86">
-              <Badge variant="warning" className="h-5 rounded-full px-2 text-[10px]">
-                <Flame className="size-3" />
-                阶段回放
-              </Badge>
-              <span>本阶段最近卡住了 {stageReplay.recentMistakeCount} 次</span>
-              {stageReplay.focusNodeTitles.length > 0 ? (
-                <span className="text-amber-50/92">重点回看：{stageReplay.focusNodeTitles.join('、')}</span>
-              ) : null}
-              {stageReplay.focusKeywords.length > 0 ? (
-                <span className="text-amber-200/72">· 高频漏点：{stageReplay.focusKeywords.slice(0, 3).join('、')}</span>
-              ) : null}
-              {stageReplay.followupQuestions.length > 0 ? (
-                <span className="basis-full text-amber-50/80">回放追问：{stageReplay.followupQuestions[0]}</span>
-              ) : null}
-            </div>
-          ) : null}
-
-          {stageCelebration && currentStage && stageCelebration.stageId === currentStage.id ? (
-            <div className="stage-celebration-glow rounded-[18px] border border-emerald-400/14 bg-[linear-gradient(135deg,rgba(16,185,129,0.12),rgba(16,185,129,0.04))] px-4 py-3 shadow-[0_0_24px_rgba(16,185,129,0.08)]">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="flex items-start gap-3">
-                  <div className="flex size-9 shrink-0 items-center justify-center rounded-2xl border border-emerald-400/18 bg-emerald-400/[0.10] text-emerald-200">
-                    <Milestone size={16} />
-                  </div>
-                  <div className="space-y-1">
-                    <div className="text-[12px] font-semibold text-emerald-100">这一阶段拿下了</div>
-                    <div className="text-[11px] leading-6 text-emerald-50/82">
-                      《{stageCelebration.stageTitle}》已经完整打通，共完成 {stageCelebration.completedCount}/{stageCelebration.totalCount} 个小关。现在可以很顺地切进下一段主线。
-                    </div>
-                  </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  className="h-7 rounded-2xl px-3 text-[11px] text-emerald-100 hover:bg-emerald-400/[0.08] hover:text-emerald-50"
-                  onClick={dismissStageCelebration}
-                >
-                  收起
-                </Button>
-              </div>
-            </div>
-          ) : null}
-
-          {currentStage ? (
-            <div className="rounded-[18px] border border-white/7 bg-white/[0.022] px-4 py-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="outline" className="h-5 rounded-full px-2 text-[10px]">
-                    <Compass className="size-3" />
-                    当前阶段
-                  </Badge>
-                  <span className="text-[12px] font-semibold text-foreground">{stageTitle}</span>
-                </div>
-                <div
-                  className={cn(
-                    'rounded-full border px-2.5 py-1 text-[10px] font-medium',
-                    stageCompleted
-                      ? 'border-emerald-400/15 bg-emerald-400/[0.08] text-emerald-200'
-                      : 'border-sky-400/15 bg-sky-400/[0.08] text-sky-100',
-                  )}
-                >
-                  {stageMomentumLabel}
-                </div>
-              </div>
-
-              <div className="mt-3 flex items-center gap-3">
-                <div className="relative h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
-                  {stageCompletedCount > 0 ? (
-                    <span
-                      className={cn(
-                        'absolute inset-y-0 left-0 rounded-full transition-all duration-500',
-                        stageCompleted
-                          ? 'bg-emerald-300/90 shadow-[0_0_18px_rgba(52,211,153,0.26)]'
-                          : 'bg-sky-300/90 shadow-[0_0_18px_rgba(125,211,252,0.24)]',
-                      )}
-                      style={{ width: `${Math.max(stageProgressPercent, stageProgressPercent > 0 ? 12 : 0)}%` }}
-                    />
-                  ) : null}
-                </div>
-                <span className="shrink-0 text-[10px] font-medium text-foreground/75">{stageProgressPercent}%</span>
-              </div>
-
-              <div className="mt-2 text-[11px] text-muted-foreground/90">
-                {stageCompleted
-                  ? `这一阶段的 ${stageTotalCount} 个小关都已经通过，可以放心进入下一段主线。`
-                  : `这一阶段共有 ${stageTotalCount} 个小关，目前已经拿下 ${stageCompletedCount} 个。`}
-              </div>
-
-              <div className="mt-2 text-[12px] leading-6 text-muted-foreground">
-                {currentStage.summary}
-              </div>
-              {stageObjectives.length > 0 ? (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {stageObjectives.map((objective) => (
-                    <Badge key={objective} variant="outline" className="rounded-full border-white/8 bg-white/[0.025] px-2.5 py-0.5 text-[10px] text-foreground/82">
-                      {objective}
-                    </Badge>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          {achievementBadges.length > 0 || recentMilestones.length > 0 ? (
-            <div className="grid gap-3 xl:grid-cols-[1.15fr_0.85fr]">
-              <div className="rounded-[18px] border border-white/7 bg-white/[0.022] px-4 py-3">
-                <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
-                  <Award className="size-3.5" />
-                  已解锁能力
-                </div>
-                {achievementBadges.length > 0 ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {achievementBadges.map((badge) => (
-                      <span
-                        key={badge.code}
-                        className={cn(
-                          'rounded-full border px-2.5 py-1 text-[10px] font-medium transition-transform duration-300',
-                          freshBadgeCodes.includes(badge.code) && 'achievement-badge-enter',
-                          getBadgeToneClass(badge.tone),
-                        )}
-                        title={badge.description}
-                      >
-                        {badge.label}
-                      </span>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="mt-3 text-[12px] leading-6 text-muted-foreground">
-                    拿下第一个小关后，这里会开始积累属于这门课的能力标签。
-                  </div>
-                )}
-                {recentMilestones.length > 0 ? (
-                  <div className="mt-3 rounded-2xl border border-white/6 bg-white/[0.018] px-3 py-2.5">
-                    <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                      <History className="size-3.5" />
-                      最近突破
-                    </div>
-                    <div className="mt-1.5 text-[12px] font-medium text-foreground">{recentMilestones[0].title}</div>
-                    <div className="mt-0.5 text-[11px] leading-5 text-muted-foreground">
-                      {recentMilestones[0].detail}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="rounded-[18px] border border-white/7 bg-white/[0.022] px-4 py-3">
-                <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
-                  <TrendingUp className="size-3.5" />
-                  今日推进
-                </div>
-                <div className="mt-2 text-[13px] font-semibold text-foreground">{momentumSnapshot.momentumLabel}</div>
-                <div className="mt-3 grid grid-cols-3 gap-2">
-                  <div className="rounded-2xl border border-white/6 bg-white/[0.018] px-3 py-2.5">
-                    <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">今日小关</div>
-                    <div className="mt-1 text-[18px] font-semibold text-foreground">{momentumSnapshot.todayCompletedCount}</div>
-                  </div>
-                  <div className="rounded-2xl border border-white/6 bg-white/[0.018] px-3 py-2.5">
-                    <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">今日阶段</div>
-                    <div className="mt-1 text-[18px] font-semibold text-foreground">{momentumSnapshot.todayStageCount}</div>
-                  </div>
-                  <div className="rounded-2xl border border-white/6 bg-white/[0.018] px-3 py-2.5">
-                    <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">近24h</div>
-                    <div className="mt-1 text-[18px] font-semibold text-foreground">{momentumSnapshot.recentMilestoneCount}</div>
-                  </div>
-                </div>
-                {momentumSnapshot.currentStreak > 0 ? (
-                  <div className="mt-3 flex items-center gap-2 rounded-2xl border border-sky-400/12 bg-sky-400/[0.05] px-3 py-2.5 text-[11px] text-sky-100/90">
-                    <Gauge className="size-3.5" />
-                    <span>当前连过 {momentumSnapshot.currentStreak} 关</span>
-                    <span className="text-sky-200/72">
-                      {momentumSnapshot.currentStreak >= 5 ? '势头很足，适合继续趁热推进。' : '节奏已经起来了，继续保持。'}
-                    </span>
-                  </div>
-                ) : null}
-                <div className="mt-3 text-[11px] text-muted-foreground">
-                  最近一次里程碑：{formatRelativeMilestoneTime(momentumSnapshot.latestMilestoneAt)}
-                </div>
-                {recentMilestones.length > 1 ? (
-                  <div className="mt-2 text-[11px] text-muted-foreground/88">
-                    最近还完成了：{recentMilestones.slice(1).map((event) => event.title).join('、')}
-                  </div>
-                ) : null}
-              </div>
             </div>
           ) : null}
 
@@ -484,7 +290,7 @@ export function CoachPane() {
                     <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-emerald-200/80">课程征服回顾</div>
                     <div className="text-base font-semibold text-foreground">《{courseData?.course.title ?? '当前课程'}》已经完整结课</div>
                     <p className="text-sm leading-6 text-muted-foreground">
-                      全部 {totalStudyCount} 个小关已掌握，这门课会自动沉淀进归档区，之后随时都能回来复习或同步到 Obsidian。
+                    全部 {totalStudyCount} 个小关已完成，这门课会自动沉淀进归档区，之后随时都能回来继续学习。
                     </p>
                     <div className="text-[11px] text-emerald-100/78">
                       {completionMilestone ? `结课时间：${formatCompletionDate(completionMilestone.createdAt)}` : '结课记录已保存到本地档案'}
@@ -563,19 +369,19 @@ export function CoachPane() {
         </CardHeader>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-5 pt-1.5 pb-4">
-          <Card className="work-surface relative flex min-h-0 flex-1 flex-col overflow-hidden border-white/7 bg-[#181818]">
-            <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden p-0">
-              <div className="work-surface h-0 min-h-0 flex-1 overflow-hidden bg-[#181818] px-4 py-4">
+          <Card className="work-surface relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-white/[0.055] bg-[#181818] shadow-none">
+            <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[inherit] p-0">
+              <div className="work-surface h-0 min-h-0 flex-1 overflow-hidden rounded-t-[inherit] bg-[#181818] px-4 py-0">
                 <CoachChatTimeline />
               </div>
-              <div className="work-surface relative z-10 shrink-0 bg-[#181818]">
+              <div className="work-surface relative z-10 shrink-0 rounded-b-[inherit] bg-[#181818]">
                 <CoachComposer
-                  progressText={`${effectiveCompletedNodeIds.length}/${totalStudyCount} 已掌握 · ${remainingCount} 节待完成${nextNodeId ? ' · 下一节已预热' : ''}`}
-                  onStartQuiz={() => void startQuizForCurrentNode()}
+                  progressText={`${effectiveCompletedNodeIds.length}/${totalStudyCount} · 阶段 ${stageCompletedCount}/${Math.max(stageTotalCount, 0)}`}
+                  statusHint={lightweightStatusHint}
+                  statusTone={lightweightStatusTone}
                   onGoToNext={() => void goToNextNode()}
-                  canStartQuiz={currentSession.learningStatus === 'teaching' && currentSession.requestState !== 'loading' && !isCourseCompleted}
                   canGoToNext={canAdvanceToNext && Boolean(nextNodeId)}
-                  nextLabel={isCourseCompleted || !nextNodeId ? '课程已完成' : '下一节'}
+                  nextLabel={isCourseCompleted ? '课程已完成' : '下一节'}
                 />
               </div>
             </CardContent>

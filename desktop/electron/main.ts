@@ -3,6 +3,7 @@ import Store from 'electron-store'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import crypto from 'node:crypto'
 
 const APP_NAME = '视界专注'
 const APP_ID = 'ShijieFocus'
@@ -90,7 +91,10 @@ function findExistingDataRoot() {
   for (const root of searchRoots) {
     for (let depth = 0; depth <= 6; depth += 1) {
       const candidate = path.resolve(root, ...Array(depth).fill('..'))
-      if (fs.existsSync(path.join(candidate, '.biliarchive.local.json'))) {
+      if (
+        fs.existsSync(path.join(candidate, '.shijie-focus.local.json')) ||
+        fs.existsSync(path.join(candidate, '.biliarchive.local.json'))
+      ) {
         return candidate
       }
     }
@@ -101,9 +105,11 @@ function findExistingDataRoot() {
 
 const devProjectRoot = resolveDevProjectRoot()
 const dataRoot = app.isPackaged ? (findExistingDataRoot() || resolvePortableExecutableDir()) : devProjectRoot
-const settingsPath = path.join(dataRoot, '.biliarchive.local.json')
-const windowStatePath = path.join(dataRoot, '.biliarchive.window.json')
-const runtimeLogPath = path.join(dataRoot, '.zhiyuli-runtime.log')
+const userDataRoot = app.getPath('userData')
+const settingsPath = path.join(userDataRoot, '.shijie-focus.local.json')
+const windowStatePath = path.join(userDataRoot, '.shijie-focus.window.json')
+const legacyWindowStatePath = path.join(dataRoot, '.biliarchive.window.json')
+const runtimeLogPath = path.join(userDataRoot, '.shijie-focus-runtime.log')
 const iconPath = app.isPackaged
   ? path.join(process.resourcesPath, 'assets', 'app_icon.ico')
   : path.join(devProjectRoot, 'assets', 'app_icon.ico')
@@ -120,38 +126,26 @@ type RuntimeSettings = {
   obsidian_vault_path: string
   obsidian_export_folder: string
   obsidian_auto_sync: boolean
-  coach_api_base_url: string
-  coach_api_key: string
-  coach_model: string
-  distiller_api_base_url: string
-  distiller_api_key: string
-  distiller_model: string
+  tts_provider: string
+  minimax_api_key: string
+  minimax_tts_endpoint: string
+  minimax_tts_model: string
+  minimax_tts_voice_id: string
+  minimax_tts_speed: number
+  minimax_tts_volume: number
+  minimax_tts_pitch: number
+  mimo_api_key: string
+  mimo_tts_endpoint: string
+  mimo_tts_model: string
+  mimo_tts_voice_id: string
+  mimo_tts_style_prompt: string
   transcription_provider: string
-  groq_api_key: string
-  groq_transcription_model: string
   local_transcription_root: string
   local_transcription_python: string
   local_transcription_model_id: string
   local_transcription_device: string
   local_transcription_language: string
-}
-
-type RunResult = {
-  videoTitle: string
-  publishDate: string
-  outputDir: string
-  markdownPath: string
-  fileGenerated: boolean
-  hasSubtitles: boolean
-  subtitleGroupCount: number
-  subtitleEntryCount: number
-  textSourceType: string
-  textSourceNote: string
-  pageCount: number
-  pagesWithSubtitles: number
-  missingSubtitlePages: string[]
-  aiSkippedReason: string
-  resultNote: string
+  resource_mode: string
 }
 
 type SettingsStatus = {
@@ -160,26 +154,6 @@ type SettingsStatus = {
     valid: boolean
     accountName: string
     accountId: string
-    message: string
-  }
-  coach: {
-    configured: boolean
-    valid: boolean
-    baseUrl: string
-    model: string
-    message: string
-  }
-  distiller: {
-    configured: boolean
-    valid: boolean
-    baseUrl: string
-    model: string
-    message: string
-  }
-  groq: {
-    configured: boolean
-    valid: boolean
-    model: string
     message: string
   }
 }
@@ -191,6 +165,8 @@ type DistillResult = {
   bvid: string
   textSourceType: string
   textSourceNote: string
+  materialPath?: string
+  coveragePath?: string
   chunkCount: number
   warningCount: number
   warnings: string[]
@@ -208,6 +184,24 @@ type DistillResult = {
     pipeline?: Record<string, unknown>
   }
   text: string
+}
+
+type MaterialPackageSummary = {
+  name: string
+  path: string
+  title: string
+  sourceId: string
+  blockCount: number
+  textLength: number
+  updatedAt: number
+  startHerePath: string
+  codexPromptPath: string
+  finalCoursePath: string
+  finalCourseExists: boolean
+  publishedCoursePath: string
+  publishedCourseExists: boolean
+  importReadyCoursePath: string
+  importReadyCourseExists: boolean
 }
 
 type DistillOutlinePreview = {
@@ -243,14 +237,15 @@ type DistillProgressPayload = {
 }
 
 type DistillPayload = {
-  video: string
+  video?: string
+  sourceKind?: 'bilibili' | 'local_media'
+  mediaPath?: string
 }
 
 type ObsidianExportPayload = {
   course: Record<string, unknown>
   currentNodeId: string | null
   completedNodeIds: string[]
-  failedNodeIds?: string[]
 }
 
 type ObsidianExportResult = {
@@ -268,9 +263,40 @@ type ObsidianOpenResult = ObsidianExportResult & {
   openedVia: 'obsidian-uri' | 'file-path'
 }
 
+type TtsSynthesizePayload = {
+  text: string
+  nodeId?: string | null
+}
+
+type TtsSynthesizeResult = {
+  provider: string
+  model: string
+  voiceId: string
+  filePath: string
+  dataUrl: string
+  cached: boolean
+  characters: number
+  usage: TtsUsageSnapshot
+}
+
+type TtsCacheStatusResult = {
+  cached: boolean
+  characters: number
+  filePath: string | null
+  usage: TtsUsageSnapshot
+}
+
+type TtsUsageSnapshot = {
+  date: string
+  usedCharacters: number
+  dailyLimit: number
+  remainingCharacters: number
+  note: string
+}
+
 type PersistedNodeLearningSession = {
   nodeId: string
-  learningStatus: 'teaching' | 'quizzing' | 'correcting' | 'completed'
+  learningStatus: 'teaching' | 'quizzing' | 'completed'
   messages: Array<{
     id: string
     role: 'system' | 'coach' | 'user'
@@ -279,17 +305,6 @@ type PersistedNodeLearningSession = {
     createdAt: number
   }>
   activeQuestion: string | null
-  attemptHistory: Array<{
-    id: string
-    nodeTitle: string
-    question: string | null
-    answer: string
-    verdict: 'correct' | 'partial' | 'incorrect'
-    matchedKeywords: string[]
-    missingKeywords: string[]
-    cautionNotes: string[]
-    createdAt: number
-  }>
   lastUserAnswer: string
   lastEvaluation: 'correct' | 'partial' | 'incorrect' | null
   hydrated: boolean
@@ -309,11 +324,10 @@ type LearningRecord = {
   courseText: string
   currentNodeId: string | null
   completedNodeIds: string[]
-  failedNodeIds: string[]
   nodeSessions: Record<string, PersistedNodeLearningSession>
   milestoneEvents: Array<{
     id: string
-    kind: 'node_complete' | 'stage_complete' | 'correction_recovery' | 'course_complete'
+    kind: 'node_complete' | 'stage_complete' | 'course_complete'
     title: string
     detail: string
     createdAt: number
@@ -328,20 +342,16 @@ type LearningRecord = {
   lastOpenedAt: number
 }
 
-type LearningRecordSummary = Omit<LearningRecord, 'courseText' | 'nodeSessions' | 'completedNodeIds' | 'failedNodeIds' | 'currentNodeId' | 'milestoneEvents'> & {
+type LearningRecordSummary = Omit<LearningRecord, 'courseText' | 'nodeSessions' | 'completedNodeIds' | 'currentNodeId' | 'milestoneEvents'> & {
   currentNodeId: string | null
   currentNodeTitle: string | null
   completedCount: number
   sessionCount: number
-  partialCount: number
-  incorrectCount: number
-  hotspotNodeTitle: string | null
-  dominantChallenge: 'stable' | 'partial-heavy' | 'incorrect-heavy'
   stageCompletedCount: number
   totalStageCount: number
   recentMilestones: LearningRecord['milestoneEvents']
   achievementBadges: Array<{
-    code: 'first_step' | 'steady_stride' | 'stage_breaker' | 'comeback' | 'midway' | 'course_finisher'
+    code: 'first_step' | 'steady_stride' | 'stage_breaker' | 'midway' | 'course_finisher'
     label: string
     description: string
     tone: 'neutral' | 'info' | 'success' | 'accent'
@@ -391,7 +401,7 @@ const COURSE_TEACHING_FLOW_BUCKET_HINTS: Array<{ bucket: number; keywords: strin
   { bucket: 2, keywords: ['例子', '示例', '案例', '演示', '场景', '体验'] },
   { bucket: 3, keywords: ['操作', '实战', '练习', '使用', '流程', '步骤', '方法', '配置', '上手', '技巧'] },
   { bucket: 4, keywords: ['易错', '错误', '误区', '陷阱', '注意', '禁忌', '风险'] },
-  { bucket: 5, keywords: ['复盘', '回顾', '总结', '小测', '测验', '自检', '检查'] },
+  { bucket: 5, keywords: ['复盘', '回顾', '总结', '练习', '测验', '自检', '检查'] },
 ]
 
 function sanitizeSecret(value: unknown) {
@@ -422,16 +432,36 @@ function sanitizeDisplayText(value: unknown, fallback = '') {
 
 function sanitizeTranscriptionProvider(value: unknown) {
   const normalized = String(value ?? '').trim().toLowerCase()
-  if (normalized === 'local' || normalized === 'sensevoice' || normalized === 'cuda' || normalized === 'local_sensevoice') {
-    return 'local_sensevoice'
+  void normalized
+  return 'local_sensevoice'
+}
+
+function sanitizeResourceMode(value: unknown) {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (normalized === 'fast' || normalized === 'balanced' || normalized === 'background') {
+    return normalized
   }
-  return 'groq'
+  return 'balanced'
+}
+
+function sanitizeTtsProvider(value: unknown) {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (normalized === 'minimax') return normalized
+  if (normalized === 'mimo') return normalized
+  return 'none'
+}
+
+function sanitizeNumberInRange(value: unknown, fallback: number, min: number, max: number) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return fallback
+  return Math.max(min, Math.min(max, numeric))
 }
 
 function loadWindowState() {
   try {
-    if (fs.existsSync(windowStatePath)) {
-      const state = JSON.parse(fs.readFileSync(windowStatePath, 'utf-8'))
+    const sourcePath = fs.existsSync(windowStatePath) ? windowStatePath : legacyWindowStatePath
+    if (fs.existsSync(sourcePath)) {
+      const state = JSON.parse(fs.readFileSync(sourcePath, 'utf-8'))
       return {
         width: Math.max(Number(state.width) || WINDOW_DEFAULT_WIDTH, WINDOW_MIN_WIDTH),
         height: Math.max(Number(state.height) || WINDOW_DEFAULT_HEIGHT, WINDOW_MIN_HEIGHT),
@@ -457,7 +487,9 @@ function saveWindowState() {
 
 function detectLikelyLocalTranscriptionRoot() {
   const candidates = [
+    path.resolve(devProjectRoot, '..', 'Cuda'),
     path.resolve(devProjectRoot, '..', '..', 'Cuda'),
+    path.resolve(dataRoot, '..', 'Cuda'),
     path.resolve(dataRoot, '..', '..', 'Cuda'),
     path.resolve(process.cwd(), '..', 'Cuda'),
   ]
@@ -475,24 +507,30 @@ function defaultSettings(): RuntimeSettings {
   const guessedLocalRoot = detectLikelyLocalTranscriptionRoot()
   return {
     sessdata: '',
-    output_dir: path.join(dataRoot, 'output'),
+    output_dir: resolveCanonicalOutputRoot(),
     obsidian_vault_path: '',
     obsidian_export_folder: '视界专注',
     obsidian_auto_sync: true,
-    coach_api_base_url: 'https://api.minimaxi.com/v1',
-    coach_api_key: '',
-    coach_model: 'MiniMax-M2.7',
-    distiller_api_base_url: 'https://api.minimaxi.com/v1',
-    distiller_api_key: '',
-    distiller_model: 'MiniMax-M2.7',
-    transcription_provider: guessedLocalRoot ? 'local_sensevoice' : 'groq',
-    groq_api_key: '',
-    groq_transcription_model: 'whisper-large-v3-turbo',
+    tts_provider: 'none',
+    minimax_api_key: '',
+    minimax_tts_endpoint: 'https://api.minimaxi.com/v1/t2a_v2',
+    minimax_tts_model: 'speech-2.8-hd',
+    minimax_tts_voice_id: '',
+    minimax_tts_speed: 1,
+    minimax_tts_volume: 1,
+    minimax_tts_pitch: 0,
+    mimo_api_key: '',
+    mimo_tts_endpoint: 'https://api.xiaomimimo.com/v1/chat/completions',
+    mimo_tts_model: 'mimo-v2.5-tts',
+    mimo_tts_voice_id: '茉莉',
+    mimo_tts_style_prompt: '用清晰、年轻、温和的中文女声朗读，语速适中，像耐心老师讲课。',
+    transcription_provider: 'local_sensevoice',
     local_transcription_root: guessedLocalRoot,
     local_transcription_python: '',
     local_transcription_model_id: 'iic/SenseVoiceSmall',
     local_transcription_device: 'cuda:0',
     local_transcription_language: 'zh',
+    resource_mode: 'balanced',
   }
 }
 
@@ -500,35 +538,62 @@ const secureStore = new Store<{
   runtimeSettings: RuntimeSettings
   learningLibrary: LearningLibraryState
 }>({
+  name: 'shijie-focus-secure',
+})
+
+const legacySecureStore = new Store<{
+  runtimeSettings?: RuntimeSettings
+  learningLibrary?: LearningLibraryState
+}>({
   name: 'onboard-anything-secure',
 })
+
+function migrateLegacyStoreIfNeeded() {
+  const hasRuntimeSettings = Boolean(secureStore.get('runtimeSettings'))
+  const hasLearningLibrary = Boolean(secureStore.get('learningLibrary'))
+  if (!hasRuntimeSettings) {
+    const legacyRuntimeSettings = legacySecureStore.get('runtimeSettings')
+    if (legacyRuntimeSettings) secureStore.set('runtimeSettings', normalizeSettings(legacyRuntimeSettings))
+  }
+  if (!hasLearningLibrary) {
+    const legacyLearningLibrary = legacySecureStore.get('learningLibrary')
+    if (legacyLearningLibrary) secureStore.set('learningLibrary', legacyLearningLibrary)
+  }
+}
 
 function normalizeSettings(raw: Partial<RuntimeSettings> | null | undefined): RuntimeSettings {
   const defaults = defaultSettings()
   return {
     sessdata: sanitizeSecret(raw?.sessdata ?? defaults.sessdata),
-    output_dir: path.resolve(String(raw?.output_dir ?? defaults.output_dir).trim() || defaults.output_dir),
+    output_dir: normalizeOutputRoot(raw?.output_dir ?? defaults.output_dir),
     obsidian_vault_path: sanitizeOptionalPath(raw?.obsidian_vault_path ?? defaults.obsidian_vault_path),
     obsidian_export_folder: sanitizeDisplayText(raw?.obsidian_export_folder ?? defaults.obsidian_export_folder, defaults.obsidian_export_folder),
     obsidian_auto_sync: raw?.obsidian_auto_sync === undefined ? defaults.obsidian_auto_sync : Boolean(raw?.obsidian_auto_sync),
-    coach_api_base_url: sanitizeBaseUrl(raw?.coach_api_base_url ?? defaults.coach_api_base_url, defaults.coach_api_base_url),
-    coach_api_key: sanitizeSecret(raw?.coach_api_key ?? defaults.coach_api_key),
-    coach_model: sanitizeSecret(raw?.coach_model ?? defaults.coach_model) || defaults.coach_model,
-    distiller_api_base_url: sanitizeBaseUrl(raw?.distiller_api_base_url ?? defaults.distiller_api_base_url, defaults.distiller_api_base_url),
-    distiller_api_key: sanitizeSecret(raw?.distiller_api_key ?? defaults.distiller_api_key),
-    distiller_model: sanitizeSecret(raw?.distiller_model ?? defaults.distiller_model) || defaults.distiller_model,
-    transcription_provider: sanitizeTranscriptionProvider(raw?.transcription_provider ?? defaults.transcription_provider),
-    groq_api_key: sanitizeSecret(raw?.groq_api_key ?? defaults.groq_api_key),
-    groq_transcription_model:
-      sanitizeSecret(raw?.groq_transcription_model ?? defaults.groq_transcription_model) || defaults.groq_transcription_model,
-    local_transcription_root: sanitizeOptionalPath(raw?.local_transcription_root ?? defaults.local_transcription_root),
-    local_transcription_python: sanitizeOptionalPath(raw?.local_transcription_python ?? defaults.local_transcription_python),
+    tts_provider: sanitizeTtsProvider(raw?.tts_provider ?? defaults.tts_provider),
+    minimax_api_key: sanitizeSecret(raw?.minimax_api_key ?? defaults.minimax_api_key),
+    minimax_tts_endpoint: sanitizeBaseUrl(raw?.minimax_tts_endpoint ?? defaults.minimax_tts_endpoint, defaults.minimax_tts_endpoint),
+    minimax_tts_model:
+      sanitizeSecret(raw?.minimax_tts_model ?? defaults.minimax_tts_model) || defaults.minimax_tts_model,
+    minimax_tts_voice_id: sanitizeDisplayText(raw?.minimax_tts_voice_id ?? defaults.minimax_tts_voice_id),
+    minimax_tts_speed: sanitizeNumberInRange(raw?.minimax_tts_speed, defaults.minimax_tts_speed, 0.5, 2),
+    minimax_tts_volume: sanitizeNumberInRange(raw?.minimax_tts_volume, defaults.minimax_tts_volume, 0.1, 5),
+    minimax_tts_pitch: sanitizeNumberInRange(raw?.minimax_tts_pitch, defaults.minimax_tts_pitch, -12, 12),
+    mimo_api_key: sanitizeSecret(raw?.mimo_api_key ?? defaults.mimo_api_key),
+    mimo_tts_endpoint: sanitizeBaseUrl(raw?.mimo_tts_endpoint ?? defaults.mimo_tts_endpoint, defaults.mimo_tts_endpoint),
+    mimo_tts_model:
+      sanitizeSecret(raw?.mimo_tts_model ?? defaults.mimo_tts_model) || defaults.mimo_tts_model,
+    mimo_tts_voice_id: sanitizeDisplayText(raw?.mimo_tts_voice_id ?? defaults.mimo_tts_voice_id, defaults.mimo_tts_voice_id),
+    mimo_tts_style_prompt: sanitizeDisplayText(raw?.mimo_tts_style_prompt ?? defaults.mimo_tts_style_prompt, defaults.mimo_tts_style_prompt),
+    transcription_provider: sanitizeTranscriptionProvider(raw?.transcription_provider || defaults.transcription_provider),
+    local_transcription_root: sanitizeOptionalPath(raw?.local_transcription_root || defaults.local_transcription_root),
+    local_transcription_python: sanitizeOptionalPath(raw?.local_transcription_python || defaults.local_transcription_python),
     local_transcription_model_id:
       sanitizeSecret(raw?.local_transcription_model_id ?? defaults.local_transcription_model_id) || defaults.local_transcription_model_id,
     local_transcription_device:
       sanitizeSecret(raw?.local_transcription_device ?? defaults.local_transcription_device) || defaults.local_transcription_device,
     local_transcription_language:
       sanitizeSecret(raw?.local_transcription_language ?? defaults.local_transcription_language) || defaults.local_transcription_language,
+    resource_mode: sanitizeResourceMode(raw?.resource_mode ?? defaults.resource_mode),
   }
 }
 
@@ -540,6 +605,129 @@ function saveSettings(next: RuntimeSettings) {
   const normalized = normalizeSettings(next)
   secureStore.set('runtimeSettings', normalized)
   return normalized
+}
+
+migrateLegacyStoreIfNeeded()
+
+function isExistingDirectory(targetPath: string) {
+  try {
+    return Boolean(targetPath && fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory())
+  } catch {
+    return false
+  }
+}
+
+function resolveCanonicalOutputRoot() {
+  return path.join(devProjectRoot, 'output')
+}
+
+function isLegacyOutputRoot(targetPath: string) {
+  if (!targetPath) return false
+  const normalized = path.resolve(targetPath).toLowerCase()
+  return [
+    path.resolve(devProjectRoot, 'desktop', 'release', 'output').toLowerCase(),
+    path.resolve(devProjectRoot, 'desktop', 'output').toLowerCase(),
+  ].includes(normalized)
+}
+
+function normalizeOutputRoot(value: unknown) {
+  const canonical = resolveCanonicalOutputRoot()
+  const rawPath = String(value ?? '').trim()
+  if (!rawPath || isLegacyOutputRoot(rawPath)) return canonical
+  return path.resolve(rawPath)
+}
+
+function resolveCourseImportDefaultPath(settings: RuntimeSettings) {
+  const candidates = [
+    resolveCoursePackageOutputDir(settings),
+    settings.output_dir,
+    path.join(devProjectRoot, 'output'),
+  ]
+
+  return candidates.find(isExistingDirectory) || dataRoot
+}
+
+function resolveMaterialOutputDir(settings: RuntimeSettings) {
+  return path.join(settings.output_dir, 'materials')
+}
+
+function resolveCoursePackageOutputDir(settings: RuntimeSettings) {
+  return path.join(settings.output_dir, 'courses')
+}
+
+function listMaterialPackages(settings: RuntimeSettings) {
+  const rootDir = resolveMaterialOutputDir(settings)
+  const coursePackageRootDir = resolveCoursePackageOutputDir(settings)
+  fs.mkdirSync(rootDir, { recursive: true })
+  fs.mkdirSync(coursePackageRootDir, { recursive: true })
+  const publishedBySourceId = new Map<string, string>()
+  const publishedByTitle = new Map<string, string>()
+
+  for (const entry of fs.readdirSync(coursePackageRootDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.course-package.json')) continue
+    const coursePath = path.join(coursePackageRootDir, entry.name)
+    try {
+      const payload = JSON.parse(fs.readFileSync(coursePath, 'utf-8')) as Record<string, unknown>
+      const source = payload.source && typeof payload.source === 'object' ? payload.source as Record<string, unknown> : {}
+      const course = payload.course && typeof payload.course === 'object' ? payload.course as Record<string, unknown> : {}
+      const sourceId = sanitizeDisplayText(source.source_id ?? '')
+      const title = sanitizeDisplayText(course.title ?? source.title ?? '')
+      if (sourceId) publishedBySourceId.set(sourceId, coursePath)
+      if (title) publishedByTitle.set(title, coursePath)
+    } catch {
+      // Ignore unrelated JSON files in the import directory.
+    }
+  }
+
+  const records: MaterialPackageSummary[] = []
+  for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.endsWith('.course_material')) continue
+    const materialPath = path.join(rootDir, entry.name)
+    const manifestPath = path.join(materialPath, 'manifest.json')
+    let manifest: Record<string, unknown> = {}
+    try {
+      if (fs.existsSync(manifestPath)) {
+        manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as Record<string, unknown>
+      }
+    } catch {
+      manifest = {}
+    }
+    const source = manifest.source && typeof manifest.source === 'object' ? manifest.source as Record<string, unknown> : {}
+    const stat = fs.statSync(materialPath)
+    const title = sanitizeDisplayText(source.title ?? entry.name.replace(/\.course_material$/u, ''), entry.name)
+    const sourceId = sanitizeDisplayText(source.source_id ?? '')
+    const finalCoursePath = path.join(materialPath, 'course_draft', 'final.course-package.json')
+    const publishedCoursePath =
+      (sourceId ? publishedBySourceId.get(sourceId) : '') ||
+      publishedByTitle.get(title) ||
+      path.join(coursePackageRootDir, `${sanitizeFileNameSegment(title, entry.name)}.course-package.json`)
+    const finalCourseExists = fs.existsSync(finalCoursePath)
+    const publishedCourseExists = fs.existsSync(publishedCoursePath)
+    const importReadyCoursePath = finalCourseExists ? finalCoursePath : publishedCoursePath
+    records.push({
+      name: entry.name,
+      path: materialPath,
+      title,
+      sourceId,
+      blockCount: Number(manifest.block_count ?? 0) || 0,
+      textLength: Number(manifest.text_length ?? manifest.raw_transcript_length ?? 0) || 0,
+      updatedAt: stat.mtimeMs,
+      startHerePath: path.join(materialPath, 'START_HERE.md'),
+      codexPromptPath: path.join(materialPath, 'codex_tasks', '00_new_window_prompt.md'),
+      finalCoursePath,
+      finalCourseExists,
+      publishedCoursePath,
+      publishedCourseExists,
+      importReadyCoursePath,
+      importReadyCourseExists: finalCourseExists || publishedCourseExists,
+    })
+  }
+
+  return {
+    rootDir,
+    coursePackageRootDir,
+    records: records.sort((left, right) => right.updatedAt - left.updatedAt),
+  }
 }
 
 function normalizeCourseTextValue(value: unknown) {
@@ -758,91 +946,9 @@ function resequenceChildren(children: Array<Record<string, unknown>>) {
   })
 }
 
-function collectStageCommonMistakes(children: Array<Record<string, unknown>>) {
-  return takeUniqueCourseTexts(
-    children.flatMap((child) => {
-      const knowledge = child.knowledge && typeof child.knowledge === 'object' ? (child.knowledge as Record<string, unknown>) : {}
-      return Array.isArray(knowledge.common_mistakes) ? knowledge.common_mistakes : []
-    }),
-    4,
-  )
-}
-
-function buildStageQuizQuestions(parentTitle: string, children: Array<Record<string, unknown>>, commonMistakes: string[]) {
-  const previewTitles = takeUniqueCourseTexts(children.map((child) => child.title), 3)
-  const questions: string[] = []
-  if (previewTitles.length) {
-    questions.push(`如果要你用自己的话说明“${previewTitles[0]}”在 ${parentTitle} 里的作用，你会怎么讲？`)
-  }
-  if (previewTitles.length >= 2) {
-    questions.push(`学完“${previewTitles[0]}”以后，为什么还要继续掌握“${previewTitles[1]}”？请说出它们之间的衔接。`)
-  }
-  if (commonMistakes.length) {
-    questions.push(`有人在这一阶段常犯“${commonMistakes[0]}”这样的错误，你会怎么提醒他纠正？`)
-  } else if (previewTitles.length) {
-    questions.push(`如果把 ${parentTitle} 真正用起来，你觉得最容易忽略的细节会是什么？为什么？`)
-  }
-  return takeUniqueCourseTexts(questions, 3)
-}
-
-function buildStageQuizExamples(recapId: string, questions: string[]) {
-  return questions.map((question, index) => ({
-    id: `example_${recapId.slice(0, 20)}_${String(index + 1).padStart(2, '0')}`.slice(0, 64),
-    title: `阶段小测 ${index + 1}`,
-    scenario: question.slice(0, 240),
-    takeaway: '先试着用自己的话回答，再回头检查复盘要点。',
-  }))
-}
-
 function isStageRecapNode(node: Record<string, unknown>) {
   const title = normalizeCourseTextValue(node.title).toLocaleLowerCase('zh-CN')
-  return Boolean(title) && (title.includes('复盘') || title.includes('小测') || title.includes('回顾'))
-}
-
-function buildStageRecapNode(parentNode: Record<string, unknown>, children: Array<Record<string, unknown>>) {
-  const baseChildren = children.filter((child) => !isStageRecapNode(child))
-  if (baseChildren.length < 2) return null
-
-  const parentId = normalizeCourseTextValue(parentNode.id)
-  const parentTitle = normalizeCourseTextValue(parentNode.title) || '本阶段'
-  const previewTitles = takeUniqueCourseTexts(baseChildren.map((child) => child.title), 3)
-  const previewText = previewTitles.slice(0, 3).join('、') || parentTitle
-  const recapTitle = '阶段复盘与小测'
-  const recapSummary = `回顾 ${previewText} 的关键概念、操作顺序与常见易错点，检查自己是否已经把 ${parentTitle} 的主线真正串起来。`.slice(0, 240)
-  const recapId = makeCourseNodeId('lesson', baseChildren.length + 1, recapTitle, parentId)
-  const knowledge = buildStageKnowledge(recapId, recapTitle, recapSummary)
-  const commonMistakes = collectStageCommonMistakes(baseChildren)
-  const quizQuestions = buildStageQuizQuestions(parentTitle, baseChildren, commonMistakes)
-  knowledge.checkpoints = takeUniqueCourseTexts(
-    [
-      `能用自己的话串起 ${parentTitle} 的整体主线。`,
-      ...previewTitles.slice(0, 2).map((title) => `能解释 ${title} 在这一阶段中的作用。`),
-      ...quizQuestions.map((question, index) => `小测 ${index + 1}：${question}`),
-      '开始阶段复盘，检查自己是否真的掌握了关键知识点。',
-    ],
-    6,
-  )
-  knowledge.common_mistakes = commonMistakes
-  knowledge.examples = buildStageQuizExamples(recapId, quizQuestions)
-
-  return {
-    id: recapId,
-    node_type: 'lesson',
-    title: recapTitle,
-    summary: recapSummary,
-    order: baseChildren.length + 1,
-    learning_objectives: takeUniqueCourseTexts(
-      [`完成 ${parentTitle} 的阶段复盘`, ...previewTitles, '通过本阶段的小测自检'],
-      4,
-    ),
-    dependencies: normalizeCourseTextValue(baseChildren[baseChildren.length - 1]?.id)
-      ? [normalizeCourseTextValue(baseChildren[baseChildren.length - 1]?.id)]
-      : [],
-    knowledge,
-    children: [],
-    assets: [],
-    gaps: [],
-  }
+  return Boolean(title) && (title.includes('阶段复盘') || title.includes('阶段练习') || ['复盘', '练习', '回顾'].includes(title))
 }
 
 function restructureNodeForTeachingFlow(node: Record<string, unknown>, isRootStage = false): { node: Record<string, unknown>; changed: boolean } {
@@ -875,15 +981,8 @@ function restructureNodeForTeachingFlow(node: Record<string, unknown>, isRootSta
   }
 
   if (isRootStage) {
-    const recapNode = buildStageRecapNode(nextNode, processedChildren)
     const baseChildren = processedChildren.filter((child) => !isStageRecapNode(child))
-    const existingRecap = processedChildren.find((child) => isStageRecapNode(child))
-    if (recapNode) {
-      processedChildren = [...baseChildren, recapNode]
-      if (!existingRecap || normalizeCourseTextValue(existingRecap.id) !== normalizeCourseTextValue(recapNode.id) || normalizeCourseTextValue(existingRecap.summary) !== normalizeCourseTextValue(recapNode.summary)) {
-        changed = true
-      }
-    } else if (existingRecap) {
+    if (baseChildren.length !== processedChildren.length) {
       processedChildren = baseChildren
       changed = true
     }
@@ -906,6 +1005,32 @@ function restructureCourseRootsForTeachingFlow(chapters: Array<Record<string, un
     return result.node
   })
   return { chapters: nextRoots, changed }
+}
+
+function collectCourseNodeIds(chapters: Array<Record<string, unknown>>) {
+  const ids = new Set<string>()
+  const visit = (node: Record<string, unknown>) => {
+    const id = normalizeCourseTextValue(node.id)
+    if (id) ids.add(id)
+    if (Array.isArray(node.children)) {
+      node.children.forEach((child) => {
+        if (child && typeof child === 'object') visit(child as Record<string, unknown>)
+      })
+    }
+  }
+  chapters.forEach(visit)
+  return ids
+}
+
+function filterDependencyGraphByNodeIds(dependencyGraph: unknown, nodeIds: Set<string>) {
+  if (!Array.isArray(dependencyGraph)) return []
+  return dependencyGraph.filter((edge) => {
+    if (!edge || typeof edge !== 'object') return false
+    const record = edge as Record<string, unknown>
+    const from = normalizeCourseTextValue(record.from)
+    const to = normalizeCourseTextValue(record.to)
+    return Boolean(from && to && nodeIds.has(from) && nodeIds.has(to))
+  })
 }
 
 function makeCourseNodeId(kind: 'chapter' | 'section' | 'lesson', index: number, title: string, parentId = '') {
@@ -1014,6 +1139,7 @@ function compactCoursePackagePayload(payload: Record<string, unknown>): {
     }
 
     const nextCourse = { ...((payload.course as Record<string, unknown>) || {}) }
+    const validNodeIds = collectCourseNodeIds(nextChapters)
     nextCourse.learning_outcomes = takeUniqueCourseTexts(
       [
         ...nextChapters.slice(0, 4).map((item) => item.title),
@@ -1031,6 +1157,7 @@ function compactCoursePackagePayload(payload: Record<string, unknown>): {
         ...payload,
         course: nextCourse,
         chapters: nextChapters,
+        dependency_graph: filterDependencyGraphByNodeIds(payload.dependency_graph, validNodeIds),
       },
       changed: true,
     }
@@ -1078,9 +1205,8 @@ function compactCoursePackagePayload(payload: Record<string, unknown>): {
   compactedRoots.length = 0
   compactedRoots.push(...restructureCourseRootsForTeachingFlow(dedupedRoots.chapters).chapters)
 
-  const dependencyGraph = Array.isArray(payload.dependency_graph)
-    ? JSON.parse(JSON.stringify(payload.dependency_graph))
-    : []
+  const validNodeIds = collectCourseNodeIds(compactedRoots)
+  const dependencyGraph = filterDependencyGraphByNodeIds(payload.dependency_graph, validNodeIds)
   const markers = new Set(
     dependencyGraph
       .filter((item: unknown) => item && typeof item === 'object')
@@ -1153,15 +1279,15 @@ function defaultLearningLibraryState(): LearningLibraryState {
 
 function normalizeNodeSession(raw: Partial<PersistedNodeLearningSession> | null | undefined, fallbackNodeId: string): PersistedNodeLearningSession {
   const messages = Array.isArray(raw?.messages) ? raw.messages : []
-  const attemptHistory = Array.isArray(raw?.attemptHistory) ? raw.attemptHistory : []
+  const rawLearningStatus = String(raw?.learningStatus ?? '')
   return {
     nodeId: String(raw?.nodeId ?? fallbackNodeId),
     learningStatus:
-      raw?.learningStatus === 'quizzing' ||
-      raw?.learningStatus === 'correcting' ||
-      raw?.learningStatus === 'completed'
-        ? raw.learningStatus
-        : 'teaching',
+      rawLearningStatus === 'correcting'
+        ? 'completed'
+        : rawLearningStatus === 'quizzing' || rawLearningStatus === 'completed'
+          ? rawLearningStatus
+          : 'teaching',
     messages: messages
       .filter((message) => message && typeof message === 'object')
       .map((message, index) => ({
@@ -1172,28 +1298,6 @@ function normalizeNodeSession(raw: Partial<PersistedNodeLearningSession> | null 
         createdAt: Number(message.createdAt ?? Date.now()),
       })),
     activeQuestion: raw?.activeQuestion ? String(raw.activeQuestion) : null,
-    attemptHistory: attemptHistory
-      .filter((attempt) => attempt && typeof attempt === 'object')
-      .map((attempt, index) => ({
-        id: String(attempt.id ?? `${fallbackNodeId}-attempt-${index}`),
-        nodeTitle: String(attempt.nodeTitle ?? fallbackNodeId),
-        question: typeof attempt.question === 'string' ? attempt.question : null,
-        answer: String(attempt.answer ?? ''),
-        verdict:
-          attempt.verdict === 'correct' || attempt.verdict === 'partial' || attempt.verdict === 'incorrect'
-            ? attempt.verdict
-            : 'incorrect',
-        matchedKeywords: Array.isArray(attempt.matchedKeywords)
-          ? attempt.matchedKeywords.map((keyword) => String(keyword))
-          : [],
-        missingKeywords: Array.isArray(attempt.missingKeywords)
-          ? attempt.missingKeywords.map((keyword) => String(keyword))
-          : [],
-        cautionNotes: Array.isArray(attempt.cautionNotes)
-          ? attempt.cautionNotes.map((note) => String(note))
-          : [],
-        createdAt: Number(attempt.createdAt ?? Date.now()),
-      })),
     lastUserAnswer: String(raw?.lastUserAnswer ?? ''),
     lastEvaluation:
       raw?.lastEvaluation === 'correct' || raw?.lastEvaluation === 'partial' || raw?.lastEvaluation === 'incorrect'
@@ -1244,9 +1348,6 @@ function normalizeLearningRecord(raw: Partial<LearningRecord> | null | undefined
     completedNodeIds: Array.isArray(raw?.completedNodeIds)
       ? raw!.completedNodeIds.map((value) => String(value))
       : existing?.completedNodeIds ?? [],
-    failedNodeIds: Array.isArray(raw?.failedNodeIds)
-      ? raw!.failedNodeIds.map((value) => String(value))
-      : existing?.failedNodeIds ?? [],
     nodeSessions,
     milestoneEvents: Array.isArray(raw?.milestoneEvents)
       ? raw!.milestoneEvents
@@ -1255,7 +1356,6 @@ function normalizeLearningRecord(raw: Partial<LearningRecord> | null | undefined
             kind:
               event?.kind === 'node_complete' ||
               event?.kind === 'stage_complete' ||
-              event?.kind === 'correction_recovery' ||
               event?.kind === 'course_complete'
                 ? event.kind
                 : 'node_complete',
@@ -1361,7 +1461,6 @@ function buildAchievementBadges(record: LearningRecord) {
       .filter((event) => event.kind === 'stage_complete' && event.stageId)
       .map((event) => event.stageId as string),
   ).size
-  const hasComeback = (record.milestoneEvents ?? []).some((event) => event.kind === 'correction_recovery')
   const badges: LearningRecordSummary['achievementBadges'] = []
 
   if (record.completedNodeIds.length >= 1) {
@@ -1391,15 +1490,6 @@ function buildAchievementBadges(record: LearningRecord) {
     })
   }
 
-  if (hasComeback) {
-    badges.push({
-      code: 'comeback',
-      label: '越错越稳',
-      description: '出现过卡点，但最终靠纠错把知识拿下了。',
-      tone: 'info',
-    })
-  }
-
   if (record.progressPercent >= 50) {
     badges.push({
       code: 'midway',
@@ -1422,22 +1512,6 @@ function buildAchievementBadges(record: LearningRecord) {
 }
 
 function summarizeLearningRecord(record: LearningRecord): LearningRecordSummary {
-  const allAttempts = Object.values(record.nodeSessions).flatMap((session) => session.attemptHistory || [])
-  const partialAttempts = allAttempts.filter((attempt) => attempt.verdict === 'partial')
-  const incorrectAttempts = allAttempts.filter((attempt) => attempt.verdict === 'incorrect')
-  const hotspotScores = new Map<string, number>()
-  ;[...incorrectAttempts, ...partialAttempts].forEach((attempt) => {
-    const weight = attempt.verdict === 'incorrect' ? 2 : 1
-    hotspotScores.set(attempt.nodeTitle, (hotspotScores.get(attempt.nodeTitle) ?? 0) + weight)
-  })
-  const hotspotNodeTitle =
-    [...hotspotScores.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? null
-  const dominantChallenge: LearningRecordSummary['dominantChallenge'] =
-    incorrectAttempts.length >= Math.max(2, partialAttempts.length)
-      ? 'incorrect-heavy'
-      : partialAttempts.length > 0
-        ? 'partial-heavy'
-        : 'stable'
   const stageCompletedCount = new Set(
     (record.milestoneEvents ?? [])
       .filter((event) => event.kind === 'stage_complete' && event.stageId)
@@ -1465,10 +1539,6 @@ function summarizeLearningRecord(record: LearningRecord): LearningRecordSummary 
     currentNodeTitle: findNodeTitleFromCourseText(record.courseText, record.currentNodeId),
     completedCount: record.completedNodeIds.length,
     sessionCount: Object.keys(record.nodeSessions).length,
-    partialCount: partialAttempts.length,
-    incorrectCount: incorrectAttempts.length,
-    hotspotNodeTitle,
-    dominantChallenge,
     stageCompletedCount,
     totalStageCount,
     recentMilestones,
@@ -1639,15 +1709,6 @@ function appendRuntimeLog(message: string) {
   }
 }
 
-function emitArchiveLog(message: string) {
-  appendRuntimeLog(message)
-  mainWindow?.webContents.send('archive-log', message.endsWith('\n') ? message : `${message}\n`)
-}
-
-function emitArchiveProgress(payload: { message: string; percent: number }) {
-  mainWindow?.webContents.send('archive-progress', payload)
-}
-
 function emitDistillProgress(payload: DistillProgressPayload) {
   appendRuntimeLog(`distill-progress ${payload.percent}% ${payload.message}`)
   mainWindow?.webContents.send('distill-progress', payload)
@@ -1816,147 +1877,71 @@ async function fetchSettingsStatus(settings: RuntimeSettings = loadSettings()): 
     }
   }
 
-  const validateOpenAICompatible = async (config: { apiKey: string; baseUrl: string; model: string }) => {
-    const response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${config.apiKey.trim()}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: config.model,
-        messages: [{ role: 'user', content: '请回复：ok' }],
-        temperature: 0.1,
-        max_tokens: 8,
-      }),
-    })
-    return response
-  }
-
-  const coach = {
-    configured: Boolean(settings.coach_api_key.trim()),
-    valid: false,
-    baseUrl: settings.coach_api_base_url || 'https://api.minimaxi.com/v1',
-    model: settings.coach_model || 'MiniMax-M2.7',
-    message: '未配置 API Key',
-  }
-
-  if (coach.configured) {
-    try {
-      const response = await validateOpenAICompatible({
-        apiKey: settings.coach_api_key,
-        baseUrl: coach.baseUrl,
-        model: coach.model,
-      })
-      if (response.ok) {
-        const payload = await response.json()
-        coach.valid = Boolean(payload?.choices?.length)
-        coach.message = coach.valid ? `已配置 ${coach.model}` : '返回结果异常'
-      } else if (response.status === 401) {
-        coach.message = 'API Key 无效'
-      } else if (response.status === 403) {
-        coach.message = 'API Key 无权限'
-      } else {
-        coach.message = `校验失败 · HTTP ${response.status}`
-      }
-    } catch {
-      coach.message = 'API 检测失败'
-    }
-  }
-
-  const distiller = {
-    configured: Boolean(settings.distiller_api_key.trim()),
-    valid: false,
-    baseUrl: settings.distiller_api_base_url || 'https://api.minimaxi.com/v1',
-    model: settings.distiller_model || 'MiniMax-M2.7',
-    message: '未配置 Distiller API Key',
-  }
-
-  if (distiller.configured) {
-    try {
-      const response = await validateOpenAICompatible({
-        apiKey: settings.distiller_api_key,
-        baseUrl: distiller.baseUrl,
-        model: distiller.model,
-      })
-
-      if (response.ok) {
-        const payload = await response.json()
-        distiller.valid = Boolean(payload?.choices?.length)
-        distiller.message = distiller.valid ? `已配置 ${distiller.model}` : '返回结果异常'
-      } else if (response.status === 401) {
-        distiller.message = 'API Key 无效'
-      } else if (response.status === 403) {
-        distiller.message = 'API Key 无权限'
-      } else {
-        distiller.message = `校验失败 · HTTP ${response.status}`
-      }
-    } catch {
-      distiller.message = 'API 检测失败'
-    }
-  }
-
-  const groq = {
-    configured: Boolean(settings.groq_api_key.trim()),
-    valid: false,
-    model: settings.groq_transcription_model || 'whisper-large-v3-turbo',
-    message: '未配置 Groq API Key',
-  }
-
-  if (groq.configured) {
-    try {
-      const response = await fetch('https://api.groq.com/openai/v1/models', {
-        headers: {
-          Authorization: `Bearer ${settings.groq_api_key.trim()}`,
-        },
-      })
-
-      if (response.ok) {
-        const payload = await response.json()
-        const models = Array.isArray(payload?.data) ? payload.data : []
-        const modelIds = new Set(models.map((item: { id?: string }) => String(item?.id ?? '')))
-        groq.valid = modelIds.size === 0 || modelIds.has(groq.model)
-        groq.message = groq.valid ? `已配置 ${groq.model}` : `模型不可用：${groq.model}`
-      } else if (response.status === 401) {
-        groq.message = 'API Key 无效'
-      } else if (response.status === 403) {
-        groq.message = 'API Key 无权限'
-      } else {
-        groq.message = `校验失败 · HTTP ${response.status}`
-      }
-    } catch {
-      groq.message = 'API 检测失败'
-    }
-  }
-
-  return { bilibili, coach, distiller, groq }
+  return { bilibili }
 }
 
 function buildPythonEnv(settings: RuntimeSettings, extraEnv: NodeJS.ProcessEnv = {}) {
+  const resourceMode = sanitizeResourceMode(settings.resource_mode)
+  const configuredLocalDevice = settings.local_transcription_device || 'cuda:0'
+  const localTranscriptionDevice =
+    resourceMode === 'background' && configuredLocalDevice.toLowerCase().startsWith('cuda')
+      ? 'cpu'
+      : configuredLocalDevice
+  const resourceProfile: Record<string, string> =
+    resourceMode === 'background'
+      ? {
+          ONBOARD_RESOURCE_MODE: 'background',
+          ONBOARD_BACKGROUND_MODE: '1',
+          ONBOARD_AUDIO_PREPARE_WORKERS: '1',
+          ONBOARD_AUDIO_TRANSCRIBE_WORKERS: '1',
+          ONBOARD_AUDIO_CHUNK_WORKERS: '1',
+          ONBOARD_LOCAL_AUDIO_TRANSCRIBE_WORKERS: '1',
+          ONBOARD_LOCAL_SENSEVOICE_MAX_CHUNK_SECONDS: '120',
+          ONBOARD_AUDIO_MAX_CHUNK_SECONDS: '300',
+          ONBOARD_CHUNK_DISTILL_CONCURRENCY: '1',
+          ONBOARD_BATCH_REDUCE_CONCURRENCY: '1',
+        }
+      : resourceMode === 'fast'
+        ? {
+            ONBOARD_RESOURCE_MODE: 'fast',
+            ONBOARD_BACKGROUND_MODE: '0',
+            ONBOARD_AUDIO_PREPARE_WORKERS: '3',
+            ONBOARD_AUDIO_TRANSCRIBE_WORKERS: '4',
+            ONBOARD_AUDIO_CHUNK_WORKERS: '4',
+            ONBOARD_LOCAL_AUDIO_TRANSCRIBE_WORKERS: '1',
+            ONBOARD_LOCAL_SENSEVOICE_MAX_CHUNK_SECONDS: '300',
+            ONBOARD_AUDIO_MAX_CHUNK_SECONDS: '480',
+            ONBOARD_CHUNK_DISTILL_CONCURRENCY: '4',
+            ONBOARD_BATCH_REDUCE_CONCURRENCY: '3',
+          }
+        : {
+            ONBOARD_RESOURCE_MODE: 'balanced',
+            ONBOARD_BACKGROUND_MODE: '0',
+            ONBOARD_AUDIO_PREPARE_WORKERS: '2',
+            ONBOARD_AUDIO_TRANSCRIBE_WORKERS: '3',
+            ONBOARD_AUDIO_CHUNK_WORKERS: '3',
+            ONBOARD_LOCAL_AUDIO_TRANSCRIBE_WORKERS: '1',
+            ONBOARD_LOCAL_SENSEVOICE_MAX_CHUNK_SECONDS: '240',
+            ONBOARD_AUDIO_MAX_CHUNK_SECONDS: '480',
+            ONBOARD_CHUNK_DISTILL_CONCURRENCY: '4',
+            ONBOARD_BATCH_REDUCE_CONCURRENCY: '3',
+          }
+
   return {
     ...process.env,
+    ...resourceProfile,
     ...extraEnv,
-    BILIARCHIVE_HOME: dataRoot,
-    BILIARCHIVE_SETTINGS_PATH: settingsPath,
-    BILIARCHIVE_OUTPUT_DIR: settings.output_dir,
+    SHIJIE_FOCUS_HOME: dataRoot,
+    SHIJIE_FOCUS_SETTINGS_PATH: settingsPath,
+    SHIJIE_FOCUS_OUTPUT_DIR: settings.output_dir,
     BILIBILI_SESSDATA: settings.sessdata,
-    ONBOARD_COACH_BASE_URL: settings.coach_api_base_url,
-    ONBOARD_COACH_API_KEY: settings.coach_api_key,
-    ONBOARD_COACH_MODEL: settings.coach_model,
-    ONBOARD_DISTILLER_BASE_URL: settings.distiller_api_base_url,
-    ONBOARD_DISTILLER_API_KEY: settings.distiller_api_key,
-    ONBOARD_DISTILLER_MODEL: settings.distiller_model,
-    MINIMAX_BASE_URL: settings.distiller_api_base_url,
-    MINIMAX_API_KEY: settings.distiller_api_key,
-    MINIMAX_MODEL: settings.distiller_model,
     ONBOARD_TRANSCRIPTION_PROVIDER: settings.transcription_provider,
-    GROQ_API_KEY: settings.groq_api_key,
-    GROQ_TRANSCRIPTION_MODEL: settings.groq_transcription_model,
     ONBOARD_LOCAL_TRANSCRIPTION_ROOT: settings.local_transcription_root,
     ONBOARD_LOCAL_TRANSCRIPTION_PYTHON: settings.local_transcription_python,
     ONBOARD_LOCAL_TRANSCRIPTION_MODEL_ID: settings.local_transcription_model_id,
-    ONBOARD_LOCAL_TRANSCRIPTION_DEVICE: settings.local_transcription_device,
+    ONBOARD_LOCAL_TRANSCRIPTION_DEVICE: localTranscriptionDevice,
     ONBOARD_LOCAL_TRANSCRIPTION_LANGUAGE: settings.local_transcription_language,
+    ONBOARD_RESOURCE_MODE: resourceMode,
     PYTHONIOENCODING: 'utf-8',
     PYTHONUTF8: '1',
     PYTHONUNBUFFERED: '1',
@@ -2004,10 +1989,6 @@ function buildObsidianNodeTitle(rawTitle: string, parentTitle: string | null) {
     ? stripObsidianTitleNoise(stripStagePrefix(sanitizeDisplayText(parentTitle, '未命名主线')))
     : null
 
-  if (cleanedRawTitle === '阶段复盘与小测') {
-    return normalizedParent ? `${normalizedParent} · 复盘与小测` : cleanedRawTitle
-  }
-
   const genericLeafTitles = new Set([
     '定义',
     '概念',
@@ -2051,6 +2032,7 @@ function renderWikiList(items: Array<{ target: string; label: string }>) {
   return items.map((item) => `- [[${item.target}|${item.label}]]`).join('\n')
 }
 
+
 function normalizeMarkdownNewlines(value: string) {
   return value.replace(/\r\n/g, '\n')
 }
@@ -2071,6 +2053,149 @@ function renderMarkdownSection(title: string, fallbackContent: string, existingM
   const preserved = existingMarkdown ? extractMarkdownSection(existingMarkdown, title) : ''
   const content = preserved || fallbackContent
   return [`## ${title}`, '', content, '']
+}
+
+function indentCalloutBody(content: string) {
+  const normalized = normalizeMarkdownNewlines(content).trim()
+  if (!normalized) return '> 暂无'
+  return normalized.split('\n').map((line) => `> ${line}`).join('\n')
+}
+
+function renderObsidianCallout(type: string, title: string, content: string, options: { folded?: boolean } = {}) {
+  const marker = options.folded ? `[!${type}]-` : `[!${type}]`
+  return [`> ${marker} ${title}`, indentCalloutBody(content)].join('\n')
+}
+
+function renderObsidianCalloutList(type: string, title: string, items: string[]) {
+  return renderObsidianCallout(type, title, items.length ? renderBulletList(items) : '- 暂无')
+}
+
+function normalizeCalloutHeading(value: string) {
+  return value
+    .replace(/^[\p{Extended_Pictographic}\u2600-\u27BF]\s*/u, '')
+    .replace(/[：:]\s*$/, '')
+    .trim()
+}
+
+function resolveTeachingSectionCallout(heading: string): { type: string; folded?: boolean } | null {
+  const normalized = normalizeCalloutHeading(heading)
+  if (/这一关要学会什么|学习目标|目标|要学会什么/u.test(normalized)) return { type: 'abstract' }
+  if (/核心概念|基础概念|概念|定义|是什么/u.test(normalized)) return { type: 'abstract' }
+  if (/前置条件|准备|依赖|环境|基础要求/u.test(normalized)) return { type: 'info' }
+  if (/配置步骤|标准操作步骤|操作步骤|步骤|流程|怎么做|如何做/u.test(normalized)) return { type: 'todo' }
+  if (/验证|排错|检查|自查|评分点|验收/u.test(normalized)) return { type: 'example' }
+  if (/为什么|原理|机制|逻辑|重要性|每一步为什么重要/u.test(normalized)) return { type: 'info' }
+  if (/例子|示例|案例|场景|演示/u.test(normalized)) return { type: 'example' }
+  if (/注意|错误|误区|陷阱|红线|风险/u.test(normalized)) return { type: 'warning' }
+  if (/一句话记忆|记忆|口诀|总结/u.test(normalized)) return { type: 'quote' }
+  return null
+}
+
+function enhanceTeachingMarkdownForObsidian(markdown: string) {
+  const normalized = normalizeMarkdownNewlines(markdown).trim()
+  if (!normalized) return ''
+
+  const lines = normalized.split('\n')
+  const output: string[] = []
+  let index = 0
+
+  while (index < lines.length) {
+    const headingMatch = lines[index].match(/^(#{2,4})\s+(.+?)\s*$/)
+    if (!headingMatch) {
+      output.push(lines[index])
+      index += 1
+      continue
+    }
+
+    const level = headingMatch[1].length
+    const heading = headingMatch[2].trim()
+    const callout = resolveTeachingSectionCallout(heading)
+    if (!callout) {
+      output.push(lines[index])
+      index += 1
+      continue
+    }
+
+    index += 1
+    const sectionLines: string[] = []
+    while (index < lines.length) {
+      const nextHeading = lines[index].match(/^(#{2,4})\s+(.+?)\s*$/)
+      if (nextHeading && nextHeading[1].length <= level) break
+      sectionLines.push(lines[index])
+      index += 1
+    }
+
+    const sectionBody = sectionLines.join('\n').trim()
+    if (!sectionBody) {
+      output.push(`${headingMatch[1]} ${heading}`)
+      continue
+    }
+
+    output.push('', renderObsidianCallout(callout.type, normalizeCalloutHeading(heading), sectionBody, { folded: callout.folded }), '')
+  }
+
+  return output.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+function ensureObsidianCourseSnippet(vaultPath: string) {
+  const snippetsDir = path.join(vaultPath, '.obsidian', 'snippets')
+  fs.mkdirSync(snippetsDir, { recursive: true })
+  const snippetPath = path.join(snippetsDir, 'shijie-focus-course.css')
+  const css = [
+    '/* 视界专注课程档案：启用位置 Obsidian 设置 -> 外观 -> CSS snippets -> shijie-focus-course */',
+    '.markdown-preview-view.shijie-course-note,',
+    '.markdown-preview-view.shijie-course-home,',
+    '.markdown-preview-view.shijie-course-board,',
+    '.markdown-reading-view .markdown-preview-view.shijie-course-note,',
+    '.markdown-reading-view .markdown-preview-view.shijie-course-home,',
+    '.markdown-reading-view .markdown-preview-view.shijie-course-board {',
+    '  --shijie-accent: 125, 211, 252;',
+    '  --shijie-soft-border: rgba(255, 255, 255, 0.10);',
+    '}',
+    '',
+    '.callout[data-callout="goal"] {',
+    '  --callout-color: 125, 211, 252;',
+    '  --callout-icon: lucide-crosshair;',
+    '}',
+    '',
+    '.markdown-preview-view.shijie-course-note .callout,',
+    '.markdown-preview-view.shijie-course-home .callout,',
+    '.markdown-preview-view.shijie-course-board .callout {',
+    '  border-radius: 14px;',
+    '  border: 1px solid var(--shijie-soft-border);',
+    '  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.10);',
+    '}',
+    '',
+    '.markdown-preview-view.shijie-course-note .callout-title,',
+    '.markdown-preview-view.shijie-course-home .callout-title,',
+    '.markdown-preview-view.shijie-course-board .callout-title {',
+    '  font-weight: 700;',
+    '  letter-spacing: 0.01em;',
+    '}',
+    '',
+    '.markdown-preview-view.shijie-course-note h1,',
+    '.markdown-preview-view.shijie-course-home h1,',
+    '.markdown-preview-view.shijie-course-board h1 {',
+    '  letter-spacing: 0;',
+    '  border-bottom: 1px solid rgba(255, 255, 255, 0.08);',
+    '  padding-bottom: 0.35em;',
+    '}',
+    '',
+    '.markdown-preview-view.shijie-course-note h2,',
+    '.markdown-preview-view.shijie-course-home h2,',
+    '.markdown-preview-view.shijie-course-board h2 {',
+    '  margin-top: 1.35em;',
+    '  letter-spacing: 0;',
+    '}',
+    '',
+    '.markdown-preview-view.shijie-course-note p,',
+    '.markdown-preview-view.shijie-course-note li {',
+    '  line-height: 1.85;',
+    '}',
+    '',
+  ].join('\n')
+  fs.writeFileSync(snippetPath, css, 'utf-8')
+  return snippetPath
 }
 
 function buildAppDeepLink(packageId: string, nodeId?: string | null) {
@@ -2096,6 +2221,17 @@ function flattenCourseNodes(nodes: Record<string, unknown>[], parentId: string |
   return result
 }
 
+type ObsidianReadableLessonMeta = {
+  id: string
+  title: string
+  noteTitle: string
+  wikiTarget: string
+  filePath: string
+  parentId: string | null
+  rootTitle: string
+  node: Record<string, unknown>
+}
+
 function exportCourseToObsidian(settings: RuntimeSettings, payload: ObsidianExportPayload): ObsidianExportResult {
   const vaultPath = settings.obsidian_vault_path
   if (!vaultPath) {
@@ -2105,12 +2241,37 @@ function exportCourseToObsidian(settings: RuntimeSettings, payload: ObsidianExpo
     throw new Error('Obsidian Vault 路径不存在，或不是文件夹。')
   }
 
-  const course = payload.course ?? {}
-  const courseMeta = ((course.course as Record<string, unknown> | undefined) ?? {})
-  const sourceMeta = ((course.source as Record<string, unknown> | undefined) ?? {})
-  const chapters = Array.isArray(course.chapters) ? (course.chapters as Record<string, unknown>[]) : []
+  const asText = (value: unknown, fallback = '') => sanitizeDisplayText(String(value ?? ''), fallback)
+  const asStringList = (value: unknown) =>
+    Array.isArray(value)
+      ? value.map((item) => sanitizeDisplayText(String(item ?? ''))).filter(Boolean)
+      : []
+  const asRecordList = (value: unknown) =>
+    Array.isArray(value)
+      ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+      : []
+  const getRecord = (value: unknown) => (value && typeof value === 'object' ? value as Record<string, unknown> : {})
+  const renderOptionalBullets = (items: string[]) => (items.length ? renderBulletList(items) : '- 暂无')
+  const uniqueStrings = (items: string[]) => Array.from(new Set(items.filter(Boolean)))
+  const normalizeLessonMarkdown = (markdown: string) => markdown.replace(/^##\s+/gm, '### ')
+  const renderReadableAnswer = (markdown: string) => {
+    const normalized = normalizeMarkdownNewlines(markdown).trim()
+    if (!normalized) return '- 暂无标准答案'
+    return normalized
+      .split(/(?<=[。！？；;])/u)
+      .map((sentence) => sentence.trim())
+      .filter(Boolean)
+      .join('\n\n')
+  }
+  const getTeacher = (node: Record<string, unknown>) => getRecord(node.teacher_ready_content)
+  const getKnowledge = (node: Record<string, unknown>) => getRecord(node.knowledge)
+
+  const course = compactCoursePackagePayload((payload.course ?? {}) as Record<string, unknown>).payload
+  const courseMeta = getRecord(course.course)
+  const sourceMeta = getRecord(course.source)
+  const chapters = asRecordList(course.chapters)
   const packageId = String(course.package_id ?? 'unknown-package')
-  const courseTitle = sanitizeDisplayText(courseMeta.title ?? sourceMeta.title ?? packageId, '未命名课程')
+  const courseTitle = asText(courseMeta.title ?? sourceMeta.title ?? packageId, '未命名课程')
   const exportedAt = new Date().toISOString()
   const exportFolder = sanitizeFileNameSegment(settings.obsidian_export_folder || '视界专注', '视界专注')
   const courseFolder = sanitizeFileNameSegment(courseTitle, packageId)
@@ -2119,300 +2280,266 @@ function exportCourseToObsidian(settings: RuntimeSettings, payload: ObsidianExpo
   const courseWikiRoot = `${exportWikiFolder}/${courseWikiFolder}`
   const overviewNoteTitle = '课程总览'
   const progressNoteTitle = '学习看板'
+  const conceptNoteTitle = '关键概念'
+  const mistakeNoteTitle = '常见误区'
+  const practiceNoteTitle = '练习与操作'
   const overviewWikiTarget = `${courseWikiRoot}/${overviewNoteTitle}`
   const progressWikiTarget = `${courseWikiRoot}/${progressNoteTitle}`
   const rootDir = path.join(vaultPath, exportFolder, courseFolder)
-  const nodeDir = path.join(rootDir, '节点')
-  fs.mkdirSync(nodeDir, { recursive: true })
-  const legacyOverviewPath = path.join(rootDir, '00 课程总览.md')
-  const legacyProgressPath = path.join(rootDir, '01 学习看板.md')
-  const existingNodePathById = new Map<string, string>()
+  const lessonFolderName = '课程笔记'
+  const lessonDir = path.join(rootDir, lessonFolderName)
+  const snippetPath = ensureObsidianCourseSnippet(vaultPath)
+  void snippetPath
 
-  if (fs.existsSync(nodeDir)) {
-    for (const fileName of fs.readdirSync(nodeDir)) {
-      if (!fileName.toLowerCase().endsWith('.md')) continue
-      const filePath = path.join(nodeDir, fileName)
-      try {
-        const content = fs.readFileSync(filePath, 'utf-8')
-        const nodeIdMatch = content.match(/^node_id:\s*"([^"]+)"/m)
-        if (nodeIdMatch?.[1]) {
-          existingNodePathById.set(nodeIdMatch[1], filePath)
-        }
-      } catch {
-        // ignore unreadable legacy note files
-      }
-    }
+  fs.mkdirSync(rootDir, { recursive: true })
+  for (const oldFolderName of ['节点', 'Lessons', 'Concepts', 'Mistakes', 'Practices']) {
+    fs.rmSync(path.join(rootDir, oldFolderName), { recursive: true, force: true })
   }
+  fs.mkdirSync(lessonDir, { recursive: true })
 
   const flattened = flattenCourseNodes(chapters)
-  const orderedNodeIds: string[] = []
+  const parentById = new Map<string, string | null>()
   const rawTitleById = new Map<string, string>()
-  const usedNoteTitles = new Map<string, number>()
-  const noteMetaById = new Map<string, {
-    title: string
-    wikiTarget: string
-    filePath: string
-    parentId: string | null
-    depth: number
-    node: Record<string, unknown>
-  }>()
-
-  flattened.forEach(({ node }, index) => {
+  flattened.forEach(({ node, parentId }, index) => {
     const nodeId = String(node.id ?? `node-${index + 1}`)
-    rawTitleById.set(nodeId, sanitizeDisplayText(String(node.title ?? nodeId), nodeId))
+    parentById.set(nodeId, parentId)
+    rawTitleById.set(nodeId, asText(node.title ?? nodeId, nodeId))
   })
 
-  flattened.forEach(({ node, parentId, depth }, index) => {
-    const nodeId = String(node.id ?? `node-${index + 1}`)
+  const getRootTitle = (nodeId: string) => {
+    let cursor: string | null = nodeId
+    let rootTitle = rawTitleById.get(nodeId) ?? nodeId
+    while (cursor) {
+      rootTitle = rawTitleById.get(cursor) ?? rootTitle
+      cursor = parentById.get(cursor) ?? null
+    }
+    return rootTitle
+  }
+
+  const leafLessons = flattened.filter(({ node }) => {
+    const children = asRecordList(node.children)
+    return String(node.node_type ?? '').toLowerCase() === 'lesson' || children.length === 0
+  })
+  const exportedLessons = leafLessons.length ? leafLessons : flattened
+  const usedLessonTitles = new Map<string, number>()
+  const lessonMetaById = new Map<string, ObsidianReadableLessonMeta>()
+  const lessonOrder: string[] = []
+
+  exportedLessons.forEach(({ node, parentId }, index) => {
+    const nodeId = String(node.id ?? `lesson-${index + 1}`)
     const parentTitle = parentId ? rawTitleById.get(parentId) ?? null : null
-    const baseTitle = sanitizeWikiSegment(buildObsidianNodeTitle(String(node.title ?? nodeId), parentTitle), nodeId)
-    const duplicateCount = (usedNoteTitles.get(baseTitle) ?? 0) + 1
-    usedNoteTitles.set(baseTitle, duplicateCount)
-    const noteTitle = duplicateCount > 1 ? `${baseTitle}（${duplicateCount}）` : baseTitle
-    const fileName = `${sanitizeFileNameSegment(noteTitle, nodeId)}.md`
-    orderedNodeIds.push(nodeId)
-    noteMetaById.set(nodeId, {
-      title: noteTitle,
-      wikiTarget: `${courseWikiRoot}/节点/${noteTitle}`,
-      filePath: path.join(nodeDir, fileName),
+    const displayTitle = buildObsidianNodeTitle(String(node.title ?? nodeId), parentTitle)
+    const baseTitle = sanitizeWikiSegment(displayTitle, nodeId)
+    const duplicateCount = (usedLessonTitles.get(baseTitle) ?? 0) + 1
+    usedLessonTitles.set(baseTitle, duplicateCount)
+    const stableTitle = duplicateCount > 1 ? `${baseTitle}（${duplicateCount}）` : baseTitle
+    const noteTitle = `${String(index + 1).padStart(2, '0')} ${stableTitle}`
+    const filePath = path.join(lessonDir, `${sanitizeFileNameSegment(noteTitle, nodeId)}.md`)
+    lessonOrder.push(nodeId)
+    lessonMetaById.set(nodeId, {
+      id: nodeId,
+      title: stableTitle,
+      noteTitle,
+      wikiTarget: `${courseWikiRoot}/${lessonFolderName}/${noteTitle}`,
+      filePath,
       parentId,
-      depth,
+      rootTitle: getRootTitle(nodeId),
       node,
     })
   })
 
-  const dependentsById = new Map<string, string[]>()
-  const rootChapterById = new Map<string, string>()
+  const conceptEntries: Array<{ lesson: ObsidianReadableLessonMeta; title: string; content: string }> = []
+  const mistakeEntries: Array<{ lesson: ObsidianReadableLessonMeta; content: string }> = []
+  const practiceEntries: Array<{ lesson: ObsidianReadableLessonMeta; title: string; items: string[] }> = []
 
-  for (const nodeId of orderedNodeIds) {
-    const meta = noteMetaById.get(nodeId)
-    if (!meta) continue
-    const dependencies = Array.isArray(meta.node.dependencies) ? meta.node.dependencies.map((item) => String(item)) : []
-    for (const dependencyId of dependencies) {
-      const current = dependentsById.get(dependencyId) ?? []
-      current.push(nodeId)
-      dependentsById.set(dependencyId, current)
-    }
-
-    let cursor: string | null = nodeId
-    let rootTitle = String(meta.node.title ?? meta.title)
-    while (cursor) {
-      const currentMeta = noteMetaById.get(cursor)
-      if (!currentMeta) break
-      rootTitle = String(currentMeta.node.title ?? currentMeta.title)
-      cursor = currentMeta.parentId
-    }
-    rootChapterById.set(nodeId, rootTitle)
-  }
-
-  for (const [nodeId, meta] of noteMetaById.entries()) {
+  for (const [nodeId, meta] of lessonMetaById.entries()) {
     const node = meta.node
-    const dependencies = Array.isArray(node.dependencies) ? node.dependencies.map((item) => String(item)) : []
-    const objectives = Array.isArray(node.learning_objectives) ? node.learning_objectives.map((item) => String(item)) : []
-    const concepts = Array.isArray((node.knowledge as Record<string, unknown> | undefined)?.concepts)
-      ? (((node.knowledge as Record<string, unknown>).concepts) as Record<string, unknown>[])
-      : []
-    const examples = Array.isArray((node.knowledge as Record<string, unknown> | undefined)?.examples)
-      ? (((node.knowledge as Record<string, unknown>).examples) as Record<string, unknown>[])
-      : []
-    const stageQuizExamples = examples.filter((example) => String(example.title ?? '').includes('阶段小测'))
-    const regularExamples = examples.filter((example) => !String(example.title ?? '').includes('阶段小测'))
-    const checkpoints = Array.isArray((node.knowledge as Record<string, unknown> | undefined)?.checkpoints)
-      ? (((node.knowledge as Record<string, unknown>).checkpoints) as unknown[]).map((item) => String(item))
-      : []
-    const mistakes = Array.isArray((node.knowledge as Record<string, unknown> | undefined)?.common_mistakes)
-      ? (((node.knowledge as Record<string, unknown>).common_mistakes) as unknown[]).map((item) => String(item))
-      : []
-    const children = Array.isArray(node.children) ? (node.children as Record<string, unknown>[]) : []
-    const assets = Array.isArray(node.assets) ? (node.assets as Record<string, unknown>[]) : []
-    const gaps = Array.isArray(node.gaps) ? (node.gaps as Record<string, unknown>[]) : []
-    const parentMeta = meta.parentId ? noteMetaById.get(meta.parentId) ?? null : null
-    const dependencyLinks = dependencies
-      .map((dependencyId) => noteMetaById.get(dependencyId))
-      .filter(Boolean)
-      .map((item) => ({ target: item!.wikiTarget, label: item!.title }))
-    const childLinks = children
-      .map((child) => noteMetaById.get(String(child.id ?? '')))
-      .filter(Boolean)
-      .map((item) => ({ target: item!.wikiTarget, label: item!.title }))
-    const dependentLinks = (dependentsById.get(nodeId) ?? [])
-      .map((dependentId) => noteMetaById.get(dependentId))
-      .filter(Boolean)
-      .map((item) => ({ target: item!.wikiTarget, label: item!.title }))
-    const currentIndex = orderedNodeIds.indexOf(nodeId)
-    const previousMeta = currentIndex > 0 ? noteMetaById.get(orderedNodeIds[currentIndex - 1]) ?? null : null
-    const nextMeta = currentIndex >= 0 && currentIndex < orderedNodeIds.length - 1 ? noteMetaById.get(orderedNodeIds[currentIndex + 1]) ?? null : null
-    const rawNodeTitle = String(node.title ?? meta.title)
-    const aliases = Array.from(new Set([rawNodeTitle, meta.title, sanitizeWikiSegment(rawNodeTitle, rawNodeTitle)]))
-
+    const teacher = getTeacher(node)
+    const knowledge = getKnowledge(node)
+    const objectives = asStringList(node.learning_objectives)
+    const concepts = asRecordList(knowledge.concepts)
+    const checkpoints = asStringList(knowledge.checkpoints)
+    const practicalSteps = asStringList(knowledge.practical_steps)
+    const practiceTasks = asStringList(knowledge.practice_tasks)
+    const teacherKeyPoints = asStringList(teacher.key_points)
+    const knowledgeMistakes = asStringList(knowledge.common_mistakes)
+    const teacherMistakes = asStringList(teacher.common_mistakes)
+    const allMistakes = uniqueStrings([...teacherMistakes, ...knowledgeMistakes])
+    const teachingMarkdown = normalizeMarkdownNewlines(String(teacher.teaching_markdown ?? '')).trim()
+    const quizQuestion = asText(teacher.quiz_question, '')
+    const standardAnswer = normalizeMarkdownNewlines(String(teacher.standard_answer ?? '')).trim()
     const progressState =
       payload.currentNodeId === nodeId
         ? 'current'
         : payload.completedNodeIds.includes(nodeId)
           ? 'completed'
           : 'pending'
-    const appDeepLink = buildAppDeepLink(packageId, nodeId)
-    const existingNodePath = existingNodePathById.get(nodeId)
-    const readableSourcePath =
-      existingNodePath && fs.existsSync(existingNodePath)
-        ? existingNodePath
-        : fs.existsSync(meta.filePath)
-          ? meta.filePath
-          : ''
-    const existingMarkdown = readableSourcePath ? fs.readFileSync(readableSourcePath, 'utf-8') : ''
+    const currentIndex = lessonOrder.indexOf(nodeId)
+    const previousMeta = currentIndex > 0 ? lessonMetaById.get(lessonOrder[currentIndex - 1]) ?? null : null
+    const nextMeta = currentIndex >= 0 && currentIndex < lessonOrder.length - 1 ? lessonMetaById.get(lessonOrder[currentIndex + 1]) ?? null : null
+    const existingMarkdown = fs.existsSync(meta.filePath) ? fs.readFileSync(meta.filePath, 'utf-8') : ''
+    const lessonBody = enhanceTeachingMarkdownForObsidian(
+      normalizeLessonMarkdown(teachingMarkdown || String(node.summary ?? '暂无课程正文。')),
+    )
 
-    const tags = [
-      '视界专注',
-      `课程/${courseTitle}`,
-      `状态/${progressState}`,
-      `类型/${String(node.node_type ?? 'lesson')}`,
-      `主线/${rootChapterById.get(nodeId) ?? rawNodeTitle}`,
-    ]
+    for (const concept of concepts) {
+      const title = asText(concept.name, '')
+      const content = asText(concept.explanation, '')
+      if (title || content) {
+        conceptEntries.push({ lesson: meta, title: title || meta.title, content: content || String(node.summary ?? '') })
+      }
+    }
+    for (const mistake of allMistakes) {
+      mistakeEntries.push({ lesson: meta, content: mistake })
+    }
+    if (practicalSteps.length) {
+      practiceEntries.push({ lesson: meta, title: '操作步骤', items: practicalSteps })
+    }
+    if (practiceTasks.length) {
+      practiceEntries.push({ lesson: meta, title: '练习任务', items: practiceTasks })
+    }
+    if (checkpoints.length) {
+      practiceEntries.push({ lesson: meta, title: '过关检查', items: checkpoints })
+    }
 
     const markdown = [
       '---',
       `title: ${escapeYamlString(meta.title)}`,
       'aliases:',
-      renderYamlList(aliases, 2),
+      renderYamlList(uniqueStrings([meta.title, String(node.title ?? meta.title)]), 2),
       `package_id: ${escapeYamlString(packageId)}`,
       `course_title: ${escapeYamlString(courseTitle)}`,
       `node_id: ${escapeYamlString(nodeId)}`,
-      `node_type: ${escapeYamlString(String(node.node_type ?? 'lesson'))}`,
-      `depth: ${meta.depth}`,
       `progress_state: ${escapeYamlString(progressState)}`,
-      `root_chapter: ${escapeYamlString(rootChapterById.get(nodeId) ?? rawNodeTitle)}`,
-      `parent_id: ${escapeYamlString(meta.parentId ?? '')}`,
-      `source_id: ${escapeYamlString(String(sourceMeta.source_id ?? ''))}`,
-      `source_url: ${escapeYamlString(String(sourceMeta.url ?? ''))}`,
+      `chapter: ${escapeYamlString(meta.rootTitle)}`,
       `exported_at: ${escapeYamlString(exportedAt)}`,
+      'cssclasses:',
+      renderYamlList(['shijie-course-note'], 2),
       'tags:',
-      renderYamlList(tags, 2),
+      renderYamlList(['视界专注', '课程笔记'], 2),
       '---',
       '',
       `# ${meta.title}`,
       '',
-      `> 回到视界专注：[继续这节](${appDeepLink})`,
-      `> 课程总览：[[${overviewWikiTarget}|${courseTitle}]]`,
-      parentMeta ? `> 上级主线：[[${parentMeta.wikiTarget}|${parentMeta.title}]]` : '',
-      progressState === 'current' ? '> 当前这节正是你在软件里推进到的位置。' : '',
+      `> [回到视界专注](${buildAppDeepLink(packageId, nodeId)}) · [[${overviewWikiTarget}|课程总览]] · [[${progressWikiTarget}|学习看板]]`,
+      ...(previousMeta ? [`> 上一节：[[${previousMeta.wikiTarget}|${previousMeta.title}]]`] : []),
+      ...(nextMeta ? [`> 下一节：[[${nextMeta.wikiTarget}|${nextMeta.title}]]`] : []),
       '',
-      ...renderMarkdownSection(
-        '导航',
-        [
-          previousMeta ? `- 上一节：[[${previousMeta.wikiTarget}|${previousMeta.title}]]` : '- 上一节：暂无',
-          nextMeta ? `- 下一节：[[${nextMeta.wikiTarget}|${nextMeta.title}]]` : '- 下一节：暂无',
-          parentMeta ? `- 上级节点：[[${parentMeta.wikiTarget}|${parentMeta.title}]]` : '- 上级节点：暂无',
-          childLinks.length ? `- 下级入口：${childLinks.map((item) => `[[${item.target}|${item.label}]]`).join(' · ')}` : '- 下级入口：暂无',
-        ].join('\n'),
-      ),
-      ...renderMarkdownSection('一句话理解', String(node.summary ?? '暂无摘要')),
-      ...renderMarkdownSection('学习目标', renderBulletList(objectives.map((item) => String(item)))),
-      ...renderMarkdownSection('前置依赖', renderWikiList(dependencyLinks)),
-      ...renderMarkdownSection('谁会用到这节', renderWikiList(dependentLinks)),
-      ...renderMarkdownSection(
-        '核心概念',
-        concepts.length
-          ? concepts
-              .map((concept) => `### ${String(concept.name ?? '概念')}\n\n${String(concept.explanation ?? '暂无说明')}`)
-              .join('\n\n')
-          : '- 暂无概念整理',
-      ),
-      ...renderMarkdownSection(
-        '例子与场景',
-        regularExamples.length
-          ? regularExamples
-              .map(
-                (example) =>
-                  `### ${String(example.title ?? '示例')}\n\n**场景**：${String(example.scenario ?? '暂无')}\n\n**结论**：${String(example.takeaway ?? '暂无')}`,
-              )
-              .join('\n\n')
-          : '- 暂无示例',
-      ),
-      ...renderMarkdownSection(
-        '阶段小测',
-        stageQuizExamples.length
-          ? stageQuizExamples
-              .map(
-                (example) =>
-                  `### ${String(example.title ?? '阶段小测')}\n\n**题目**：${String(example.scenario ?? '暂无题目')}\n\n**提示**：${String(example.takeaway ?? '先试着自己回答。')}`,
-              )
-              .join('\n\n')
-          : '',
-      ),
-      ...renderMarkdownSection('过关检查', renderBulletList(checkpoints)),
-      ...renderMarkdownSection('常见误区', renderBulletList(mistakes)),
-      ...renderMarkdownSection('继续延伸', renderWikiList(childLinks)),
-      ...renderMarkdownSection(
-        '资源与缺口',
-        [
-          assets.length
-            ? assets.map((asset) => `- ${String(asset.title ?? asset.id ?? '资源')}（${String(asset.status ?? 'unknown')}）`).join('\n')
-            : '- 暂无额外资源',
-          gaps.length
-            ? `\n### 待补信息\n\n${gaps.map((gap) => `- ${String(gap.description ?? gap.id ?? '信息缺口')}`).join('\n')}`
-            : '',
-        ]
-          .filter(Boolean)
-          .join('\n'),
-      ),
-      ...renderMarkdownSection(
-        '来源',
-        [`- 来源标题：${String(sourceMeta.title ?? courseTitle)}`, sourceMeta.url ? `- 原始链接：${String(sourceMeta.url)}` : '']
-          .filter(Boolean)
-          .join('\n'),
-      ),
-      ...renderMarkdownSection(
-        '我的理解',
-        [
-          '> 在这里写下你自己的转述。尽量用自己的话，而不是照抄课程内容。',
-          '',
-          '- 我现在会怎么解释这个知识点？',
-          '- 它和我以前学过的什么概念有关？',
-        ].join('\n'),
-        existingMarkdown,
-      ),
-      ...renderMarkdownSection(
-        '我的例子',
-        [
-          '> 把课程里的例子换成你自己的场景，记忆会稳很多。',
-          '',
-          '- 我能举一个自己的例子吗？',
-          '- 如果把它放进真实项目，我会怎么用？',
-        ].join('\n'),
-        existingMarkdown,
-      ),
-      ...renderMarkdownSection(
-        '复习提醒',
-        ['- 以后回看时，我最容易忘掉哪一步？', '- 下次复习时，我想重点检查什么？'].join('\n'),
-        existingMarkdown,
-      ),
+      renderObsidianCallout('info', '课程导航', [
+        `- 章节：${meta.rootTitle}`,
+        `- 状态：${progressState === 'current' ? '正在学习' : progressState === 'completed' ? '已完成' : '待学习'}`,
+        previousMeta ? `- 上一节：[[${previousMeta.wikiTarget}|${previousMeta.title}]]` : '',
+        nextMeta ? `- 下一节：[[${nextMeta.wikiTarget}|${nextMeta.title}]]` : '',
+      ].filter(Boolean).join('\n')),
+      '',
+      '## 课程正文',
+      '',
+      lessonBody,
+      '',
+      renderObsidianCallout('question', '主动回忆', quizQuestion || '用自己的话复述这一节的主线。不要先看标准答案。'),
+      '',
+      renderObsidianCallout('success', '标准答案', renderReadableAnswer(standardAnswer), { folded: true }),
+      '',
+      renderObsidianCalloutList('tip', '关键点', teacherKeyPoints.length ? teacherKeyPoints : objectives),
+      '',
+      renderObsidianCalloutList('warning', '常见误区', allMistakes),
+      '',
+      '## 我的笔记',
+      '',
+      extractMarkdownSection(existingMarkdown, '我的笔记') || '- ',
+      '',
     ]
-      .filter(Boolean)
       .join('\n')
 
     fs.writeFileSync(meta.filePath, markdown, 'utf-8')
-
-    if (existingNodePath && existingNodePath !== meta.filePath && fs.existsSync(existingNodePath)) {
-      fs.unlinkSync(existingNodePath)
-    }
   }
 
-  const rootLinks = chapters
-    .map((chapter) => noteMetaById.get(String(chapter.id ?? '')))
-    .filter(Boolean)
-    .map((item) => `- [[${item!.wikiTarget}|${item!.title}]]`)
+  const lessonsByChapter = new Map<string, ObsidianReadableLessonMeta[]>()
+  for (const nodeId of lessonOrder) {
+    const meta = lessonMetaById.get(nodeId)
+    if (!meta) continue
+    const current = lessonsByChapter.get(meta.rootTitle) ?? []
+    current.push(meta)
+    lessonsByChapter.set(meta.rootTitle, current)
+  }
+
+  const renderLessonMap = () => Array.from(lessonsByChapter.entries())
+    .map(([chapterTitle, lessons]) => [
+      `## ${chapterTitle}`,
+      '',
+      ...lessons.map((lesson) => `- [[${lesson.wikiTarget}|${lesson.title}]]`),
+      '',
+    ].join('\n'))
+    .join('\n')
+
+  const writeAggregateNote = (fileName: string, title: string, body: string) => {
+    const filePath = path.join(rootDir, `${fileName}.md`)
+    const markdown = [
+      '---',
+      `title: ${escapeYamlString(title)}`,
+      `package_id: ${escapeYamlString(packageId)}`,
+      `course_title: ${escapeYamlString(courseTitle)}`,
+      `exported_at: ${escapeYamlString(exportedAt)}`,
+      'cssclasses:',
+      renderYamlList(['shijie-course-note'], 2),
+      'tags:',
+      renderYamlList(['视界专注', '课程索引'], 2),
+      '---',
+      '',
+      `# ${title}`,
+      '',
+      `> [[${overviewWikiTarget}|课程总览]]`,
+      '',
+      body || '- 暂无',
+      '',
+    ].join('\n')
+    fs.writeFileSync(filePath, markdown, 'utf-8')
+    return filePath
+  }
+
+  const conceptBody = conceptEntries.length
+    ? conceptEntries.map((entry) => [
+        `## ${entry.title}`,
+        '',
+        `来源：[[${entry.lesson.wikiTarget}|${entry.lesson.title}]]`,
+        '',
+        entry.content || '- 暂无说明',
+      ].join('\n')).join('\n\n')
+    : '- 暂无关键概念'
+  const mistakeBody = mistakeEntries.length
+    ? Array.from(lessonsByChapter.values()).flat()
+        .map((lesson) => {
+          const items = mistakeEntries.filter((entry) => entry.lesson.id === lesson.id)
+          if (!items.length) return ''
+          return [`## [[${lesson.wikiTarget}|${lesson.title}]]`, '', ...items.map((item) => `- ${item.content}`)].join('\n')
+        })
+        .filter(Boolean)
+        .join('\n\n')
+    : '- 暂无常见误区'
+  const practiceBody = practiceEntries.length
+    ? practiceEntries.map((entry) => [
+        `## [[${entry.lesson.wikiTarget}|${entry.lesson.title}]] · ${entry.title}`,
+        '',
+        renderBulletList(entry.items),
+      ].join('\n')).join('\n\n')
+    : '- 暂无练习或操作整理'
+
+  const conceptPath = writeAggregateNote(conceptNoteTitle, `${courseTitle} · 关键概念`, conceptBody)
+  const mistakePath = writeAggregateNote(mistakeNoteTitle, `${courseTitle} · 常见误区`, mistakeBody)
+  const practicePath = writeAggregateNote(practiceNoteTitle, `${courseTitle} · 练习与操作`, practiceBody)
+  void conceptPath
+  void mistakePath
+  void practicePath
+
+  const currentMeta = payload.currentNodeId ? lessonMetaById.get(payload.currentNodeId) ?? null : null
   const completedLinks = payload.completedNodeIds
-    .map((nodeId) => noteMetaById.get(nodeId))
+    .map((nodeId) => lessonMetaById.get(nodeId))
     .filter(Boolean)
     .map((item) => `- [[${item!.wikiTarget}|${item!.title}]]`)
-  const failedLinks = (Array.isArray(payload.failedNodeIds) ? payload.failedNodeIds : [])
-    .map((nodeId) => noteMetaById.get(nodeId))
-    .filter(Boolean)
-    .map((item) => `- [[${item!.wikiTarget}|${item!.title}]]`)
-  const pendingLinks = orderedNodeIds
+  const pendingLinks = lessonOrder
     .filter((nodeId) => !payload.completedNodeIds.includes(nodeId))
-    .slice(0, 15)
-    .map((nodeId) => noteMetaById.get(nodeId))
+    .slice(0, 10)
+    .map((nodeId) => lessonMetaById.get(nodeId))
     .filter(Boolean)
     .map((item) => `- [[${item!.wikiTarget}|${item!.title}]]`)
 
@@ -2420,128 +2547,94 @@ function exportCourseToObsidian(settings: RuntimeSettings, payload: ObsidianExpo
     '---',
     `title: ${escapeYamlString(courseTitle)}`,
     'aliases:',
-    renderYamlList([courseTitle, `${courseTitle} 课程总览`, '00 课程总览'], 2),
+    renderYamlList([courseTitle, `${courseTitle} 课程总览`], 2),
     `package_id: ${escapeYamlString(packageId)}`,
     `source_id: ${escapeYamlString(String(sourceMeta.source_id ?? ''))}`,
     `source_url: ${escapeYamlString(String(sourceMeta.url ?? ''))}`,
     `exported_at: ${escapeYamlString(exportedAt)}`,
+    'cssclasses:',
+    renderYamlList(['shijie-course-home'], 2),
     'tags:',
-    renderYamlList(['视界专注', '课程总览', `课程/${courseTitle}`], 2),
+    renderYamlList(['视界专注', '课程总览'], 2),
     '---',
     '',
     `# ${courseTitle}`,
     '',
-    `> 回到视界专注：[继续当前进度](${buildAppDeepLink(packageId)})`,
+    `> [回到视界专注](${buildAppDeepLink(packageId)}) · [[${progressWikiTarget}|学习看板]]`,
     '',
-    String(courseMeta.subtitle ?? ''),
+    renderObsidianCallout('abstract', '课程定位', String(courseMeta.subtitle ?? '') || '暂无课程简介'),
     '',
-    '## 课程目标',
+    renderObsidianCallout('goal', '课程目标', String(courseMeta.overall_goal ?? '暂无总目标')),
     '',
-    String(courseMeta.overall_goal ?? '暂无总目标'),
+    '## 课程索引',
     '',
-    '## 当前学习进度',
+    `- [[${courseWikiRoot}/${conceptNoteTitle}|关键概念]]`,
+    `- [[${courseWikiRoot}/${mistakeNoteTitle}|常见误区]]`,
+    `- [[${courseWikiRoot}/${practiceNoteTitle}|练习与操作]]`,
     '',
-    `- 当前节点：${payload.currentNodeId && noteMetaById.get(payload.currentNodeId) ? `[[${noteMetaById.get(payload.currentNodeId)!.wikiTarget}|${noteMetaById.get(payload.currentNodeId)!.title}]]` : '暂无'}`,
-    `- 已完成节点：${payload.completedNodeIds.length}`,
-    `- 未通过节点：${Array.isArray(payload.failedNodeIds) ? payload.failedNodeIds.length : 0}`,
-    `- 总节点数：${noteMetaById.size}`,
+    renderObsidianCalloutList('tip', '学习结果', asStringList(courseMeta.learning_outcomes)),
     '',
-    '## 学习结果',
+    '## 课程目录',
     '',
-    renderBulletList(Array.isArray(courseMeta.learning_outcomes) ? courseMeta.learning_outcomes.map((item) => String(item)) : []),
-    '',
-    '## 推荐下一步',
-    '',
-    payload.currentNodeId && noteMetaById.get(payload.currentNodeId)
-      ? `- 从 [[${noteMetaById.get(payload.currentNodeId)!.wikiTarget}|${noteMetaById.get(payload.currentNodeId)!.title}]] 继续，最贴近你当前的软件进度。`
-      : '- 先从下方主线地图的第一条开始。',
-    '',
-    '## 主线地图',
-    '',
-    rootLinks.length ? rootLinks.join('\n') : '- 暂无主线',
-    '',
-    '## 使用建议',
-    '',
-    '- 在 Obsidian 中优先从这份总览进入，再沿着双链继续学习。',
-    '- 学习完成后，可以直接在各节点笔记中追加你自己的例子和理解。',
-    '',
-    '## 笔记建议',
-    '',
-    '- 每学完一节，至少补一句“我的理解”，把知识转成自己的话。',
-    '- 如果遇到卡点，可以在对应节点的“复习提醒”里写下下次回来看什么。',
+    renderLessonMap() || '- 暂无课程目录',
   ]
-    .filter(Boolean)
     .join('\n')
 
   const indexPath = path.join(rootDir, `${overviewNoteTitle}.md`)
   fs.writeFileSync(indexPath, overviewContent, 'utf-8')
 
   const progressPath = path.join(rootDir, `${progressNoteTitle}.md`)
-  const existingProgressBoard = fs.existsSync(progressPath)
-    ? fs.readFileSync(progressPath, 'utf-8')
-    : fs.existsSync(legacyProgressPath)
-      ? fs.readFileSync(legacyProgressPath, 'utf-8')
-    : ''
-
+  const existingProgressBoard = fs.existsSync(progressPath) ? fs.readFileSync(progressPath, 'utf-8') : ''
   const progressBoardContent = [
     '---',
     `title: ${escapeYamlString(`${courseTitle} 学习看板`)}`,
-    'aliases:',
-    renderYamlList([`${courseTitle} 学习看板`, `${courseTitle} Progress Board`, '01 学习看板'], 2),
     `package_id: ${escapeYamlString(packageId)}`,
     `course_title: ${escapeYamlString(courseTitle)}`,
-    `source_id: ${escapeYamlString(String(sourceMeta.source_id ?? ''))}`,
-    `source_url: ${escapeYamlString(String(sourceMeta.url ?? ''))}`,
     `exported_at: ${escapeYamlString(exportedAt)}`,
+    'cssclasses:',
+    renderYamlList(['shijie-course-board'], 2),
     'tags:',
-    renderYamlList(['视界专注', '学习看板', `课程/${courseTitle}`], 2),
+    renderYamlList(['视界专注', '学习看板'], 2),
     '---',
     '',
     `# ${courseTitle} 学习看板`,
     '',
-    `> 回到视界专注：[继续当前进度](${buildAppDeepLink(packageId)})`,
-    `> 返回课程总览：[[${overviewWikiTarget}|${courseTitle}]]`,
+    `> [回到视界专注](${buildAppDeepLink(packageId)}) · [[${overviewWikiTarget}|课程总览]]`,
     '',
-    ...renderMarkdownSection(
-      '当前状态',
-      [
-        `- 当前节点：${payload.currentNodeId && noteMetaById.get(payload.currentNodeId) ? `[[${noteMetaById.get(payload.currentNodeId)!.wikiTarget}|${noteMetaById.get(payload.currentNodeId)!.title}]]` : '暂无'}`,
-        `- 已完成：${payload.completedNodeIds.length} / ${noteMetaById.size}`,
-        `- 待复盘：${failedLinks.length}`,
-      ].join('\n'),
-    ),
-    ...renderMarkdownSection('已完成', completedLinks.length ? completedLinks.join('\n') : '- 还没有完成的节点'),
-    ...renderMarkdownSection('需要回看', failedLinks.length ? failedLinks.join('\n') : '- 目前没有待复盘节点'),
-    ...renderMarkdownSection('接下来可以学', pendingLinks.length ? pendingLinks.join('\n') : '- 所有节点都已经完成'),
-    ...renderMarkdownSection(
-      '今日学习记录',
-      ['- 今天我最清楚的一点：', '- 今天我最模糊的一点：', '- 下一次打开时，我想先继续哪一节：'].join('\n'),
-      existingProgressBoard,
-    ),
+    renderObsidianCallout('info', '当前状态', [
+      `- 当前小节：${currentMeta ? `[[${currentMeta.wikiTarget}|${currentMeta.title}]]` : '暂无'}`,
+      `- 已完成：${payload.completedNodeIds.length} / ${lessonMetaById.size}`,
+    ].join('\n')),
+    '',
+    '## 已完成',
+    '',
+    completedLinks.length ? completedLinks.join('\n') : '- 还没有完成的小节',
+    '',
+    '## 接下来可以学',
+    '',
+    pendingLinks.length ? pendingLinks.join('\n') : '- 所有小节都已经完成',
+    '',
+    '## 今日学习记录',
+    '',
+    extractMarkdownSection(existingProgressBoard, '今日学习记录') || ['- 今天我最清楚的一点：', '- 今天我最模糊的一点：', '- 下一次打开时，我想先继续哪一节：'].join('\n'),
+    '',
   ]
-    .filter(Boolean)
     .join('\n')
 
   fs.writeFileSync(progressPath, progressBoardContent, 'utf-8')
 
-  if (legacyOverviewPath !== indexPath && fs.existsSync(legacyOverviewPath)) {
-    fs.unlinkSync(legacyOverviewPath)
-  }
-  if (legacyProgressPath !== progressPath && fs.existsSync(legacyProgressPath)) {
-    fs.unlinkSync(legacyProgressPath)
-  }
-  const currentNodePath =
-    payload.currentNodeId && noteMetaById.get(payload.currentNodeId)
-      ? noteMetaById.get(payload.currentNodeId)!.filePath
-      : null
+  const legacyOverviewPath = path.join(rootDir, '00 课程总览.md')
+  const legacyProgressPath = path.join(rootDir, '01 学习看板.md')
+  if (fs.existsSync(legacyOverviewPath)) fs.unlinkSync(legacyOverviewPath)
+  if (fs.existsSync(legacyProgressPath)) fs.unlinkSync(legacyProgressPath)
 
   return {
     vaultPath,
     rootDir,
     indexPath,
     progressPath,
-    currentNodePath,
-    fileCount: noteMetaById.size + 2,
+    currentNodePath: currentMeta?.filePath ?? null,
+    fileCount: lessonMetaById.size + 5,
   }
 }
 
@@ -2591,6 +2684,452 @@ async function openObsidianTarget(
     openedPath: targetPath,
     openedUri,
     openedVia: 'file-path',
+  }
+}
+
+function stripMarkdownForSpeech(text: string) {
+  return String(text ?? '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/!\[[^\]]*]\([^)]+\)/g, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/<u>([^<]+)<\/u>/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^\s*[-*]\s+/gm, '')
+    .replace(/^\s*\d+\.\s+/gm, '')
+    .replace(/^>\s?/gm, '')
+    .replace(/\[([^\]]+)]\([^)]+\)/g, '$1')
+    .replace(/[\p{Extended_Pictographic}\uFE0F]/gu, '')
+    .replace(/[★☆◆◇■□●○◎※→←↑↓]/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function estimateMiniMaxSpeechCharacters(text: string) {
+  const speechText = stripMarkdownForSpeech(text)
+  let total = 0
+  for (const char of Array.from(speechText)) {
+    total += /\p{Script=Han}/u.test(char) ? 2 : 1
+  }
+  return total
+}
+
+const MINIMAX_TTS_LOCAL_DAILY_LIMIT = 4000
+const DEFAULT_TTS_CACHE_EXTENSION = 'mp3'
+
+function resolveTtsCacheDir() {
+  return path.join(dataRoot, '.onboard-tts-cache')
+}
+
+function resolveTtsUsagePath() {
+  return path.join(userDataRoot, '.shijie-focus-tts-usage.json')
+}
+
+function getLocalDateKey() {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function normalizeTtsUsage(raw: unknown): TtsUsageSnapshot {
+  const currentDate = getLocalDateKey()
+  const record = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
+  const date = typeof record.date === 'string' ? record.date : currentDate
+  const sameDay = date === currentDate
+  const usedCharacters = sameDay ? Math.max(0, Math.round(Number(record.usedCharacters) || 0)) : 0
+  const dailyLimit = Math.max(1, Math.round(Number(record.dailyLimit) || MINIMAX_TTS_LOCAL_DAILY_LIMIT))
+
+  return {
+    date: currentDate,
+    usedCharacters,
+    dailyLimit,
+    remainingCharacters: Math.max(0, dailyLimit - usedCharacters),
+    note: '本地估算：只统计本机今天新合成成功的字符，缓存命中不计入。',
+  }
+}
+
+function readTtsUsage(): TtsUsageSnapshot {
+  try {
+    const usagePath = resolveTtsUsagePath()
+    if (!fs.existsSync(usagePath)) return normalizeTtsUsage(null)
+    return normalizeTtsUsage(JSON.parse(fs.readFileSync(usagePath, 'utf-8')))
+  } catch {
+    return normalizeTtsUsage(null)
+  }
+}
+
+function writeTtsUsage(snapshot: TtsUsageSnapshot) {
+  try {
+    fs.mkdirSync(path.dirname(resolveTtsUsagePath()), { recursive: true })
+    fs.writeFileSync(resolveTtsUsagePath(), JSON.stringify(snapshot, null, 2), 'utf-8')
+  } catch {
+    // Usage tracking is helpful but should never block speech synthesis.
+  }
+}
+
+function recordTtsUsage(characters: number) {
+  const current = readTtsUsage()
+  const nextUsed = current.usedCharacters + Math.max(0, Math.round(characters))
+  const next: TtsUsageSnapshot = {
+    ...current,
+    usedCharacters: nextUsed,
+    remainingCharacters: Math.max(0, current.dailyLimit - nextUsed),
+  }
+  writeTtsUsage(next)
+  return next
+}
+
+function getTtsProviderLabel(settings: RuntimeSettings) {
+  if (settings.tts_provider === 'mimo') return 'MiMo'
+  if (settings.tts_provider === 'minimax') return 'MiniMax'
+  return 'TTS'
+}
+
+function getTtsModel(settings: RuntimeSettings) {
+  return settings.tts_provider === 'mimo' ? settings.mimo_tts_model : settings.minimax_tts_model
+}
+
+function getTtsVoiceId(settings: RuntimeSettings) {
+  return settings.tts_provider === 'mimo' ? settings.mimo_tts_voice_id : settings.minimax_tts_voice_id
+}
+
+function getTtsAudioExtension(settings: RuntimeSettings) {
+  return settings.tts_provider === 'mimo' ? 'wav' : DEFAULT_TTS_CACHE_EXTENSION
+}
+
+function getTtsAudioMime(settings: RuntimeSettings) {
+  return settings.tts_provider === 'mimo' ? 'audio/wav' : 'audio/mpeg'
+}
+
+function formatTtsUsageLine(settings: RuntimeSettings, usage: TtsUsageSnapshot, requestedCharacters: number) {
+  if (settings.tts_provider === 'mimo') {
+    return `本节预计 ${requestedCharacters} TTS 字符；MiMo TTS 当前按官方说明为限时免费，本机只记录缓存状态。缓存命中不重复调用。`
+  }
+  return `本节预计 ${requestedCharacters} MiniMax 字符；今日本地已新合成 ${usage.usedCharacters}/${usage.dailyLimit}，估算剩余 ${usage.remainingCharacters}。缓存命中不消耗额度。`
+}
+
+function buildTtsCacheKey(settings: RuntimeSettings, text: string) {
+  const providerSettings = settings.tts_provider === 'mimo'
+    ? {
+        provider: settings.tts_provider,
+        endpoint: settings.mimo_tts_endpoint,
+        model: settings.mimo_tts_model,
+        voiceId: settings.mimo_tts_voice_id,
+        stylePrompt: settings.mimo_tts_style_prompt,
+      }
+    : {
+        provider: settings.tts_provider,
+        endpoint: settings.minimax_tts_endpoint,
+        model: settings.minimax_tts_model,
+        voiceId: settings.minimax_tts_voice_id,
+        speed: settings.minimax_tts_speed,
+        volume: settings.minimax_tts_volume,
+        pitch: settings.minimax_tts_pitch,
+      }
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify({
+      ...providerSettings,
+      text,
+    }))
+    .digest('hex')
+}
+
+function splitSpeechText(text: string, limit = 9000) {
+  if (estimateMiniMaxSpeechCharacters(text) <= limit) return [text]
+  const chunks: string[] = []
+  let buffer = ''
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+
+  const pushBuffer = () => {
+    const value = buffer.trim()
+    if (value) chunks.push(value)
+    buffer = ''
+  }
+
+  for (const paragraph of paragraphs) {
+    if (estimateMiniMaxSpeechCharacters(paragraph) > limit) {
+      pushBuffer()
+      const sentences = paragraph
+        .split(/(?<=[。！？；;.!?])/u)
+        .map((sentence) => sentence.trim())
+        .filter(Boolean)
+      for (const sentence of sentences.length ? sentences : [paragraph]) {
+        if (estimateMiniMaxSpeechCharacters((buffer + '\n' + sentence).trim()) > limit) pushBuffer()
+        if (estimateMiniMaxSpeechCharacters(sentence) > limit) {
+          let slice = ''
+          for (const char of Array.from(sentence)) {
+            if (estimateMiniMaxSpeechCharacters(slice + char) > limit) {
+              if (slice.trim()) chunks.push(slice.trim())
+              slice = ''
+            }
+            slice += char
+          }
+          if (slice.trim()) chunks.push(slice.trim())
+        } else {
+          buffer = buffer ? `${buffer}\n${sentence}` : sentence
+        }
+      }
+      continue
+    }
+
+    if (estimateMiniMaxSpeechCharacters((buffer + '\n\n' + paragraph).trim()) > limit) pushBuffer()
+    buffer = buffer ? `${buffer}\n\n${paragraph}` : paragraph
+  }
+
+  pushBuffer()
+  return chunks
+}
+
+async function requestMiniMaxSpeechAudio(settings: RuntimeSettings, text: string) {
+  const response = await fetch(settings.minimax_tts_endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${settings.minimax_api_key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: settings.minimax_tts_model,
+      text,
+      stream: false,
+      language_boost: 'Chinese',
+      output_format: 'hex',
+      voice_setting: {
+        voice_id: settings.minimax_tts_voice_id,
+        speed: settings.minimax_tts_speed,
+        vol: settings.minimax_tts_volume,
+        pitch: settings.minimax_tts_pitch,
+      },
+      audio_setting: {
+        sample_rate: 32000,
+        bitrate: 128000,
+        format: 'mp3',
+        channel: 1,
+      },
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`MiniMax TTS 请求失败：${response.status} ${response.statusText}`)
+  }
+
+  const result = await response.json() as {
+    data?: { audio?: string; status?: number } | null
+    base_resp?: { status_code?: number; status_msg?: string }
+  }
+  if (result.base_resp?.status_code && result.base_resp.status_code !== 0) {
+    throw new Error(formatMiniMaxTtsError(result.base_resp.status_code, result.base_resp.status_msg))
+  }
+  const audioHex = result.data?.audio
+  if (!audioHex) {
+    throw new Error('MiniMax TTS 未返回音频数据。')
+  }
+  return Buffer.from(audioHex, 'hex')
+}
+
+async function requestMiMoSpeechAudio(settings: RuntimeSettings, text: string) {
+  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = []
+  if (settings.mimo_tts_style_prompt.trim()) {
+    messages.push({
+      role: 'user',
+      content: settings.mimo_tts_style_prompt.trim(),
+    })
+  }
+  messages.push({
+    role: 'assistant',
+    content: text,
+  })
+
+  const response = await fetch(settings.mimo_tts_endpoint, {
+    method: 'POST',
+    headers: {
+      'api-key': settings.mimo_api_key,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: settings.mimo_tts_model,
+      messages,
+      audio: {
+        format: 'wav',
+        voice: settings.mimo_tts_voice_id || '茉莉',
+      },
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`MiMo TTS 请求失败：${response.status} ${response.statusText}`)
+  }
+
+  const result = await response.json() as {
+    error?: { message?: string; code?: string | number }
+    choices?: Array<{
+      message?: {
+        audio?: {
+          data?: string
+        }
+      }
+    }>
+  }
+  if (result.error) {
+    throw new Error(formatMiMoTtsError(result.error.message || `MiMo TTS 返回错误：${result.error.code ?? 'unknown'}`))
+  }
+  const audioBase64 = result.choices?.[0]?.message?.audio?.data
+  if (!audioBase64) {
+    throw new Error('MiMo TTS 未返回音频数据。')
+  }
+  return Buffer.from(audioBase64, 'base64')
+}
+
+function formatMiniMaxTtsError(statusCode: number, statusMsg?: string) {
+  const message = statusMsg || `MiniMax TTS 返回错误：${statusCode}`
+  const lowerMessage = message.toLowerCase()
+  if (statusCode === 2049 || lowerMessage.includes('invalid api key')) {
+    return 'MiniMax 鉴权失败：当前 API Key 没有被这个接口地址接受。请确认 Key 来自对应的 MiniMax 开放平台，并检查接口地址是国内站 api.minimaxi.com 还是国际站 api.minimax.io。'
+  }
+  if (statusCode === 2061 || lowerMessage.includes('not support model')) {
+    return `MiniMax 当前套餐不支持所选语音模型。请在设置里更换模型，例如 speech-2.8-hd，原始返回：${message}`
+  }
+  if (
+    lowerMessage.includes('quota') ||
+    lowerMessage.includes('balance') ||
+    lowerMessage.includes('insufficient') ||
+    lowerMessage.includes('limit') ||
+    message.includes('额度') ||
+    message.includes('余额') ||
+    message.includes('不足') ||
+    message.includes('限制')
+  ) {
+    return `MiniMax 语音额度可能不足或触发平台限制。原始返回：${message}`
+  }
+  if (statusCode === 1004 || lowerMessage.includes('authorization')) {
+    return 'MiniMax 鉴权失败：请求没有携带有效 API Key。请重新保存 API Key 后再试。'
+  }
+  return message
+}
+
+function formatMiMoTtsError(message: string) {
+  const lowerMessage = message.toLowerCase()
+  if (lowerMessage.includes('invalid') && lowerMessage.includes('key')) {
+    return 'MiMo 鉴权失败：当前 API Key 没有被接口接受。请确认 Key 来自小米 MiMo 开放平台，并重新保存后再试。'
+  }
+  if (
+    lowerMessage.includes('quota') ||
+    lowerMessage.includes('balance') ||
+    lowerMessage.includes('insufficient') ||
+    lowerMessage.includes('limit') ||
+    message.includes('额度') ||
+    message.includes('余额') ||
+    message.includes('不足') ||
+    message.includes('限制')
+  ) {
+    return `MiMo 语音额度可能不足或触发平台限制。原始返回：${message}`
+  }
+  if (lowerMessage.includes('model')) {
+    return `MiMo 当前账号可能不支持所选模型。建议先使用 mimo-v2.5-tts，原始返回：${message}`
+  }
+  return message
+}
+
+function formatTtsFailureMessage(settings: RuntimeSettings, error: unknown, characters: number, usage: TtsUsageSnapshot) {
+  const baseMessage = error instanceof Error ? error.message : String(error)
+  return `${baseMessage}\n${formatTtsUsageLine(settings, usage, characters)}`
+}
+
+function getTtsCacheStatus(settings: RuntimeSettings, payload: TtsSynthesizePayload): TtsCacheStatusResult {
+  const text = stripMarkdownForSpeech(payload.text)
+  const usage = readTtsUsage()
+  if (!text) {
+    return {
+      cached: false,
+      characters: 0,
+      filePath: null,
+      usage,
+    }
+  }
+
+  const cacheKey = buildTtsCacheKey(settings, text)
+  const filePath = path.join(resolveTtsCacheDir(), `${cacheKey}.${getTtsAudioExtension(settings)}`)
+  return {
+    cached: fs.existsSync(filePath),
+    characters: estimateMiniMaxSpeechCharacters(text),
+    filePath: fs.existsSync(filePath) ? filePath : null,
+    usage,
+  }
+}
+
+async function synthesizeSpeech(settings: RuntimeSettings, payload: TtsSynthesizePayload): Promise<TtsSynthesizeResult> {
+  if (settings.tts_provider !== 'minimax' && settings.tts_provider !== 'mimo') {
+    throw new Error('请先在设置中启用语音朗读。')
+  }
+  if (settings.tts_provider === 'minimax' && !settings.minimax_api_key) {
+    throw new Error('请先在设置中填写 MiniMax API Key。')
+  }
+  if (settings.tts_provider === 'minimax' && !settings.minimax_tts_voice_id) {
+    throw new Error('请先在设置中填写 MiniMax voice_id。')
+  }
+  if (settings.tts_provider === 'mimo' && !settings.mimo_api_key) {
+    throw new Error('请先在设置中填写 MiMo API Key。')
+  }
+
+  const text = stripMarkdownForSpeech(payload.text)
+  if (!text) {
+    throw new Error('没有可朗读的文本。')
+  }
+  const characters = estimateMiniMaxSpeechCharacters(text)
+  const usageBefore = readTtsUsage()
+
+  const cacheDir = resolveTtsCacheDir()
+  fs.mkdirSync(cacheDir, { recursive: true })
+  const cacheKey = buildTtsCacheKey(settings, text)
+  const filePath = path.join(cacheDir, `${cacheKey}.${getTtsAudioExtension(settings)}`)
+  const audioMime = getTtsAudioMime(settings)
+
+  if (fs.existsSync(filePath)) {
+    const cached = fs.readFileSync(filePath)
+    return {
+      provider: settings.tts_provider,
+      model: getTtsModel(settings),
+      voiceId: getTtsVoiceId(settings),
+      filePath,
+      dataUrl: `data:${audioMime};base64,${cached.toString('base64')}`,
+      cached: true,
+      characters,
+      usage: usageBefore,
+    }
+  }
+
+  let audioBuffer: Buffer
+  try {
+    const audioBuffers = []
+    for (const chunk of splitSpeechText(text)) {
+      audioBuffers.push(
+        settings.tts_provider === 'mimo'
+          ? await requestMiMoSpeechAudio(settings, chunk)
+          : await requestMiniMaxSpeechAudio(settings, chunk),
+      )
+    }
+    audioBuffer = Buffer.concat(audioBuffers)
+  } catch (error) {
+    throw new Error(formatTtsFailureMessage(settings, error, characters, usageBefore))
+  }
+
+  fs.writeFileSync(filePath, audioBuffer)
+  const usageAfter = settings.tts_provider === 'minimax' ? recordTtsUsage(characters) : usageBefore
+  return {
+    provider: settings.tts_provider,
+    model: getTtsModel(settings),
+    voiceId: getTtsVoiceId(settings),
+    filePath,
+    dataUrl: `data:${audioMime};base64,${audioBuffer.toString('base64')}`,
+    cached: false,
+    characters,
+    usage: usageAfter,
   }
 }
 
@@ -2656,111 +3195,40 @@ function createWindow() {
   })
 }
 
-function runPythonArchive(video: string, generateAi: boolean): Promise<RunResult> {
-  return new Promise((resolve, reject) => {
-    const runtimeSettings = loadSettings()
-    const pythonCommand = resolvePythonCommand()
-    const pythonEntryPath = resolveBackendScriptPath('main.py')
-    const args = [...pythonCommand.prefixArgs, pythonEntryPath, video, '--result-json']
-    if (!generateAi) args.push('--no-ai')
-    emitArchiveLog(`启动归档任务：${video}`)
-    appendRuntimeLog(`spawn command=${pythonCommand.command} args=${JSON.stringify(args)} cwd=${dataRoot}`)
-
-    const child = spawn(pythonCommand.command, args, {
-      cwd: dataRoot,
-      windowsHide: true,
-      env: buildPythonEnv(runtimeSettings),
-    })
-
-    let stdout = ''
-    let stderr = ''
-    let stdoutBuffer = ''
-
-    child.stdout.on('data', (chunk) => {
-      const text = chunk.toString()
-      stdout += text
-      stdoutBuffer += text
-      const lines = stdoutBuffer.split(/\r?\n/)
-      stdoutBuffer = lines.pop() ?? ''
-      const visibleLines: string[] = []
-      for (const line of lines) {
-        if (!line.trim()) continue
-        const match = line.match(/^__BILIARCHIVE_PROGRESS__=(\{.*\})$/)
-        if (match) {
-          try {
-            const payload = JSON.parse(match[1])
-            emitArchiveProgress({
-              message: String(payload?.message ?? ''),
-              percent: Number(payload?.percent ?? 0),
-            })
-          } catch {
-            // ignore malformed progress payload
-          }
-          continue
-        }
-        visibleLines.push(line)
-      }
-      if (visibleLines.length) {
-        mainWindow?.webContents.send('archive-log', `${visibleLines.join('\n')}\n`)
-      }
-    })
-
-    child.stderr.on('data', (chunk) => {
-      const text = chunk.toString()
-      stderr += text
-      mainWindow?.webContents.send('archive-log', text)
-    })
-
-    child.on('error', (error) => {
-      emitArchiveLog(`归档启动失败：${error.message}`)
-      reject(error)
-    })
-
-    child.on('close', (code) => {
-      if (stdoutBuffer.trim()) {
-        mainWindow?.webContents.send('archive-log', `${stdoutBuffer.trim()}\n`)
-        stdoutBuffer = ''
-      }
-      if (code !== 0) {
-        const message = stderr || stdout || `Python process exited with code ${code}`
-        emitArchiveLog(`归档失败：${message}`)
-        reject(new Error(message))
-        return
-      }
-
-      const match = stdout.match(/__BILIARCHIVE_RESULT__=(\{.*\})/s)
-      if (!match) {
-        emitArchiveLog('归档失败：未能从 Python 输出中解析结果。')
-        reject(new Error('未能从 Python 输出中解析结果。'))
-        return
-      }
-
-      try {
-        const parsed = JSON.parse(match[1])
-        emitArchiveLog(`归档完成：${parsed.markdownPath}`)
-        resolve(parsed)
-      } catch (error) {
-        emitArchiveLog(`归档失败：${error instanceof Error ? error.message : String(error)}`)
-        reject(error as Error)
-      }
-    })
-  })
-}
-
 function runPythonDistiller(payload: DistillPayload): Promise<DistillResult> {
   return new Promise((resolve, reject) => {
-    const video = payload.video
+    const sourceKind = payload.sourceKind === 'local_media' ? 'local_media' : 'bilibili'
+    const inputValue = sourceKind === 'local_media'
+      ? String(payload.mediaPath ?? payload.video ?? '').trim()
+      : String(payload.video ?? '').trim()
+    if (!inputValue) {
+      reject(new Error(sourceKind === 'local_media' ? '请先选择本地音视频文件。' : '请先填写 B 站视频链接或 BV 号。'))
+      return
+    }
     const runtimeSettings = loadSettings()
     const pythonCommand = resolvePythonCommand()
     const distillerEntryPath = resolveBackendScriptPath('distiller.py')
-    const args = [...pythonCommand.prefixArgs, distillerEntryPath, video, '--result-json']
-    appendRuntimeLog(`spawn distiller command=${pythonCommand.command} args=${JSON.stringify(args)} cwd=${dataRoot}`)
-    emitDistillProgress({ message: '正在呼叫 AI 蒸馏课程，请稍候…', percent: 3 })
+    const args = [
+      ...pythonCommand.prefixArgs,
+      distillerEntryPath,
+      inputValue,
+      '--result-json',
+      '--material-only',
+      ...(sourceKind === 'local_media' ? ['--local-media'] : []),
+    ]
+    const materialOutputDir = resolveMaterialOutputDir(runtimeSettings)
+    fs.mkdirSync(materialOutputDir, { recursive: true })
+    fs.mkdirSync(resolveCoursePackageOutputDir(runtimeSettings), { recursive: true })
+    appendRuntimeLog(`spawn material builder command=${pythonCommand.command} args=${JSON.stringify(args)} cwd=${dataRoot}`)
+  emitDistillProgress({ message: '正在整理 Codex 原材料包，请稍候…', percent: 3 })
 
     const child = spawn(pythonCommand.command, args, {
       cwd: dataRoot,
       windowsHide: true,
-      env: buildPythonEnv(runtimeSettings),
+      env: {
+        ...buildPythonEnv(runtimeSettings),
+        SHIJIE_FOCUS_OUTPUT_DIR: materialOutputDir,
+      },
     })
 
     let stdout = ''
@@ -2778,19 +3246,19 @@ function runPythonDistiller(payload: DistillPayload): Promise<DistillResult> {
     const finalizeResolve = (result: DistillResult) => {
       if (settled) return
       settled = true
-      appendRuntimeLog(`distiller resolved packagePath=${result.packagePath}`)
+      appendRuntimeLog(`material builder resolved packagePath=${result.packagePath} materialPath=${result.materialPath ?? ''}`)
       resolve(result)
     }
 
     const timeoutHandle = setTimeout(() => {
       appendRuntimeLog(`distiller timeout after ${DISTILL_PROCESS_TIMEOUT_MS}ms; killing child pid=${child.pid ?? 'unknown'}`)
-      emitDistillProgress({ message: '蒸馏阶段超时，正在终止后台任务…', percent: 96 })
+    emitDistillProgress({ message: '整理阶段超时，正在终止后台任务…', percent: 96 })
       try {
         child.kill()
       } catch {
         // ignore kill failure
       }
-      finalizeReject(new Error(`蒸馏阶段超时（>${Math.floor(DISTILL_PROCESS_TIMEOUT_MS / 1000)} 秒）。`))
+    finalizeReject(new Error(`整理阶段超时（>${Math.floor(DISTILL_PROCESS_TIMEOUT_MS / 1000)} 秒）。`))
     }, DISTILL_PROCESS_TIMEOUT_MS)
 
     child.stdout.on('data', (chunk) => {
@@ -2807,7 +3275,7 @@ function runPythonDistiller(payload: DistillPayload): Promise<DistillResult> {
           try {
             const payload = JSON.parse(match[1])
             emitDistillProgress({
-              message: String(payload?.message ?? '正在蒸馏课程…'),
+            message: String(payload?.message ?? '正在整理课程原材料…'),
               percent: Number(payload?.percent ?? 0),
               outlinePreview: payload?.outlinePreview,
               stage: typeof payload?.stage === 'string' ? payload.stage : undefined,
@@ -2846,7 +3314,7 @@ function runPythonDistiller(payload: DistillPayload): Promise<DistillResult> {
     child.on('error', (error) => {
       clearTimeout(timeoutHandle)
       appendRuntimeLog(`distiller process error: ${error.message}`)
-      finalizeReject(new Error(`蒸馏进程启动失败：${error.message}`))
+    finalizeReject(new Error(`整理进程启动失败：${error.message}`))
     })
 
     child.on('close', (code, signal) => {
@@ -2874,17 +3342,20 @@ function runPythonDistiller(payload: DistillPayload): Promise<DistillResult> {
       const match = stdout.match(/__ONBOARD_DISTILL_RESULT__=(\{.*\})/s)
       if (!match) {
         appendRuntimeLog(`distiller stdout tail=${stdout.slice(-800)}`)
-        finalizeReject(new Error('未能从蒸馏进程输出中解析结果。'))
+        finalizeReject(new Error('未能从整理进程输出中解析结果。'))
         return
       }
 
       try {
         const parsed = JSON.parse(match[1]) as Omit<DistillResult, 'text'>
-        if (!parsed.packagePath || !fs.existsSync(parsed.packagePath)) {
-          throw new Error('蒸馏完成，但未找到生成的课程包文件。')
+        if (!parsed.materialPath || !fs.existsSync(parsed.materialPath)) {
+        throw new Error('整理完成，但未找到生成的 Codex 原材料包。')
         }
-        const courseText = normalizeCoursePackageText(fs.readFileSync(parsed.packagePath, 'utf-8'), parsed.packagePath).text
-        emitDistillProgress({ message: '课程包已生成，正在注入伴学界面…', percent: 100, stage: 'injecting' })
+        const courseText =
+          parsed.packagePath && fs.existsSync(parsed.packagePath)
+            ? normalizeCoursePackageText(fs.readFileSync(parsed.packagePath, 'utf-8'), parsed.packagePath).text
+            : ''
+        emitDistillProgress({ message: 'Codex 原材料包已生成。', percent: 100, stage: 'complete' })
         finalizeResolve({
           ...parsed,
           text: courseText,
@@ -2896,10 +3367,59 @@ function runPythonDistiller(payload: DistillPayload): Promise<DistillResult> {
   })
 }
 
-const singleInstanceLock = app.requestSingleInstanceLock()
-if (!singleInstanceLock) {
-  app.quit()
-} else {
+function getCliArgValue(flag: string) {
+  const index = process.argv.indexOf(flag)
+  if (index < 0) return ''
+  return String(process.argv[index + 1] ?? '').trim()
+}
+
+function clearObsidianExportFolder(settings: RuntimeSettings) {
+  const vaultPath = settings.obsidian_vault_path
+  if (!vaultPath || !fs.existsSync(vaultPath) || !fs.statSync(vaultPath).isDirectory()) {
+    throw new Error('Obsidian Vault 路径不存在，无法清理导出目录。')
+  }
+
+  const exportFolder = sanitizeFileNameSegment(settings.obsidian_export_folder || '视界专注', '视界专注')
+  const targetDir = path.resolve(vaultPath, exportFolder)
+  const resolvedVault = path.resolve(vaultPath)
+  if (!targetDir.startsWith(`${resolvedVault}${path.sep}`)) {
+    throw new Error('导出目录不在 Obsidian Vault 内，已取消清理。')
+  }
+  if (fs.existsSync(targetDir)) {
+    fs.rmSync(targetDir, { recursive: true, force: true })
+  }
+}
+
+async function runObsidianExportCliIfRequested() {
+  const coursePath = getCliArgValue('--export-obsidian-course')
+  if (!coursePath) return false
+
+  await app.whenReady()
+  try {
+    const settings = loadSettings()
+    if (process.argv.includes('--clean-obsidian-export')) {
+      clearObsidianExportFolder(settings)
+    }
+    const course = JSON.parse(fs.readFileSync(coursePath, 'utf-8'))
+    const result = exportCourseToObsidian(settings, {
+      course,
+      currentNodeId: null,
+      completedNodeIds: [],
+    })
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+    app.exit(0)
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+    app.exit(1)
+  }
+  return true
+}
+
+if (!process.argv.includes('--export-obsidian-course')) {
+  const singleInstanceLock = app.requestSingleInstanceLock()
+  if (!singleInstanceLock) {
+    app.quit()
+  } else {
   app.on('second-instance', (_event, argv) => {
     const deepLink = extractDeepLinkFromArgv(argv)
     if (deepLink) {
@@ -2927,6 +3447,9 @@ if (!singleInstanceLock) {
     }
     createWindow()
   })
+  }
+} else {
+  void runObsidianExportCliIfRequested()
 }
 
 app.on('window-all-closed', () => {
@@ -2964,11 +3487,33 @@ ipcMain.handle('dialog:pickDirectory', async () => {
   return result.canceled ? null : result.filePaths[0]
 })
 
-ipcMain.handle('course:import', async () => {
+ipcMain.handle('dialog:pickMediaFile', async () => {
   const result = await dialog.showOpenDialog({
+    title: '选择本地视频或音频',
+    buttonLabel: '使用这个文件',
     properties: ['openFile'],
     filters: [
-      { name: 'Course Package JSON', extensions: ['json'] },
+      { name: '视频或音频文件', extensions: ['mp4', 'mkv', 'mov', 'webm', 'flv', 'avi', 'mp3', 'm4a', 'wav', 'aac', 'flac', 'ogg'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  const targetPath = result.filePaths[0]
+  return {
+    path: targetPath,
+    name: path.basename(targetPath),
+  }
+})
+
+ipcMain.handle('course:import', async () => {
+  const runtimeSettings = loadSettings()
+  const result = await dialog.showOpenDialog({
+    title: '选择课程包 JSON',
+    defaultPath: resolveCourseImportDefaultPath(runtimeSettings),
+    buttonLabel: '导入课包',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Course Package JSON (*.json)', extensions: ['json'] },
       { name: 'All Files', extensions: ['*'] },
     ],
   })
@@ -3000,16 +3545,9 @@ ipcMain.handle('distill:run', async (_event, payload: DistillPayload) => {
   return runPythonDistiller(payload)
 })
 
-ipcMain.handle('obsidian:export-course', async (_event, payload: ObsidianExportPayload) => {
-  return exportCourseToObsidian(loadSettings(), payload)
+ipcMain.handle('materials:list', async () => {
+  return listMaterialPackages(loadSettings())
 })
-
-ipcMain.handle(
-  'obsidian:open-target',
-  async (_event, payload: ObsidianExportPayload & { target?: 'current' | 'board' | 'index' }) => {
-    return openObsidianTarget(loadSettings(), payload)
-  },
-)
 
 ipcMain.handle('learning:library:load', async () => loadLearningLibraryPayload())
 
@@ -3038,13 +3576,31 @@ ipcMain.handle('learning:library:delete', async (_event, recordId: string) => {
   return deleteLearningRecord(recordId)
 })
 
-ipcMain.handle('archive:run', async (_event, payload: { video: string; generateAi: boolean }) => {
-  return runPythonArchive(payload.video, payload.generateAi)
+ipcMain.handle('obsidian:export', async (_event, payload: ObsidianExportPayload) => {
+  return exportCourseToObsidian(loadSettings(), payload)
+})
+
+ipcMain.handle('obsidian:open', async (_event, payload: ObsidianExportPayload & { target?: 'current' | 'board' | 'index' }) => {
+  return openObsidianTarget(loadSettings(), payload)
+})
+
+ipcMain.handle('tts:synthesize', async (_event, payload: TtsSynthesizePayload) => {
+  return synthesizeSpeech(loadSettings(), payload)
+})
+
+ipcMain.handle('tts:status', async (_event, payload: TtsSynthesizePayload) => {
+  return getTtsCacheStatus(loadSettings(), payload)
 })
 
 ipcMain.handle('shell:openPath', async (_event, targetPath: string) => {
   if (!targetPath) return
-  await shell.openPath(targetPath)
+  if (!fs.existsSync(targetPath) && !path.extname(targetPath)) {
+    fs.mkdirSync(targetPath, { recursive: true })
+  }
+  const openPathError = await shell.openPath(targetPath)
+  if (openPathError) {
+    throw new Error(openPathError)
+  }
 })
 
 ipcMain.handle('shell:showItem', async (_event, targetPath: string) => {

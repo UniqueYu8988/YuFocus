@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://shijie-focus.local/schemas/codex_material_package.schema.json",
+  "title": "Shijie Focus Codex Material Package",
+  "description": "Codex-friendly source material package generated from subtitles or local transcripts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "material_id",
+    "source",
+    "acquisition",
+    "files",
+    "block_count",
+    "text_length",
+    "processing_policy"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "onboard.codex-materials.v0.1"
+    },
+    "material_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{2,96}$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_type", "source_id", "title", "language", "ingested_at"],
+      "properties": {
+        "source_type": { "type": "string" },
+        "source_id": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "creator": { "type": "string" },
+        "url": { "type": "string" },
+        "language": { "type": "string", "minLength": 2 },
+        "ingested_at": { "type": "string" }
+      }
+    },
+    "acquisition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subtitle_priority", "text_source_type", "transcription_provider", "notes"],
+      "properties": {
+        "subtitle_priority": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "text_source_type": { "type": "string" },
+        "transcription_provider": { "type": "string" },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "raw_transcript",
+        "raw_tracks",
+        "blocks_dir",
+        "indexes_dir",
+        "codex_tasks_dir",
+        "course_draft_dir",
+        "lesson_drafts_dir",
+        "start_here",
+        "block_schema",
+        "course_package_schema",
+        "course_package_contract"
+      ],
+      "properties": {
+        "raw_transcript": { "type": "string" },
+        "raw_tracks": { "type": "string" },
+        "blocks_dir": { "type": "string" },
+        "indexes_dir": { "type": "string" },
+        "codex_tasks_dir": { "type": "string" },
+        "course_draft_dir": { "type": "string" },
+        "lesson_drafts_dir": { "type": "string" },
+        "start_here": { "type": "string" },
+        "block_schema": { "type": "string" },
+        "course_package_schema": { "type": "string" },
+        "course_package_contract": { "type": "string" }
+      }
+    },
+    "block_count": { "type": "integer", "minimum": 0 },
+    "text_length": { "type": "integer", "minimum": 0 },
+    "raw_transcript_length": { "type": "integer", "minimum": 0 },
+    "chunked_text_length": { "type": "integer", "minimum": 0 },
+    "processing_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw_block_chars", "single_pass_blocks", "lesson_batch_size", "review_strategy"],
+      "properties": {
+        "raw_block_chars": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["target", "min", "max"],
+          "properties": {
+            "target": { "type": "integer", "minimum": 1 },
+            "min": { "type": "integer", "minimum": 1 },
+            "max": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "single_pass_blocks": { "type": "string" },
+        "lesson_batch_size": { "type": "string" },
+        "review_strategy": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "materialBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "block_id",
+        "order",
+        "source_chunk_ids",
+        "page_labels",
+        "time_range",
+        "estimated_tokens",
+        "char_count",
+        "text",
+        "key_points",
+        "source_excerpt",
+        "codex_notes"
+      ],
+      "properties": {
+        "schema_version": { "const": "onboard.material-block.v0.1" },
+        "block_id": { "type": "string", "pattern": "^block_[0-9]{3,}$" },
+        "order": { "type": "integer", "minimum": 1 },
+        "source_chunk_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "page_labels": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "time_range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["from", "to"],
+          "properties": {
+            "from": { "type": ["number", "null"] },
+            "to": { "type": ["number", "null"] }
+          }
+        },
+        "estimated_tokens": { "type": "integer", "minimum": 0 },
+        "char_count": { "type": "integer", "minimum": 0 },
+        "text": { "type": "string" },
+        "key_points": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "source_excerpt": { "type": "string" },
+        "codex_notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

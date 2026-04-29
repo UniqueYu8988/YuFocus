@@ -87,7 +87,7 @@ def _log(message: str) -> None:
         print(message)
     except UnicodeEncodeError:
         if hasattr(sys.stdout, "buffer"):
-            sys.stdout.buffer.write((message + "`n").encode("gbk", errors="replace"))
+            sys.stdout.buffer.write((message + "\n").encode("gbk", errors="replace"))
         else:
             print(message.encode("ascii", errors="replace").decode("ascii"))
 

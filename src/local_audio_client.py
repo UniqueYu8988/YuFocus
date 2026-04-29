@@ -8,13 +8,15 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import config
 
 
 RESULT_PREFIX = "__ONBOARD_LOCAL_TRANSCRIBE__="
+RESULT_ITEM_PREFIX = "__ONBOARD_LOCAL_TRANSCRIBE_ITEM__="
 
 
 def _resolve_root() -> Path | None:
@@ -219,10 +221,137 @@ def transcribe_audio_file(
     return payload
 
 
+def transcribe_audio_files(
+    items: list[dict[str, Any]],
+    *,
+    prompt: str = "",
+    language: str | None = None,
+    timeout: int | None = None,
+    result_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> list[dict[str, Any]]:
+    del prompt
+
+    root = _resolve_root()
+    if not root:
+        raise RuntimeError("未配置本地转写目录，无法启用 SenseVoice。")
+    if not root.exists():
+        raise RuntimeError(f"本地转写目录不存在：{root}")
+
+    python_path = _resolve_python(root)
+    _resolve_entry(root)
+
+    normalized_items: list[dict[str, str]] = []
+    for index, item in enumerate(items, start=1):
+        item_id = str(item.get("id") or f"item_{index:04d}")
+        audio_path = Path(str(item.get("file_path") or "")).expanduser().resolve()
+        if not audio_path.exists():
+            raise RuntimeError(f"音频文件不存在：{audio_path}")
+        normalized_items.append({"id": item_id, "file_path": str(audio_path)})
+
+    if not normalized_items:
+        return []
+
+    cache_dir = root / "model_cache"
+    target_language = (language or config.LOCAL_TRANSCRIPTION_LANGUAGE or "zh").strip() or "zh"
+    device = config.LOCAL_TRANSCRIPTION_DEVICE.strip() or "cuda:0"
+    model_id = get_model()
+
+    payload = {
+        "model_id": model_id,
+        "cache_dir": str(cache_dir),
+        "device": device,
+        "language": target_language,
+        "items": normalized_items,
+    }
+
+    bridge_code = (
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "root = Path(sys.argv[1]).resolve()\n"
+        "payload_path = Path(sys.argv[2]).resolve()\n"
+        "payload = json.loads(payload_path.read_text(encoding='utf-8'))\n"
+        "sys.path.insert(0, str(root))\n"
+        "from local_audio_distiller import LocalAudioDistiller\n"
+        "distiller = LocalAudioDistiller(\n"
+        "    model_id=payload['model_id'],\n"
+        "    cache_dir=Path(payload['cache_dir']),\n"
+        "    device=payload['device'],\n"
+        "    language=payload['language'],\n"
+        ")\n"
+        "results = []\n"
+        "for item in payload['items']:\n"
+        "    audio = Path(item['file_path']).resolve()\n"
+        "    text = distiller.transcribe(audio)\n"
+        "    result = {'id': item['id'], 'file_path': str(audio), 'text': text, 'segments': []}\n"
+        "    results.append(result)\n"
+        f"    print('{RESULT_ITEM_PREFIX}' + json.dumps(result, ensure_ascii=False), flush=True)\n"
+        f"print('{RESULT_PREFIX}' + json.dumps({{'results': results}}, ensure_ascii=False), flush=True)\n"
+    )
+
+    temp_path = None
+    process: subprocess.Popen[str] | None = None
+    output_lines: list[str] = []
+    results: list[dict[str, Any]] = []
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as temp_file:
+            json.dump(payload, temp_file, ensure_ascii=False)
+            temp_path = temp_file.name
+
+        process = subprocess.Popen(
+            [str(python_path), "-c", bridge_code, str(root), temp_path],
+            cwd=str(root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            env={
+                **os.environ,
+                "MODELSCOPE_CACHE": str(cache_dir),
+                "HF_HOME": str(cache_dir / "hf"),
+                "PYTHONIOENCODING": "utf-8",
+                "PYTHONUTF8": "1",
+                "PYTHONUNBUFFERED": "1",
+            },
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            line = line.rstrip("\r\n")
+            output_lines.append(line)
+            if line.startswith(RESULT_ITEM_PREFIX):
+                item_payload = json.loads(line[len(RESULT_ITEM_PREFIX) :])
+                if isinstance(item_payload, dict):
+                    results.append(item_payload)
+                    if result_callback:
+                        result_callback(item_payload)
+        try:
+            return_code = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            process.kill()
+            raise RuntimeError("本地批量音频转写超时。") from exc
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+    if return_code != 0:
+        detail = [line for line in output_lines if line.strip()]
+        raise RuntimeError(detail[-1] if detail else "本地批量音频转写失败。")
+
+    if not results:
+        detail = "\n".join(output_lines).strip()
+        raise RuntimeError("本地批量音频转写返回结果异常。")
+    return [result for result in results if isinstance(result, dict)]
+
+
 __all__ = [
     "get_model",
     "get_root_display",
     "has_local_engine",
+    "transcribe_audio_files",
     "transcribe_audio_file",
     "validate_local_engine",
 ]

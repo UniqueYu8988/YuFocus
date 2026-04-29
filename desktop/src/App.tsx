@@ -7,14 +7,18 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
+import { ensureDesktopApiFallback } from '@/lib/desktopApiFallback'
 import { cn } from '@/lib/utils'
 import { useLearningStore } from '@/store'
+
+ensureDesktopApiFallback()
 
 function App() {
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('hub')
   const [windowFocused, setWindowFocused] = useState(true)
   const [windowMaximized, setWindowMaximized] = useState(false)
   const autoOpenedPackageRef = useRef<string | null>(null)
+  const queryImportedPackageRef = useRef<string | null>(null)
 
   const bootState = useLearningStore((state) => state.bootState)
   const courseData = useLearningStore((state) => state.courseData)
@@ -29,10 +33,31 @@ function App() {
   const setRuntimeSettings = useLearningStore((state) => state.setRuntimeSettings)
   const dismissToast = useLearningStore((state) => state.dismissToast)
   const openDeepLinkedNode = useLearningStore((state) => state.openDeepLinkedNode)
+  const loadCourseFromText = useLearningStore((state) => state.loadCourseFromText)
+  const pushToast = useLearningStore((state) => state.pushToast)
 
   useEffect(() => {
     void hydrateApp()
   }, [hydrateApp])
+
+  useEffect(() => {
+    if (bootState !== 'ready') return
+    const coursePath = new URLSearchParams(window.location.search).get('course')
+    if (!coursePath || queryImportedPackageRef.current === coursePath) return
+
+    queryImportedPackageRef.current = coursePath
+    void window.desktopAPI
+      .readCoursePackage(coursePath)
+      .then(async (result) => {
+        await loadCourseFromText(result.text, result.path)
+        setWorkspaceView('learn')
+        pushToast('课程包已载入', result.path, 'success')
+      })
+      .catch((error) => {
+        queryImportedPackageRef.current = null
+        pushToast('课程包载入失败', error instanceof Error ? error.message : String(error), 'error')
+      })
+  }, [bootState, loadCourseFromText, pushToast])
 
   useEffect(() => {
     const unsubscribe = window.desktopAPI.onWindowFocusChanged((payload) => {
@@ -108,7 +133,7 @@ function App() {
           <CardContent className="space-y-4 p-3.5">
             <div className="flex items-start justify-between gap-3">
               <div className="space-y-1.5">
-                <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground">提炼任务</div>
+                  <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground">整理任务</div>
                 <div className="flex items-center gap-2">
                   <span
                     className={cn(
@@ -117,12 +142,12 @@ function App() {
                     )}
                   />
                   <p className="text-sm font-semibold text-foreground">
-                    {distillRequestState === 'loading' ? '后台提炼中' : '提炼失败'}
+                  {distillRequestState === 'loading' ? '后台整理中' : '整理失败'}
                   </p>
                 </div>
                 <p className="text-xs leading-5 text-muted-foreground">
                   {distillRequestState === 'loading'
-                    ? distillStatusMessage || '正在抓取字幕、切片并重建课程知识树。'
+                    ? distillStatusMessage || '正在抓取字幕、清洗文本并整理 Codex 原材料。'
                     : distillError}
                 </p>
               </div>
@@ -137,7 +162,7 @@ function App() {
               <div className="space-y-2.5">
                 <Progress value={Math.max(4, Math.min(100, distillProgressPercent || 4))} className="h-1.5 bg-white/8" />
                 <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                  <span>提炼不会打断你当前的学习流程。</span>
+                    <span>整理不会打断你当前的学习流程。</span>
                   <span>后台运行</span>
                 </div>
               </div>
@@ -147,7 +172,7 @@ function App() {
       ) : null}
 
       {toast ? (
-        <Card className="glass-panel-strong absolute right-4 top-12 z-20 w-[min(320px,calc(100vw-2rem))] rounded-[22px]">
+        <Card className="glass-panel-strong toast-enter absolute right-4 top-12 z-20 w-[min(320px,calc(100vw-2rem))] overflow-hidden rounded-[22px]">
           <CardContent className="flex items-start gap-3 p-3.5">
             <div
               className={cn(
@@ -171,6 +196,13 @@ function App() {
               <X size={14} />
             </Button>
           </CardContent>
+          <div
+            className={cn(
+              'toast-progress-line h-[2px] w-full origin-left bg-white/22',
+              toast.tone === 'success' && 'bg-emerald-400/70',
+              toast.tone === 'error' && 'bg-destructive/80',
+            )}
+          />
         </Card>
       ) : null}
 

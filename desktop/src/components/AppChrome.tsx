@@ -38,7 +38,7 @@ export function AppChrome({
           <Button
             variant="ghost"
             size="icon"
-            className="size-7 rounded-md text-muted-foreground hover:bg-white/[0.04] hover:text-foreground"
+            className="size-7 rounded-md text-muted-foreground hover:bg-white/[0.018] hover:text-foreground"
             onClick={onMinimize}
             aria-label="最小化"
           >
@@ -47,7 +47,7 @@ export function AppChrome({
           <Button
             variant="ghost"
             size="icon"
-            className="size-7 rounded-md text-muted-foreground hover:bg-white/[0.04] hover:text-foreground"
+            className="size-7 rounded-md text-muted-foreground hover:bg-white/[0.018] hover:text-foreground"
             onClick={onToggleMaximize}
             aria-label={isMaximized ? '还原窗口' : '最大化窗口'}
           >
