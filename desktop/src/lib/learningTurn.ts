@@ -41,6 +41,40 @@ function normalizeTeachingMarkdown(markdown: string) {
 function formatStandardAnswerMarkdown(answer: string) {
   const trimmed = answer.trim()
   if (!trimmed) return ''
+
+  const standardAnswerMatch = trimmed.match(/^标准答案可以这样组织：\s*([\s\S]*?)(?=\s*答题时要体现|$)/u)
+  const structureItems = standardAnswerMatch
+    ? standardAnswerMatch[1]
+        .split(/\s+-\s+/u)
+        .map((item) => item.replace(/^[-*]\s*/u, '').trim())
+        .filter(Boolean)
+    : []
+
+  const levelMatch = trimmed.match(/答题时要体现三个层次：([\s\S]*?)(?=\s*容易丢分的地方是|$)/u)
+  const riskMatch = trimmed.match(/容易丢分的地方是：([\s\S]*?)(?=\s*只要答案里|$)/u)
+  const masteryMatch = trimmed.match(/只要答案里([\s\S]*?)$/u)
+  const riskItems = riskMatch
+    ? riskMatch[1]
+        .split(/[；;。]+/u)
+        .map((item) => item.trim())
+        .filter((item) => item.length > 1)
+    : []
+
+  if (structureItems.length > 0 || levelMatch || riskItems.length > 0 || masteryMatch) {
+    return [
+      structureItems.length > 0
+        ? structureItems.map((item) => `- ${item}`).join('\n')
+        : '',
+      levelMatch ? `**答题层次：** ${levelMatch[1].trim()}` : '',
+      riskItems.length > 0
+        ? ['**容易丢分：**', ...riskItems.map((item) => `- ${item}`)].join('\n')
+        : '',
+      masteryMatch ? `**掌握标准：** 只要答案里${masteryMatch[1].trim()}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+  }
+
   if (/^\s*([-*]|\d+\.)\s+/m.test(trimmed) || trimmed.includes('\n')) return trimmed
 
   const sentences = trimmed

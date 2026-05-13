@@ -25,6 +25,7 @@ from time import perf_counter
 import re
 import sys
 from typing import Any, Callable, Iterable
+import zipfile
 
 import requests
 
@@ -53,6 +54,100 @@ MATERIAL_BLOCK_MIN_CHARS = max(4_000, int(os.getenv("ONBOARD_MATERIAL_BLOCK_MIN_
 MATERIAL_BLOCK_MAX_CHARS = max(
     MATERIAL_BLOCK_TARGET_CHARS,
     int(os.getenv("ONBOARD_MATERIAL_BLOCK_MAX_CHARS", "30000") or "30000"),
+)
+MATERIAL_TERM_STOPWORDS = {
+    "这个",
+    "那个",
+    "然后",
+    "就是",
+    "我们",
+    "你们",
+    "大家",
+    "可以",
+    "需要",
+    "一个",
+    "一下",
+    "如果",
+    "因为",
+    "所以",
+    "其实",
+    "现在",
+    "这里",
+    "里面",
+    "时候",
+    "内容",
+    "课程",
+    "视频",
+    "字幕",
+    "老师",
+}
+MATERIAL_NOISE_KEYWORDS = (
+    "点赞",
+    "投币",
+    "关注",
+    "三连",
+    "弹幕",
+    "评论区",
+    "直播间",
+    "同学们好",
+    "大家好",
+    "废话不多说",
+    "下期",
+    "课程优惠",
+    "加群",
+)
+MATERIAL_OPERATION_KEYWORDS = (
+    "打开",
+    "点击",
+    "选择",
+    "输入",
+    "复制",
+    "粘贴",
+    "保存",
+    "运行",
+    "执行",
+    "安装",
+    "配置",
+    "启动",
+    "创建",
+    "导入",
+    "连接",
+    "检查",
+    "验证",
+)
+MATERIAL_TROUBLESHOOTING_KEYWORDS = (
+    "报错",
+    "失败",
+    "无法",
+    "不能",
+    "错误",
+    "异常",
+    "权限",
+    "超时",
+    "不通",
+    "没有响应",
+    "排查",
+    "排错",
+)
+MATERIAL_CASE_KEYWORDS = ("病例", "案例", "场景", "需求", "客户", "业务", "患者", "诊断", "鉴别")
+MATERIAL_EXAM_KEYWORDS = ("考试", "考点", "评分", "扣分", "得分", "真题", "题目", "答题")
+MATERIAL_VERSION_SENSITIVE_TERMS = (
+    "api",
+    "sdk",
+    "model",
+    "版本",
+    "价格",
+    "额度",
+    "openclaw",
+    "langchain",
+    "langgraph",
+    "autogen",
+    "crewai",
+    "ragflow",
+    "mcp",
+    "tavily",
+    "python",
+    "node",
 )
 MAX_ROOT_CHAPTERS = max(6, int(os.getenv("ONBOARD_MAX_ROOT_CHAPTERS", "24") or "24"))
 MICRO_ROOT_LESSON_THRESHOLD = max(1, int(os.getenv("ONBOARD_MICRO_ROOT_LESSON_THRESHOLD", "2") or "2"))
@@ -210,6 +305,8 @@ class TextUnit:
     page_label: str
     text: str
     estimated_tokens: int
+    start_time: float | None = None
+    end_time: float | None = None
 
 
 @dataclass(slots=True)
@@ -220,6 +317,8 @@ class TextChunk:
     units: list[TextUnit]
     estimated_tokens: int
     page_labels: list[str]
+    start_time: float | None = None
+    end_time: float | None = None
 
 
 @dataclass(slots=True)
@@ -483,6 +582,52 @@ def _compact_sentences(text: str, target_chars: int) -> list[str]:
     return groups
 
 
+def _coerce_optional_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _group_subtitle_entries(entries: list[dict[str, Any]], target_chars: int) -> list[tuple[str, float | None, float | None]]:
+    groups: list[tuple[str, float | None, float | None]] = []
+    buffer: list[str] = []
+    starts: list[float] = []
+    ends: list[float] = []
+    length = 0
+
+    def flush() -> None:
+        nonlocal buffer, starts, ends, length
+        if not buffer:
+            return
+        text = _normalize_whitespace(" ".join(buffer))
+        if text:
+            groups.append((text, min(starts) if starts else None, max(ends) if ends else None))
+        buffer = []
+        starts = []
+        ends = []
+        length = 0
+
+    for entry in entries:
+        text = str(entry.get("content", "")).strip()
+        if not text:
+            continue
+        if buffer and length + len(text) > target_chars:
+            flush()
+        buffer.append(text)
+        length += len(text)
+        start = _coerce_optional_float(entry.get("from"))
+        end = _coerce_optional_float(entry.get("to"))
+        if start is not None:
+            starts.append(start)
+        if end is not None:
+            ends.append(end)
+    flush()
+    return groups
+
+
 def _iter_subtitle_units(source: list[dict[str, Any]], target_chars: int) -> Iterable[TextUnit]:
     for subtitle in source:
         page_segments = subtitle.get("page_segments") or []
@@ -490,24 +635,26 @@ def _iter_subtitle_units(source: list[dict[str, Any]], target_chars: int) -> Ite
             for segment in page_segments:
                 label = str(segment.get("label") or "未命名分段").strip()
                 entries = segment.get("entries") or []
-                text_lines = [
-                    f"[{float(entry.get('from', 0.0)):.1f}-{float(entry.get('to', 0.0)):.1f}] {str(entry.get('content', '')).strip()}"
-                    for entry in entries
-                    if str(entry.get("content", "")).strip()
-                ]
-                for group in _compact_sentences("\n".join(text_lines), target_chars):
-                    yield TextUnit(page_label=label, text=group, estimated_tokens=_estimate_tokens(group))
+                for group, start_time, end_time in _group_subtitle_entries(entries, target_chars):
+                    yield TextUnit(
+                        page_label=label,
+                        text=group,
+                        estimated_tokens=_estimate_tokens(group),
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
             continue
 
         label = str(subtitle.get("lang") or "字幕内容").strip()
         entries = subtitle.get("entries") or []
-        text_lines = [
-            f"[{float(entry.get('from', 0.0)):.1f}-{float(entry.get('to', 0.0)):.1f}] {str(entry.get('content', '')).strip()}"
-            for entry in entries
-            if str(entry.get("content", "")).strip()
-        ]
-        for group in _compact_sentences("\n".join(text_lines), target_chars):
-            yield TextUnit(page_label=label, text=group, estimated_tokens=_estimate_tokens(group))
+        for group, start_time, end_time in _group_subtitle_entries(entries, target_chars):
+            yield TextUnit(
+                page_label=label,
+                text=group,
+                estimated_tokens=_estimate_tokens(group),
+                start_time=start_time,
+                end_time=end_time,
+            )
 
 
 def normalize_raw_source(raw_source: str | list[dict[str, Any]] | dict[str, Any], *, target_chars: int = 260) -> list[TextUnit]:
@@ -545,6 +692,8 @@ def build_chunks(units: list[TextUnit], package_id: str, pipeline_config: Pipeli
         if not current_units:
             return
         page_labels = list(dict.fromkeys(unit.page_label for unit in current_units))
+        starts = [unit.start_time for unit in current_units if unit.start_time is not None]
+        ends = [unit.end_time for unit in current_units if unit.end_time is not None]
         header = "\n".join(f"## {label}" for label in page_labels)
         body = "\n".join(unit.text for unit in current_units)
         chunk_text = f"{header}\n\n{body}".strip()
@@ -556,6 +705,8 @@ def build_chunks(units: list[TextUnit], package_id: str, pipeline_config: Pipeli
                 units=list(current_units),
                 estimated_tokens=_estimate_tokens(chunk_text),
                 page_labels=page_labels,
+                start_time=min(starts) if starts else None,
+                end_time=max(ends) if ends else None,
             )
         )
         chunk_index += 1
@@ -581,6 +732,8 @@ def build_chunks(units: list[TextUnit], package_id: str, pipeline_config: Pipeli
 
     if current_units and has_fresh_units:
         page_labels = list(dict.fromkeys(unit.page_label for unit in current_units))
+        starts = [unit.start_time for unit in current_units if unit.start_time is not None]
+        ends = [unit.end_time for unit in current_units if unit.end_time is not None]
         header = "\n".join(f"## {label}" for label in page_labels)
         body = "\n".join(unit.text for unit in current_units)
         chunk_text = f"{header}\n\n{body}".strip()
@@ -592,6 +745,8 @@ def build_chunks(units: list[TextUnit], package_id: str, pipeline_config: Pipeli
                 units=list(current_units),
                 estimated_tokens=_estimate_tokens(chunk_text),
                 page_labels=page_labels,
+                start_time=min(starts) if starts else None,
+                end_time=max(ends) if ends else None,
             )
         )
 
@@ -2859,7 +3014,7 @@ def _subtitle_track_segments(subtitles: list[dict[str, Any]]) -> list[dict[str, 
         if page_segments:
             for page_segment in page_segments:
                 page_no = int(page_segment.get("page") or 0)
-                label = str(page_segment.get("label") or f"P{page_no}" if page_no else "")
+                label = str(page_segment.get("label") or (f"P{page_no}" if page_no else ""))
                 for entry in page_segment.get("entries") or []:
                     segments.append(
                         {
@@ -2920,6 +3075,337 @@ def _split_material_tokens(text: str) -> list[str]:
     ]
 
 
+def _truncate_material_text(text: str, limit: int = 120) -> str:
+    cleaned = _normalize_whitespace(text)
+    return cleaned if len(cleaned) <= limit else cleaned[: limit - 1].rstrip() + "…"
+
+
+def _material_sentences_with_keywords(text: str, keywords: Iterable[str], *, limit: int = 6) -> list[str]:
+    keyword_list = [keyword.casefold() for keyword in keywords]
+    sentences = re.split(r"[。！？!?\n]|(?<![A-Za-z0-9])\.(?![A-Za-z0-9])", text or "")
+    matches: list[str] = []
+    for sentence in sentences:
+        cleaned = _truncate_material_text(sentence, 140)
+        if not cleaned:
+            continue
+        haystack = cleaned.casefold()
+        if any(keyword in haystack for keyword in keyword_list):
+            matches.append(cleaned)
+        if len(matches) >= limit:
+            break
+    return _take_unique_texts(matches, limit=limit)
+
+
+def _extract_material_terms(text: str, *, limit: int = 18) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+
+    def add(term: str) -> None:
+        cleaned = term.strip("`'\"“”‘’.,，。:：;；()（）[]【】<>《》")
+        if not cleaned or cleaned.casefold() in seen:
+            return
+        if cleaned in MATERIAL_TERM_STOPWORDS:
+            return
+        if cleaned.isdigit():
+            return
+        if re.fullmatch(r"[A-Za-z]", cleaned):
+            return
+        if len(cleaned) > 32:
+            return
+        seen.add(cleaned.casefold())
+        terms.append(cleaned)
+
+    for match in re.finditer(r"\b[A-Za-z][A-Za-z0-9_.+-]{1,31}\b", text or ""):
+        token = match.group(0)
+        if len(token) >= 3 or any(char.isupper() for char in token):
+            add(token)
+        if len(terms) >= limit:
+            return terms
+
+    for token in _split_material_tokens(text):
+        if 2 <= len(token) <= 12 and not re.fullmatch(r"\d+(?:\.\d+)?", token):
+            add(token)
+        if len(terms) >= limit:
+            break
+    return terms
+
+
+def _count_keyword_hits(text: str, keywords: Iterable[str]) -> int:
+    haystack = (text or "").casefold()
+    return sum(1 for keyword in keywords if keyword.casefold() in haystack)
+
+
+def _classify_material_role(text: str) -> str:
+    scores = {
+        "tool_config": _count_keyword_hits(text, ("api", "key", "base url", "模型", "配置", "安装", "环境", "终端", "命令", "路径")),
+        "operation_steps": _count_keyword_hits(text, MATERIAL_OPERATION_KEYWORDS),
+        "troubleshooting": _count_keyword_hits(text, MATERIAL_TROUBLESHOOTING_KEYWORDS),
+        "case_analysis": _count_keyword_hits(text, MATERIAL_CASE_KEYWORDS),
+        "exam_training": _count_keyword_hits(text, MATERIAL_EXAM_KEYWORDS),
+        "concept_explain": _count_keyword_hits(text, ("概念", "原理", "为什么", "区别", "关系", "定义", "本质", "框架")),
+        "strategy": _count_keyword_hits(text, ("策略", "计划", "复习", "路线", "方法", "选择", "取舍")),
+    }
+    best_role, best_score = max(scores.items(), key=lambda item: item[1])
+    return best_role if best_score > 0 else "concept_explain"
+
+
+def _material_noise_level(text: str) -> tuple[str, list[str]]:
+    hits = [keyword for keyword in MATERIAL_NOISE_KEYWORDS if keyword.casefold() in (text or "").casefold()]
+    char_count = len(_normalize_whitespace(text))
+    if len(hits) >= 3 or (hits and char_count < 260):
+        return "high", hits[:5]
+    if hits:
+        return "medium", hits[:5]
+    return "low", []
+
+
+def _material_teaching_value_score(text: str, role: str, noise_level: str) -> int:
+    char_count = len(_normalize_whitespace(text))
+    score = 1 + min(3, char_count // 900)
+    if role in {"operation_steps", "tool_config", "troubleshooting", "case_analysis", "exam_training"}:
+        score += 1
+    if noise_level == "medium":
+        score -= 1
+    if noise_level == "high":
+        score -= 2
+    return max(1, min(5, int(score)))
+
+
+def _label_to_block_ids(material_blocks: list[dict[str, Any]]) -> dict[str, list[str]]:
+    mapping: dict[str, list[str]] = {}
+    for block in material_blocks:
+        block_id = str(block.get("block_id") or "")
+        for label in block.get("page_labels") or []:
+            key = _normalize_whitespace(str(label))
+            if key and block_id:
+                mapping.setdefault(key, []).append(block_id)
+    return {key: list(dict.fromkeys(value)) for key, value in mapping.items()}
+
+
+def _build_part_index(subtitles: list[dict[str, Any]], material_blocks: list[dict[str, Any]]) -> dict[str, Any]:
+    label_blocks = _label_to_block_ids(material_blocks)
+    part_map: dict[str, dict[str, Any]] = {}
+    order = 0
+
+    for track in _subtitle_track_segments(subtitles):
+        for segment in track.get("segments") or []:
+            label = _normalize_whitespace(str(segment.get("label") or "")) or "字幕"
+            page = int(segment.get("page") or 0)
+            key = f"{page:03d}|{label}"
+            if key not in part_map:
+                order += 1
+                part_map[key] = {
+                    "part_id": f"P{page:02d}" if page else f"part_{order:03d}",
+                    "order": order,
+                    "page": page or None,
+                    "label": label,
+                    "texts": [],
+                    "starts": [],
+                    "ends": [],
+                    "block_ids": label_blocks.get(label, []),
+                }
+            text = str(segment.get("text") or "").strip()
+            if text:
+                part_map[key]["texts"].append(text)
+            try:
+                part_map[key]["starts"].append(float(segment.get("from") or 0))
+                part_map[key]["ends"].append(float(segment.get("to") or 0))
+            except Exception:
+                pass
+
+    items: list[dict[str, Any]] = []
+    for raw in sorted(part_map.values(), key=lambda item: int(item.get("order") or 0)):
+        text = _normalize_whitespace(" ".join(raw.get("texts") or []))
+        summary_points = _split_brief_points(text, limit=6)
+        role = _classify_material_role(text)
+        noise_level, noise_reasons = _material_noise_level(text)
+        terms = _extract_material_terms(text, limit=18)
+        operation_steps = _material_sentences_with_keywords(text, MATERIAL_OPERATION_KEYWORDS, limit=6)
+        risk_points = _material_sentences_with_keywords(text, (*MATERIAL_TROUBLESHOOTING_KEYWORDS, "注意", "不要", "风险", "安全"), limit=5)
+        commands_or_apis = [
+            term for term in terms
+            if re.search(r"[A-Za-z]", term) or term.casefold() in {"api", "key", "url", "model", "sdk", "mcp"}
+        ][:10]
+        starts = [value for value in raw.get("starts") or [] if isinstance(value, (int, float))]
+        ends = [value for value in raw.get("ends") or [] if isinstance(value, (int, float))]
+        items.append(
+            {
+                "part_id": raw.get("part_id"),
+                "order": raw.get("order"),
+                "page": raw.get("page"),
+                "label": raw.get("label"),
+                "block_ids": raw.get("block_ids") or [],
+                "time_range": {
+                    "from": min(starts) if starts else None,
+                    "to": max(ends) if ends else None,
+                },
+                "char_count": len(text),
+                "main_topic": summary_points[0] if summary_points else str(raw.get("label") or ""),
+                "summary_points": summary_points,
+                "terms": terms,
+                "operation_steps": operation_steps,
+                "commands_or_apis": commands_or_apis,
+                "risk_points": risk_points,
+                "suggested_lesson_role": role,
+                "teaching_value_score": _material_teaching_value_score(text, role, noise_level),
+                "noise_level": noise_level,
+                "noise_reasons": noise_reasons,
+                "source_excerpt": text[:900],
+            }
+        )
+
+    return {
+        "schema_version": "shijie.part-index.v0.1",
+        "purpose": "给 GPT/Codex 的分 P 导航层：先看这里判断主题、操作密度、噪音和建议合并方式，再按需回读 blocks/raw_transcript。",
+        "items": items,
+        "recommended_merge_groups": _build_recommended_merge_groups(items),
+    }
+
+
+def _build_recommended_merge_groups(part_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    current: list[dict[str, Any]] = []
+
+    def flush() -> None:
+        nonlocal current
+        if not current:
+            return
+        if len(current) >= 2:
+            roles = [str(item.get("suggested_lesson_role") or "") for item in current]
+            role = max(set(roles), key=roles.count)
+            groups.append(
+                {
+                    "group_id": f"merge_{len(groups) + 1:03d}",
+                    "part_ids": [str(item.get("part_id") or "") for item in current],
+                    "labels": [str(item.get("label") or "") for item in current],
+                    "suggested_lesson_role": role,
+                    "reason": "相邻分 P 主题/课型接近，适合由 GPT 判断是否合并为同一 lesson 或同一章节连续小节。",
+                    "key_terms": _take_unique_texts(
+                        [term for item in current for term in (item.get("terms") or [])],
+                        limit=12,
+                    ),
+                }
+            )
+        current = []
+
+    for item in part_items:
+        role = str(item.get("suggested_lesson_role") or "")
+        noise_level = str(item.get("noise_level") or "")
+        if noise_level == "high":
+            flush()
+            continue
+        if not current:
+            current = [item]
+            continue
+        previous_role = str(current[-1].get("suggested_lesson_role") or "")
+        previous_terms = set(str(term).casefold() for term in current[-1].get("terms") or [])
+        item_terms = set(str(term).casefold() for term in item.get("terms") or [])
+        has_term_overlap = bool(previous_terms & item_terms)
+        if role == previous_role and (has_term_overlap or len(current) < 3):
+            current.append(item)
+            if len(current) >= 4:
+                flush()
+        else:
+            flush()
+            current = [item]
+    flush()
+    return groups
+
+
+def _build_term_normalization_index(part_index: dict[str, Any], concept_index: dict[str, list[str]]) -> dict[str, Any]:
+    term_map: dict[str, dict[str, Any]] = {}
+    for item in part_index.get("items") or []:
+        part_id = str(item.get("part_id") or "")
+        for term in item.get("terms") or []:
+            key = str(term).casefold()
+            record = term_map.setdefault(
+                key,
+                {
+                    "term": str(term),
+                    "parts": [],
+                    "blocks": [],
+                    "needs_verification": False,
+                    "reason": "",
+                },
+            )
+            if part_id:
+                record["parts"].append(part_id)
+            for block_id in item.get("block_ids") or []:
+                record["blocks"].append(str(block_id))
+            if any(marker in key for marker in MATERIAL_VERSION_SENSITIVE_TERMS):
+                record["needs_verification"] = True
+                record["reason"] = "工具、模型、平台、API 或版本相关术语，制课时应保守表述或核验官方文档。"
+
+    for term, block_ids in concept_index.items():
+        key = str(term).casefold()
+        if key in term_map:
+            continue
+        if 2 <= len(str(term)) <= 24:
+            term_map[key] = {
+                "term": str(term),
+                "parts": [],
+                "blocks": list(dict.fromkeys(block_ids)),
+                "needs_verification": any(marker in key for marker in MATERIAL_VERSION_SENSITIVE_TERMS),
+                "reason": "来自概念索引；如为工具/API/平台名，制课时需注意版本敏感。",
+            }
+
+    terms = sorted(
+        term_map.values(),
+        key=lambda item: (len(set(item.get("parts") or [])) + len(set(item.get("blocks") or [])), str(item.get("term") or "")),
+        reverse=True,
+    )
+    for item in terms:
+        item["parts"] = list(dict.fromkeys(item.get("parts") or []))[:24]
+        item["blocks"] = list(dict.fromkeys(item.get("blocks") or []))[:24]
+    return {
+        "schema_version": "shijie.term-normalization.v0.1",
+        "purpose": "给 GPT/Codex 的术语导航层。它不是权威词典，只提示高频术语、疑似版本敏感词和需要核验的工具/API 名称。",
+        "terms": terms[:160],
+        "verification_candidates": [item for item in terms if item.get("needs_verification")][:60],
+    }
+
+
+def _build_noise_segments_index(part_index: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": "shijie.noise-segments.v0.1",
+        "purpose": "提示 GPT 课程设计时可降权或跳过的片头片尾、互动话术、推广话术和低教学价值片段。",
+        "items": [
+            {
+                "part_id": item.get("part_id"),
+                "label": item.get("label"),
+                "noise_level": item.get("noise_level"),
+                "noise_reasons": item.get("noise_reasons") or [],
+                "suggestion": "课程蓝图可降权处理；除非这些内容承载真实教学目标，否则不要单独成课。",
+            }
+            for item in part_index.get("items") or []
+            if item.get("noise_level") in {"medium", "high"}
+        ],
+    }
+
+
+def _build_teaching_map(part_index: dict[str, Any]) -> dict[str, Any]:
+    high_value_items = [
+        item for item in part_index.get("items") or []
+        if int(item.get("teaching_value_score") or 0) >= 4 and item.get("noise_level") != "high"
+    ]
+    return {
+        "schema_version": "shijie.teaching-map.v0.1",
+        "purpose": "粗粒度教学导航。GPT 可以用它快速判断哪些分 P 更适合成课、哪些适合合并、哪些只作为素材证据。",
+        "high_value_parts": [
+            {
+                "part_id": item.get("part_id"),
+                "label": item.get("label"),
+                "suggested_lesson_role": item.get("suggested_lesson_role"),
+                "teaching_value_score": item.get("teaching_value_score"),
+                "main_topic": item.get("main_topic"),
+                "block_ids": item.get("block_ids") or [],
+            }
+            for item in high_value_items
+        ],
+        "recommended_merge_groups": part_index.get("recommended_merge_groups") or [],
+    }
+
+
 def _estimate_material_block_tokens(text: str) -> int:
     return max(1, math.ceil(len(text) / 1.7))
 
@@ -2937,17 +3423,27 @@ def _build_material_blocks(chunks: list[TextChunk]) -> list[dict[str, Any]]:
         text = "\n\n".join(chunk.text.strip() for chunk in current_chunks if chunk.text.strip()).strip()
         page_labels: list[str] = []
         chunk_ids: list[str] = []
+        starts: list[float] = []
+        ends: list[float] = []
         for chunk in current_chunks:
             chunk_ids.append(chunk.chunk_id)
             for label in chunk.page_labels:
                 if label and label not in page_labels:
                     page_labels.append(label)
+            if chunk.start_time is not None:
+                starts.append(chunk.start_time)
+            if chunk.end_time is not None:
+                ends.append(chunk.end_time)
         blocks.append(
             {
                 "block_id": f"block_{block_index:03d}",
                 "order": block_index,
                 "chunk_ids": chunk_ids,
                 "page_labels": page_labels,
+                "time_range": {
+                    "from": min(starts) if starts else None,
+                    "to": max(ends) if ends else None,
+                },
                 "text": text,
                 "estimated_tokens": _estimate_material_block_tokens(text),
                 "char_count": len(text),
@@ -2972,6 +3468,22 @@ def _build_material_blocks(chunks: list[TextChunk]) -> list[dict[str, Any]]:
         previous = blocks[-1]
         previous["chunk_ids"] = [*previous["chunk_ids"], *tail["chunk_ids"]]
         previous["page_labels"] = [*previous["page_labels"], *[label for label in tail["page_labels"] if label not in previous["page_labels"]]]
+        previous_range = previous.get("time_range") if isinstance(previous.get("time_range"), dict) else {}
+        tail_range = tail.get("time_range") if isinstance(tail.get("time_range"), dict) else {}
+        starts = [
+            value
+            for value in [previous_range.get("from"), tail_range.get("from")]
+            if isinstance(value, (int, float))
+        ]
+        ends = [
+            value
+            for value in [previous_range.get("to"), tail_range.get("to")]
+            if isinstance(value, (int, float))
+        ]
+        previous["time_range"] = {
+            "from": min(starts) if starts else None,
+            "to": max(ends) if ends else None,
+        }
         previous["text"] = f"{previous['text']}\n\n{tail['text']}".strip()
         previous["char_count"] = len(previous["text"])
         previous["estimated_tokens"] = _estimate_material_block_tokens(previous["text"])
@@ -2980,6 +3492,465 @@ def _build_material_blocks(chunks: list[TextChunk]) -> list[dict[str, Any]]:
         block["block_id"] = f"block_{index:03d}"
         block["order"] = index
     return blocks
+
+
+def _project_file(*parts: str) -> str:
+    return os.path.join(config.PROJECT_ROOT, *parts)
+
+
+def _copy_project_file_if_exists(source_parts: tuple[str, ...], target_path: str) -> bool:
+    source_path = _project_file(*source_parts)
+    if not os.path.exists(source_path):
+        return False
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    shutil.copyfile(source_path, target_path)
+    return True
+
+
+def _write_text_file(file_path: str, lines: list[str]) -> str:
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, "w", encoding="utf-8") as file:
+        file.write("\n".join(lines).strip() + "\n")
+    return file_path
+
+
+def _write_gpt_designer_workspace(material_dir: str, *, course_title: str, material_id: str) -> dict[str, str]:
+    designer_dir = os.path.join(material_dir, "gpt_designer")
+    schemas_dir = os.path.join(material_dir, "schemas")
+    os.makedirs(designer_dir, exist_ok=True)
+    os.makedirs(schemas_dir, exist_ok=True)
+
+    readme_for_gpt_path = os.path.join(material_dir, "README_FOR_GPT.md")
+    start_path = os.path.join(designer_dir, "START_GPT_DESIGNER.md")
+    chatgpt_prompt_path = os.path.join(designer_dir, "chatgpt-course-designer-v1.md")
+    codex_prompt_path = os.path.join(designer_dir, "codex-blueprint-executor-v1.md")
+    workflow_path = os.path.join(designer_dir, "gpt-course-designer-workflow.md")
+    display_blocks_path = os.path.join(designer_dir, "course-display-blocks-vnext.md")
+    template_path = os.path.join(designer_dir, "course_blueprint.template.json")
+    chatgpt_copy_path = os.path.join(designer_dir, "01_copy_to_chatgpt.md")
+    codex_copy_path = os.path.join(designer_dir, "02_copy_to_codex_after_blueprint.md")
+    repair_copy_path = os.path.join(designer_dir, "03_repair_course_after_audit.md")
+    zip_path = os.path.join(designer_dir, "gpt_course_design_workspace.zip")
+    blueprint_path = os.path.join(material_dir, "course_blueprint.json")
+
+    _copy_project_file_if_exists(("src", "schemas", "course_blueprint.schema.json"), os.path.join(schemas_dir, "course_blueprint.schema.json"))
+    _copy_project_file_if_exists(("docs", "prompts", "chatgpt-course-designer-v1.md"), chatgpt_prompt_path)
+    _copy_project_file_if_exists(("docs", "prompts", "codex-blueprint-executor-v1.md"), codex_prompt_path)
+    _copy_project_file_if_exists(("docs", "course-design", "gpt-course-designer-workflow.md"), workflow_path)
+    _copy_project_file_if_exists(("docs", "course-design", "course-display-blocks-vnext.md"), display_blocks_path)
+
+    _save_json_file(
+        template_path,
+        {
+            "schema_version": "shijie.course-blueprint.v0.1",
+            "blueprint_id": material_id,
+            "course_title": course_title,
+            "source_genre": "mixed",
+            "learning_intent": "general_learning",
+            "course_design_mode": "mixed",
+            "source_summary": {
+                "source_type": "video_transcript_material_package",
+                "source_id": material_id,
+                "source_title": course_title,
+                "material_scope": "用完整字幕/转写确定知识范围、素材线索、讲解顺序和缺口位置；不要把字幕摘要直接当课程。",
+                "known_limits": [],
+            },
+            "learner_profile": {
+                "target_audience": "",
+                "assumed_background": [],
+                "learning_goal": "",
+                "risk_points": [],
+            },
+            "course_strategy": {
+                "course_type_tags": [],
+                "design_principles": [],
+                "sequence_rationale": "",
+                "knowledge_gap_policy": "",
+            },
+            "chapters": [],
+            "global_visual_plan": [],
+            "source_coverage_map": [],
+            "topic_inventory": [],
+            "compression_review": {
+                "material_scale": "",
+                "lesson_count_rationale": "",
+                "minimum_lesson_check": "",
+                "compression_risks": [],
+                "expansion_recommendation": "",
+            },
+            "design_review": {
+                "strengths": [],
+                "risk_points": [],
+                "high_density_lessons": [],
+                "rejected_alternatives": [],
+                "verification_needs": [],
+                "software_display_needs": [],
+            },
+            "codex_execution_policy": {
+                "lesson_generation_order": "按章节顺序分批生成，每批 1-3 节；高密度 lesson 单独或小批处理。",
+                "quality_bar": [
+                    "Codex 先读 course_blueprint.json，再按每节 lesson 的 source_scope 回读本地 blocks/raw_transcript。",
+                    "学生端只写 teacher_ready_content；不要暴露字幕证据、材料分析、制课过程或 debug 字段。",
+                    "最后运行 python src\\codex_course_packager.py \"<course_material_dir>\" --strict。",
+                ],
+                "software_display_notes": [],
+            },
+        },
+    )
+
+    _write_text_file(
+        readme_for_gpt_path,
+        [
+            "# README FOR GPT",
+            "",
+            "1. 先读 `gpt_designer/START_GPT_DESIGNER.md` 和 `gpt_designer/chatgpt-course-designer-v1.md`。",
+            "2. 先用 `manifest.json`、`indexes/teaching_map.json`、`indexes/part_index.json`、`indexes/term_normalization.json` 建立课程地图。",
+            "3. 再按需要回读 `blocks/block_*.json`；`raw_transcript.txt` 只用于核对关键疑点，不要从头顺序复述。",
+            "4. 输出目标只有 `course_blueprint.json`，不要生成最终课程正文。",
+            "5. 禁止把视频分 P 直接等同 lesson；允许合并、拆分、重排和舍弃噪音片段。",
+            "6. 每章都要设计 `chapter_roadmap`，用于软件里的章节地图按钮；它要用短节点、箭头和关系标签串起本章 lesson。优先填写 `map_label/action_tag/risk_tag/output_tag`，不要设计成横向卡片或大段说明；`edges[].label` 必须说明小节之间的知识推进关系，禁止写“下一步/继续/前一步/先会前一步”这类空标签。每章还要提供 `visual_asset`：`kind=image`、`status=planned`、中文 `alt` 和可用于生成章节学习路线图图片的 `prompt`，不要把图片 prompt 写成封面图或大段文字思维导图。",
+            "7. 长材料必须先建立 `topic_inventory` 候选主题池，再写 `compression_review`，说明哪些主题被完整使用、部分使用、合并、跳过，以及当前 lesson 数是否足够。",
+            "8. 必须填写 `course_design_mode`，并尽量为每节课填写 `primary_training_action` 和 `training_policy`。`training_policy.must_include` 只放 2-3 个核心训练槽位，不要每节复用同一套全量槽位。",
+        ],
+    )
+
+    _write_text_file(
+        start_path,
+        [
+            "# START GPT DESIGNER",
+            "",
+            "这个目录是给 ChatGPT 使用的课程总设计师工作包。ChatGPT 的任务不是生成最终课包，而是完整阅读原材料后，输出给 Codex 执行的 `course_blueprint.json`。",
+            "",
+            "## 你要上传给 ChatGPT",
+            "",
+            "推荐直接上传压缩包 `gpt_course_design_workspace.zip`。ChatGPT 不能读取你电脑上的本地路径，所以不要把 `C:\\...` 当作可读取地址发给它。",
+            "",
+            "如果 ChatGPT 不方便读取压缩包，就把压缩包解开后上传这些内容：",
+            "",
+            "- `manifest.json`",
+            "- `README_FOR_GPT.md`",
+            "- `raw_transcript.txt`",
+            "- `raw_tracks.json`",
+            "- `blocks/`",
+            "- `indexes/`",
+            "- `schemas/course_blueprint.schema.json`",
+            "- `gpt_designer/chatgpt-course-designer-v1.md`",
+            "- `gpt_designer/course-display-blocks-vnext.md`",
+            "",
+            "## ChatGPT 产物",
+            "",
+            "ChatGPT 最终只需要输出一个 JSON 文件：`course_blueprint.json`。",
+            "",
+            "优先请 ChatGPT 生成可下载文件，不要把完整 JSON 长文本直接贴在对话正文里。只有当前环境不能生成文件时，才分段输出 JSON。",
+            "",
+            "把 ChatGPT 输出保存到：",
+            "",
+            "```text",
+            "<本地原材料包>/course_blueprint.json",
+            "```",
+            "",
+            "保存后，新开 Codex 对话，复制 `gpt_designer/02_copy_to_codex_after_blueprint.md` 里的提示，让 Codex 按蓝图和本地完整原材料生成最终课包。",
+        ],
+    )
+
+    chatgpt_copy_text = [
+        "# 复制给 ChatGPT",
+        "",
+        "```text",
+        "请担任“视界专注”的课程总设计师。",
+        "",
+        f"本次课程名称是《{course_title}》。请把本对话视为《{course_title}》的课程设计工作区；如果系统自动生成对话标题，请优先围绕这个课程名命名。",
+        "",
+        "我已经上传 `gpt_course_design_workspace.zip`。请读取压缩包内容，不要尝试读取我电脑上的本地路径。",
+        "",
+        "请先执行压缩包中的：",
+        "- `gpt_designer/START_GPT_DESIGNER.md`",
+        "- `gpt_designer/chatgpt-course-designer-v1.md`",
+        "- `schemas/course_blueprint.schema.json`",
+        "",
+        "你的目标不是生成最终课程正文，而是完整理解视频/字幕/转写材料，设计一份可交给 Codex 执行的 `course_blueprint.json`。",
+        "",
+        "请先用 `README_FOR_GPT.md`、`manifest.json`、`indexes/teaching_map.json`、`indexes/part_index.json`、`indexes/term_normalization.json` 建立课程地图；再按需要回读 blocks。`raw_transcript.txt` 只用于核对疑点，不要从头复述。",
+        "请使用完整原材料确定知识范围、课程主线、每节课目标、每节课应补足的知识树、展示模块、主动回忆设计和标准答案设计。不要把字幕压缩成低密度摘要，也不要只给一两句泛泛提示。",
+        "不要把视频分 P 直接等同 lesson；请在 `source_coverage_map` 里说明核心、合并、部分使用、跳过或噪音片段。",
+        "请必须输出 `topic_inventory` 和 `compression_review`：先建立候选主题池，再标注 full/partial/merged/skipped/noise，说明它们进入了哪些 lesson；长材料、跨主题材料、访谈/播客/圆桌/纪录片通常应列出 20-40 个候选高价值主题。同时说明当前 lesson 数为什么足够、哪些主题有被过度合并的风险、如果做深度版应扩展到多少节。",
+        "如果材料超过 60 分钟或 3 万字，而你设计少于 8 节，必须给出强理由；如果是 3 小时以上访谈/播客/圆桌且目标是深度学习，通常应优先考虑 12-24 节，而不是 4-6 节导读。",
+        "不要为了避免“播客切片感”而把不同认知层强行合并。技术机制、组织观察、产品/商业案例、社会观点、个人成长路径如果都很重要，应拆成不同 lesson 或章节。",
+        "请先填写 `source_genre`、`learning_intent` 和 `course_design_mode`。如果材料是访谈、播客、圆桌或纪录片，不要强行做成教程或考试课；优先设计观点地图、论证链、人物/背景、案例、分歧、迁移启发和反思题。",
+        "蓝图中必须包含 `design_review`：请列出蓝图强项、生成风险、高密度 lesson、被否定的备选结构、需要核验的事实，以及当前/未来软件最需要的展示块。",
+        "请为每节 lesson 尽量填写 `primary_training_action` 和 `training_policy`：语言/语法课要规划识别、解析、改错、转换和产出；操作课要规划步骤、检查点和错误形态；工具课要规划配置、验证和排错；病例课要规划线索、判断、排除和结论；观点课要规划观点重建、反例和迁移。`must_include` 只放 2-3 个最贴合本节动作的 required 槽位，其他放 optional 或不写；不要所有 lesson 复用同一套训练结构。",
+        "请为每节 lesson 明确 `content_domain`、`density_mode`、`natural_length_hint`、`target_length_range`、`format_policy`、兼容字段 `preferred_format/primary_format/supporting_formats/avoid_formats`、`teaching_voice`、`completion_signals`、`verification_level`、`can_be_short` 和 `must_expand_reason`。",
+        "`natural_length_hint` 和 `target_length_range` 只是自然长度参考，不是字数 KPI；真正目标是满足 `completion_signals`。",
+        "请按学习任务选择展示方式，而不是按领域套模板：医学/考试的比较、分类、参数、禁忌证、评分点和鉴别内容可以大量使用表格；医学操作仍优先步骤，病例判断优先判断链；计算机/工具课的安装配置优先步骤和配置走读，排错优先排错树，架构关系优先图示，工具/模型选型才优先表格。",
+        "整门课还要设计一个顶层 `course_visual_map`：它供软件顶部“全局地图”按钮使用，是整门课的一张视觉总览提示词，不是章节图拼贴。请使用 `kind=image`、`status=planned`、中文 `alt` 和高质量 `prompt`，目标是生成 16:9 的全局学习地图，突出章节主线、能力成长和关键转折，少文字、强结构，不要画软件按钮、进度条或说明面板。",
+        "每章都要设计 `chapter_roadmap`：它供软件顶部“章节地图”按钮使用，不是学生端正文。请根据章节任务选择 workflow、concept_map、decision_tree、operation_flow、exam_strategy、architecture_map、case_reasoning、argument_map 或 viewpoint_map，并用短节点和箭头关系串起本章 lesson，目标是一屏看懂。",
+        "`chapter_roadmap.nodes[].lesson_id` 必须指向真实 lesson；节点标题要像地图节点一样短。请优先填写 `map_label`、`micro_question`、`action_tag`、`risk_tag`、`output_tag`；`edges.label` 要写小节之间的知识推进关系，例如“概念变操作”“先识别再纠错”“用规则解释例外”，禁止写“下一步/继续/前一步/先会前一步”；`summary/core_question/key_claim/counterpoint/completion_signal` 是隐藏备注，不要写成长段。",
+        "每章 `chapter_roadmap` 还要提供 `visual_asset`：`kind=image`、第一阶段 `status=planned`、可以不填 `uri`，但必须写中文 `alt` 和 `prompt`。这个 prompt 用于生成章节学习路线图图片，不是课程封面、信息海报、Mermaid 图或大段文字思维导图；图中文字要少，只保留 3-7 个短标签，并描述画面风格、主要节点、节点关系、视觉隐喻、色彩布局和禁止事项。",
+        "如果本章包含观点分歧、判断取舍、医学鉴别、工程权衡、排错分支或访谈观点，请在 `chapter_roadmap` 中加入 `turning_points`、`tension_edges`、`conflict_nodes` 或 `open_questions`，不要只做线性目录。",
+        "每个 `display_plan` 块请写明 `priority`、`why_this_format` 和 `must_follow_with`：`required` 必须落地，`optional` 有空间才写，`avoid_if_redundant` 如果正文已经讲清就不要硬塞。",
+        "`teaching_voice` 要告诉 Codex 这节课像什么老师在讲：临床/考试老师、工程导师、案例讨论、带练教练或简洁参考。先有讲课节奏，再选择表格、代码、图示或清单。",
+        "请把主动回忆题和标准答案设计成本节专属任务：不要给 Codex 设计“请围绕本节写判断步骤、依据和常见误区”这类通用题干，也不要让标准答案变成跨课程通用骨架。",
+        "",
+        "最终请生成一个可下载文件 `course_blueprint.json`，内容是符合 `schemas/course_blueprint.schema.json` 的 JSON 对象。不要把完整 JSON 长文本直接贴在对话正文里；如果当前环境不能生成文件，再分段输出 JSON。",
+        "```",
+    ]
+    _write_text_file(chatgpt_copy_path, chatgpt_copy_text)
+
+    codex_copy_text = [
+        "# 复制给 Codex",
+        "",
+        "```text",
+        "Use $shijie-course-builder to build a 视界专注 course package from this material folder.",
+        "",
+        "请担任“视界专注”的课程工程师，读取本地完整原材料包和 ChatGPT 课程总设计师产出的课程蓝图，生成可直接导入视界专注学习台的 Course Package JSON。",
+        "如果本地已安装 `shijie-course-builder` skill，请优先按该 skill 的流程执行；如果当前环境没有加载该 skill，则按下面的完整要求执行。",
+        "",
+        "原材料包路径：",
+        material_dir,
+        "",
+        "课程蓝图路径：",
+        blueprint_path,
+        "",
+        "请先读取并执行：",
+        f"{codex_prompt_path}",
+        "",
+        "工作要求：",
+        "1. 以 `course_blueprint.json` 为课程设计总指挥。",
+        "2. 先运行蓝图校验：`python src\\validate_course_blueprint.py \"<课程蓝图路径>\"`。如果校验失败，优先修复蓝图结构或明确指出问题，不要带着坏蓝图制课。",
+        "3. 先读取蓝图中的 `source_genre`、`learning_intent`、`course_design_mode` 和 `design_review`。如果是访谈、播客、圆桌或纪录片，不要强行做成教程/考试/操作课；优先做观点理解、论证链、案例、分歧、迁移启发和反思题。`design_review` 的风险点、高密度小节、核验需求和展示需求不能写进学生端正文，但要影响制课策略。",
+        "4. 先运行覆盖审计：`python src\\coverage_audit.py \"<课程材料目录>\"`。再对照 `manifest.json`、`topic_inventory`、`source_coverage_map`、`compression_review` 和 `indexes/part_index.json` 做人工判断。如果材料超过 60 分钟或 3 万字但蓝图少于 8 节，或 3 小时以上访谈/播客/圆桌只给 4-6 节，请先标记过度压缩风险，列出被合并/弱化/跳过的高价值主题，并说明是否建议扩展蓝图。",
+        "5. 先用 `indexes/part_index.json`、`indexes/teaching_map.json`、`indexes/term_normalization.json` 定位相关分 P、术语和 blocks；不要一上来通读 raw_transcript。",
+        "6. 按蓝图逐节回读本地 blocks，必要时才用 raw_transcript 核对疑点，并补足知识树、例子、图表、操作步骤、排错和主动回忆设计。",
+        "7. 每节课必须保留蓝图课型：`teacher_ready_content.lesson_profile` 写一个主课型，不要全部写 mixed；`teacher_ready_content.lesson_type_tags` 完整保留蓝图的 `lesson_type_tags`。",
+        "8. 学生端只显示可学习内容，不暴露字幕证据、材料分析、制课过程、source/evidence/debug。",
+        "9. 禁止写一个通用脚本把所有 lesson 套进同一模板；脚本只能用于搬运 JSON、校验 schema、整理文件。每节 `teaching_markdown` 必须按蓝图单独设计。",
+        "10. 优先按蓝图里的 `format_policy` 和 `teaching_voice` 决定主表达和讲课节奏；旧字段 `primary_format/supporting_formats/avoid_formats` 只作兼容参考。",
+        "10.1 如果蓝图提供 `primary_training_action` 和 `training_policy`，必须把它们变成真实教学动作：识别/分类/解析要有判断例子；改错/转换/产出要有改错或产出任务；操作/配置/排错要有步骤、验证和失败处理；诊断/选择/论证要有线索、依据、排除或反方观点。`must_include` 通常只落地 2-3 个核心槽位，`optional_include` 有空间才写，`avoid_slots` 不要强行实现。",
+        "11. 如果蓝图提供 `chapter_roadmap`，必须逐章写入 `outline.draft.json` 的对应 chapter；它用于软件章节地图，不要复制进 lesson 正文。节点 lesson_id 必须对应真实 lesson，标题要短，并保留节点间 `edges` 与 `map_label/micro_question/action_tag/risk_tag/output_tag`；`core_question/key_claim/counterpoint/completion_signal/turning_points/tension_edges/conflict_nodes/open_questions` 也要保留。若提供 `visual_asset`，必须保留到最终课包；没有实际图片时保持 `status=planned`，不要因为缺少 `uri` 删除。",
+        "12. 只把 `display_plan.priority=required` 的展示块强制落地；`optional` 有空间才写；`avoid_if_redundant` 已在正文讲清时不要硬塞。落地时表格就是真 Markdown 表格，步骤就是编号列表，检查就是清单，复杂关系才用 Mermaid。",
+        "13. 如果蓝图提供 `completion_signals`，优先满足这些行为证据；如果提供 `verification_level`，对版本敏感和官方核验内容保守表述。",
+        "14. 按课型硬执行：操作课包含工具/对象准备、动作步骤、口述或提示语、检查点、常见错误；案例课包含判断、依据、鉴别、处理原则、标准答案；问诊、需求调研、排障问询类内容必须写成对方听得懂的问句。",
+        "15. 不要使用统一字数线：入口课/总论课/边界课可以短而准；操作课、病例决策课、空间结构课和综合训练课必须展开。真正标准是信息完整度，不是字数。",
+        "16. 操作/配置步骤如果单条较长，必须一条一行写成普通编号列表；只有短流程标签才适合横向流程图。",
+        "17. 表格只在比较、分类、参数、禁忌证、评分点、鉴别诊断、框架/工具取舍和风险矩阵中自然使用；操作/病例/排错课如果用了表格，必须补清楚如何用表格完成操作、判断或排错。",
+        "18. Markdown 表格必须是标准格式：表头行、分隔行、每一行单独换行；不要把表格行压进段落，也不要漏掉最后一列。",
+        "19. 列表项必须是完整句子，不要以 `、`、`,`、`;` 开头；二次巩固、复盘、标准答案要写成清晰短句或列表，不要用标点把多个答案硬拼成一段。",
+        "20. 主动回忆题必须是本节专属任务，禁止“请围绕某某写出判断步骤、依据和常见误区”这类通用题干。",
+        "21. 标准答案按课型写成可背诵分点：概念课写定义/边界/易错点，操作课写步骤/目的/检查点，病例课写线索/依据/排除/结论；必须直接回答本节主动回忆题，禁止输出“先写线索、再判断、再说明理由、最后检查”的通用骨架。",
+        "22. 每节交付前做反凑字和反模板审查：这段删掉是否影响学习？这道题和答案复制到另一节是否也成立？如果是，就重写。",
+        "23. 如果材料包里存在 `course_draft_archives/`，那只是旧失败产物归档，只能用来理解反例，不能复制、修补或复用里面的 lesson。",
+        "24. 生成完 lesson 后再次运行 `python src\\coverage_audit.py \"<课程材料目录>\"`，确认没有长材料短蓝图、高价值主题无承接、全局地图缺失或章节地图过度线性的问题。",
+        "24.1 如果覆盖审计报 `roadmap_semantic_duplication`、`roadmap_text_heavy`、`table_heavy_blueprint`、`table_heavy_low_training_density`、`language_training_policy_missing`、`grammar_course_low_example_or_correction_density`、`training_policy_over_uniform` 或 `training_policy_overloaded`，先人工判断，再修复地图短标签、表格滥用或训练分型，不要为了清报告凑字。",
+        "25. 最后运行 strict 打包，输出 `course_draft/final.course-package.json`，并把结果发布到 `output/courses/`；strict 下 warning 也必须修复后才能发布；info 只是复核提示，不要为清零 info 凑字。",
+        "26. 最终用中文简洁汇报课包路径、lesson 数、auditScore/premiumScore、auditErrors/auditWarnings、coverage-audit 路径和剩余风险；如果触发覆盖审查，也要说明当前课包是导读版还是深度版。",
+        "```",
+    ]
+    _write_text_file(codex_copy_path, codex_copy_text)
+
+    repair_copy_text = [
+        "# 复制给 Codex 修复现有课包",
+        "",
+        "```text",
+        "Use $shijie-course-builder to repair and strict-package this 视界专注 course package.",
+        "",
+        "请担任“视界专注”的课程质量修复工程师。当前 GPT 蓝图已经可用，但 Codex 生成的 course_draft 没有充分执行蓝图，请根据质量报告逐节修复 lesson，并重新 strict 打包发布。",
+        "如果本地已安装 `shijie-course-builder` skill，请优先按该 skill 的修复流程执行；如果当前环境没有加载该 skill，则按下面的完整要求执行。",
+        "",
+        "原材料包路径：",
+        material_dir,
+        "",
+        "课程蓝图路径：",
+        blueprint_path,
+        "",
+        "质量报告路径：",
+        os.path.join(material_dir, "course_draft", "final.course-package.quality-report.json"),
+        "",
+        "请先读取并执行：",
+        f"{codex_prompt_path}",
+        "",
+        "修复重点：",
+        "1. 先阅读质量报告中的 issue，不要只修 Markdown 表面格式。",
+        "2. 对出现 `compressed_heading_line` 的 lesson，重写 Markdown，保证标题、正文、列表、表格、代码块都有真实换行。",
+        "3. 对出现 `display_hint_not_realized` 的 lesson，回到 course_blueprint.json 对应 lesson，只强制落实 `display_plan.priority=required` 的展示块：表格必须是真表格，步骤必须是真编号列表，检查清单必须是真清单；optional 展示块可从 display_hints 移除，不要硬塞。",
+        "4. 对出现 `blueprint_executor_template_overused` 或 `reused_generic_diagram` 的 lesson，删除通用模板段落和重复图，按该节自己的目标、材料范围和 Codex instruction 重写。",
+        "5. 不要用通用脚本批量套模板；可以用脚本定位文件、校验 JSON、运行打包，但课程正文必须逐节定制。",
+        "6. 最后运行 `python src\\codex_course_packager.py \"<course_material_dir>\" --strict`，直到 auditErrors=0 且 auditWarnings=0 后再发布。",
+        "```",
+    ]
+    _write_text_file(repair_copy_path, repair_copy_text)
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        include_roots = [
+            "manifest.json",
+            "README_FOR_GPT.md",
+            "raw_transcript.txt",
+            "raw_tracks.json",
+            "blocks",
+            "indexes",
+            "schemas",
+            os.path.join("gpt_designer", "START_GPT_DESIGNER.md"),
+            os.path.join("gpt_designer", "01_copy_to_chatgpt.md"),
+            os.path.join("gpt_designer", "chatgpt-course-designer-v1.md"),
+            os.path.join("gpt_designer", "gpt-course-designer-workflow.md"),
+            os.path.join("gpt_designer", "course-display-blocks-vnext.md"),
+            os.path.join("gpt_designer", "course_blueprint.template.json"),
+        ]
+        for relative_root in include_roots:
+            absolute_root = os.path.join(material_dir, relative_root)
+            if os.path.isfile(absolute_root):
+                archive.write(absolute_root, relative_root)
+                continue
+            if os.path.isdir(absolute_root):
+                for folder, _, filenames in os.walk(absolute_root):
+                    for filename in filenames:
+                        absolute_file = os.path.join(folder, filename)
+                        if os.path.abspath(absolute_file) == os.path.abspath(zip_path):
+                            continue
+                        archive.write(absolute_file, os.path.relpath(absolute_file, material_dir))
+
+    return {
+        "designer_dir": designer_dir,
+        "start": start_path,
+        "chatgpt_prompt": chatgpt_prompt_path,
+        "chatgpt_copy_prompt": chatgpt_copy_path,
+        "codex_blueprint_prompt": codex_copy_path,
+        "codex_repair_prompt": repair_copy_path,
+        "workspace_zip": zip_path,
+        "blueprint": blueprint_path,
+    }
+
+
+def _build_handoff_status(
+    *,
+    material_dir: str,
+    course_title: str,
+    material_id: str,
+    source_id: str,
+    text_length: int,
+    block_count: int,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "shijie.handoff.v0.1",
+        "stage": "material_ready",
+        "stage_label": "待 GPT 设计",
+        "next_action": "上传 gpt_designer/gpt_course_design_workspace.zip 到 ChatGPT，并复制 gpt_designer/01_copy_to_chatgpt.md。",
+        "material": {
+            "title": course_title,
+            "material_id": material_id,
+            "source_id": source_id,
+            "text_length": text_length,
+            "block_count": block_count,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+        "paths": {
+            "material_dir": material_dir,
+            "handoff": os.path.join(material_dir, "HANDOFF.md"),
+            "gpt_workspace_zip": os.path.join(material_dir, "gpt_designer", "gpt_course_design_workspace.zip"),
+            "gpt_prompt": os.path.join(material_dir, "gpt_designer", "01_copy_to_chatgpt.md"),
+            "course_blueprint": os.path.join(material_dir, "course_blueprint.json"),
+            "codex_prompt": os.path.join(material_dir, "gpt_designer", "02_copy_to_codex_after_blueprint.md"),
+            "final_course": os.path.join(material_dir, "course_draft", "final.course-package.json"),
+        },
+        "steps": [
+            {
+                "id": "material_package",
+                "label": "原材料包",
+                "status": "done",
+                "output": "manifest.json, raw_transcript.txt, blocks/, indexes/, gpt_designer/",
+            },
+            {
+                "id": "gpt_blueprint",
+                "label": "GPT 课程蓝图",
+                "status": "next",
+                "output": "course_blueprint.json",
+            },
+            {
+                "id": "codex_course",
+                "label": "Codex 生成课包",
+                "status": "pending",
+                "output": "course_draft/final.course-package.json",
+            },
+            {
+                "id": "import_course",
+                "label": "导入学习台",
+                "status": "pending",
+                "output": "output/courses/*.course-package.json",
+            },
+        ],
+        "notes": [
+            "当前唯一主流程是：软件生成原材料包 -> ChatGPT 输出 course_blueprint.json -> Codex 按蓝图生成课包。",
+            "不要把旧 codex_tasks 当作主入口；它们只保留为历史兼容参考。",
+            "ChatGPT 不能读取本地路径，必须上传 gpt_course_design_workspace.zip。",
+        ],
+    }
+
+
+def _write_handoff_files(
+    *,
+    material_dir: str,
+    course_title: str,
+    material_id: str,
+    source_id: str,
+    text_length: int,
+    block_count: int,
+) -> dict[str, str]:
+    handoff_path = os.path.join(material_dir, "HANDOFF.md")
+    status_path = os.path.join(material_dir, "handoff_status.json")
+    gpt_zip = os.path.join(material_dir, "gpt_designer", "gpt_course_design_workspace.zip")
+    gpt_prompt = os.path.join(material_dir, "gpt_designer", "01_copy_to_chatgpt.md")
+    codex_prompt = os.path.join(material_dir, "gpt_designer", "02_copy_to_codex_after_blueprint.md")
+    blueprint_path = os.path.join(material_dir, "course_blueprint.json")
+    final_course_path = os.path.join(material_dir, "course_draft", "final.course-package.json")
+
+    _save_json_file(
+        status_path,
+        _build_handoff_status(
+            material_dir=material_dir,
+            course_title=course_title,
+            material_id=material_id,
+            source_id=source_id,
+            text_length=text_length,
+            block_count=block_count,
+        ),
+    )
+    _write_text_file(
+        handoff_path,
+        [
+            "# 视界专注制课交接单",
+            "",
+            f"课程：{course_title}",
+            f"来源：{source_id or material_id}",
+            f"材料规模：{block_count} blocks，约 {text_length} 字",
+            "",
+            "## 当前状态",
+            "",
+            "✅ 原材料包已生成",
+            "",
+            "下一步：上传 `gpt_designer/gpt_course_design_workspace.zip` 到 ChatGPT，并复制 `gpt_designer/01_copy_to_chatgpt.md`。",
+            "",
+            "## 唯一主流程",
+            "",
+            "1. 软件生成完整原材料包。",
+            "2. ChatGPT 完整阅读 zip，输出 `course_blueprint.json`。",
+            "3. 把 `course_blueprint.json` 保存到本材料包根目录。",
+            "4. 复制 `gpt_designer/02_copy_to_codex_after_blueprint.md`，新开 Codex 对话制课；该提示会优先调用 `$shijie-course-builder`。",
+            "5. Codex Skill 运行 strict 打包，生成 `course_draft/final.course-package.json` 并发布到 `output/courses/`。",
+            "6. 回到软件导入最终课包。",
+            "",
+            "## 关键文件",
+            "",
+            f"- GPT 上传包：`{gpt_zip}`",
+            f"- GPT 复制提示：`{gpt_prompt}`",
+            f"- GPT 蓝图保存位置：`{blueprint_path}`",
+            f"- Codex 复制提示：`{codex_prompt}`",
+            f"- Codex 最终课包：`{final_course_path}`",
+            "",
+            "## 不要走的旧入口",
+            "",
+            "`START_HERE.md` 和 `codex_tasks/` 属于旧的 Codex 直制课流程兼容文件。现在主流程以本交接单和 `gpt_designer/` 为准。",
+        ],
+    )
+    return {"handoff": handoff_path, "handoff_status": status_path}
 
 
 def save_codex_material_package(
@@ -2998,12 +3969,14 @@ def save_codex_material_package(
     blocks_dir = os.path.join(material_dir, "blocks")
     indexes_dir = os.path.join(material_dir, "indexes")
     tasks_dir = os.path.join(material_dir, "codex_tasks")
+    designer_dir = os.path.join(material_dir, "gpt_designer")
     schemas_dir = os.path.join(material_dir, "schemas")
     draft_dir = os.path.join(material_dir, "course_draft")
     lesson_drafts_dir = os.path.join(draft_dir, "lessons")
     os.makedirs(blocks_dir, exist_ok=True)
     os.makedirs(indexes_dir, exist_ok=True)
     os.makedirs(tasks_dir, exist_ok=True)
+    os.makedirs(designer_dir, exist_ok=True)
     os.makedirs(schemas_dir, exist_ok=True)
     os.makedirs(lesson_drafts_dir, exist_ok=True)
     if os.path.exists(os.path.join(CURRENT_DIR, "schemas", "codex_material_package.schema.json")):
@@ -3015,6 +3988,11 @@ def save_codex_material_package(
         shutil.copyfile(
             os.path.join(CURRENT_DIR, "schemas", "course_package.schema.json"),
             os.path.join(schemas_dir, "course_package.schema.json"),
+        )
+    if os.path.exists(os.path.join(CURRENT_DIR, "schemas", "course_blueprint.schema.json")):
+        shutil.copyfile(
+            os.path.join(CURRENT_DIR, "schemas", "course_blueprint.schema.json"),
+            os.path.join(schemas_dir, "course_blueprint.schema.json"),
         )
 
     raw_transcript_text = flatten_subtitles_to_text(subtitles)
@@ -3052,9 +4030,24 @@ def save_codex_material_package(
         "files": {
             "raw_transcript": "raw_transcript.txt",
             "raw_tracks": "raw_tracks.json",
+            "readme_for_gpt": "README_FOR_GPT.md",
+            "handoff": "HANDOFF.md",
+            "handoff_status": "handoff_status.json",
             "blocks_dir": "blocks",
             "indexes_dir": "indexes",
+            "part_index": "indexes/part_index.json",
+            "teaching_map": "indexes/teaching_map.json",
+            "term_normalization": "indexes/term_normalization.json",
+            "noise_segments": "indexes/noise_segments.json",
+            "gpt_designer_dir": "gpt_designer",
+            "gpt_designer_start": "gpt_designer/START_GPT_DESIGNER.md",
+            "gpt_designer_prompt": "gpt_designer/chatgpt-course-designer-v1.md",
+            "gpt_designer_copy_prompt": "gpt_designer/01_copy_to_chatgpt.md",
+            "gpt_upload_workspace_zip": "gpt_designer/gpt_course_design_workspace.zip",
+            "course_blueprint": "course_blueprint.json",
+            "course_blueprint_schema": "schemas/course_blueprint.schema.json",
             "codex_tasks_dir": "codex_tasks",
+            "codex_tasks_legacy_note": "旧 Codex 直制课流程兼容文件；新流程请使用 HANDOFF.md 和 gpt_designer/。",
             "course_draft_dir": "course_draft",
             "lesson_drafts_dir": "course_draft/lessons",
             "start_here": "START_HERE.md",
@@ -3085,15 +4078,19 @@ def save_codex_material_package(
     timeline_items: list[dict[str, Any]] = []
     outline_items: list[dict[str, Any]] = []
     material_blocks = _build_material_blocks(plan.chunks)
+    part_index = _build_part_index(subtitles, material_blocks)
     manifest["block_count"] = len(material_blocks)
     _save_json_file(os.path.join(material_dir, "manifest.json"), manifest)
+    _save_json_file(os.path.join(indexes_dir, "part_index.json"), part_index)
 
     for block in material_blocks:
         block_id = str(block["block_id"])
         block_text = str(block["text"])
         page_labels = list(block.get("page_labels") or [])
         key_points = _split_brief_points(block_text, limit=10)
-        time_range = _time_range_for_chunk(subtitles, page_labels)
+        time_range = block.get("time_range") if isinstance(block.get("time_range"), dict) else {}
+        if not isinstance(time_range.get("from"), (int, float)) and not isinstance(time_range.get("to"), (int, float)):
+            time_range = _time_range_for_chunk(subtitles, page_labels)
         block_payload = {
             "schema_version": "onboard.material-block.v0.1",
             "block_id": block_id,
@@ -3139,6 +4136,12 @@ def save_codex_material_package(
         {"concepts": {key: sorted(set(value)) for key, value in sorted(concept_index.items())}},
     )
     _save_json_file(os.path.join(indexes_dir, "timeline_index.json"), {"items": timeline_items})
+    _save_json_file(os.path.join(indexes_dir, "teaching_map.json"), _build_teaching_map(part_index))
+    _save_json_file(
+        os.path.join(indexes_dir, "term_normalization.json"),
+        _build_term_normalization_index(part_index, concept_index),
+    )
+    _save_json_file(os.path.join(indexes_dir, "noise_segments.json"), _build_noise_segments_index(part_index))
     _save_json_file(
         os.path.join(draft_dir, "outline.draft.json"),
         {
@@ -3247,14 +4250,16 @@ def save_codex_material_package(
             "",
             "## 内容密度目标",
             "",
-            "- `teaching_markdown` 建议 800-1500 字，简单动作课可以略短，但不能只有提纲。",
-            "- `standard_answer` 建议 140-300 字，要能给学生完整对照。",
+            "- 不使用统一最低字数线。入口课、总论课、边界课可以短而准；操作课、病例决策课、空间结构课和综合训练课必须展开。",
+            "- 推荐长度只作松散参考：入口/总论可以短而准；概念/比较要讲清边界和例子；操作/配置、病例/排错、空间结构和综合训练要按任务自然展开。",
+            "- `standard_answer` 不按固定字数补长；要按课型写成可对照、可背诵的分点答案。",
             "- `key_points` 至少 4 条。",
             "- `common_mistakes` 至少 3 条，必须具体到误解、漏步、判断错误或使用场景。",
             "- 按课型补齐最有学习价值的信息：概念课重例子和误区，操作/配置课重步骤、检查和排错，考试课重评分点和答题表达。",
             "- 操作/配置课不要为了讲“为什么”牺牲步骤细节；缺少画面时，要用文字补足顺序、部位、按钮、命令、验证方法和失败处理。",
             "- 如果出现口诀、缩写、顺口溜或编号法，必须逐项展开，不允许只写口诀。例如“内、外、夹、弓、大、立、腕”必须解释成掌心、手背、指缝、指背、拇指、指尖和腕部。",
             "- 避免 150 字以上的大段落。较长解释请拆成短句列表，标准答案尽量一句一行。",
+            "- 禁止为了过 audit/premium 追加统一补句或泛化段落。每节写完后检查：删掉这段是否影响学习？是否重复前文？是否只是为了凑字？",
             "- 少量使用视觉重点：核心名词、关键概念、关键参数用 `**加粗**`；判断标准、操作红线、易混淆关键句用 `<u>下划线</u>`。每段通常 1-3 处，不要整段加粗或满屏下划线。",
             "- 不要在正文里手动添加全角空格做首行缩进；学习台会自动给普通段落做阅读式首行缩进。",
             "",
@@ -3328,7 +4333,7 @@ def save_codex_material_package(
             "- 视频材料只限定知识范围，不限定课程质量上限。",
             "- 不要把字幕摘要当课程。",
             "- 每节课都要能支持：先学、主动回答、看标准解释、进入下一关。",
-            "- 每节课优先写成 800-1500 字的高密度短课；不要满足于结构合格。",
+            "- 每节课按课型自然长短；短课必须短而准，高密度课必须真有案例、步骤、空间示意或排错链。",
             "- 不要设计实时自由问答、阻塞式判分或回炉流程。",
             "- 如果要引用材料证据，请写入 `source_refs`，不要放进学生端 lesson content。",
         ],
@@ -3367,14 +4372,16 @@ def save_codex_material_package(
             "",
             "## 内容密度目标",
             "",
-            "- `teaching_markdown` 建议 800-1500 字。特别简单的动作课可以更短，但不能只写成提纲。",
-            "- `standard_answer` 建议 140-300 字，要像学生对照答案，不是一句结论。",
+            "- 不使用统一最低字数线。入口课、总论课、边界课可以短而准；操作课、病例决策课、空间结构课和综合训练课必须展开。",
+            "- 推荐长度只作松散参考：入口/总论可以短而准；概念/比较要讲清边界和例子；操作/配置、病例/排错、空间结构和综合训练要按任务自然展开。",
+            "- `standard_answer` 不按固定字数补长；概念课写定义/边界/易错点，操作课写步骤/目的/检查点，病例课写线索/依据/排除/结论。",
             "- `key_points` 至少 4 条。",
             "- `common_mistakes` 至少 3 条，必须具体到误解、漏步、判断错误或使用场景。",
             "- 按课型补齐最有学习价值的信息：概念课重例子和误区，操作/配置课重步骤、检查和排错，考试课重评分点和答题表达。",
             "- 操作/配置课不要为了讲“为什么”牺牲步骤细节；缺少画面时，要用文字补足顺序、部位、按钮、命令、验证方法和失败处理。",
             "- 如果出现口诀、缩写、顺口溜或编号法，必须逐项展开，不允许只写口诀。",
             "- 避免 150 字以上的大段落。较长解释请拆成项目符号或短段，标准答案尽量一句一行。",
+            "- 禁止为了过 audit/premium 追加统一补句或泛化段落。每节写完后检查：删掉这段是否影响学习？是否重复前文？是否只是为了凑字？",
             "- 可以少量使用 `**加粗**` 标出关键名词、核心概念、关键参数；用 `<u>下划线</u>` 标出判断标准、操作红线或最容易混淆的关键句。每段通常 1-3 处，不要把整段都标成重点。",
             "",
             "## 课程类型判断",
@@ -3477,15 +4484,16 @@ def save_codex_material_package(
             "## Lesson 检查",
             "",
             "- `teacher_ready_content.teaching_markdown` 是直接教学，不是材料说明。",
-            "- `teaching_markdown` 建议 800-1500 字；简单动作课可以略短，但不能只有提纲。",
+            "- `teaching_markdown` 按课型自然长短；入口/总论/边界课可以短而准，操作/病例/空间结构/综合课必须展开。",
             "- 有主动回忆题 `quiz_question`。",
-            "- 有可对照的 `standard_answer`，建议 140-300 字。",
+            "- 有可对照的 `standard_answer`，按课型分点写，不用统一补句凑长。",
             "- `key_points` 至少 4 条，能帮助学生快速发现漏点。",
             "- `common_mistakes` 至少 3 条，是具体错误，不是泛泛提醒。",
             "- 按 lesson_profile 补强内容：概念课重例子和迁移，操作课重步骤和细节，工具配置课重验证和排错，考试课重评分点。",
             "- 所有口诀、缩写、顺口溜和编号法都已逐项展开。",
             "- 150 字以上的解释段已拆成项目符号或短段，不让学生在学习台里读整块长文。",
             "- `source_refs` 有 block 来源，但学生端正文不暴露来源证据。",
+            "- 没有为了过旧 1100 字线而添加的复盘套话、答题自检套话或重复小节。",
             "",
             "## 打包检查",
             "",
@@ -3524,8 +4532,8 @@ def save_codex_material_package(
             "目标：",
             "- 保持原来的章节数、lesson_ids 和 source_refs。",
             "- 逐节扩写 teacher_ready_content，不重写素材整理层。",
-            "- 每节 teaching_markdown 尽量达到 800-1500 字。",
-            "- 每节 standard_answer 达到 140-300 字。",
+            "- 不按统一字数扩写。先判断 lesson_profile 和蓝图设计：短课短而准，重点课高密度展开。",
+            "- standard_answer 按课型改成自然分点答案，禁止为了长度追加“得分时还要写明……并主动排除……”这类统一补句。",
             "- key_points 至少 4 条。",
             "- common_mistakes 至少 3 条。",
             "- 先补/校准 teacher_ready_content.lesson_profile，再按课型扩写，不要所有 lesson 套同一种模板。",
@@ -3552,49 +4560,28 @@ def save_codex_material_package(
     start_here_lines = [
         "# START HERE",
         "",
-        "这个目录不是最终课程包，而是给 Codex 新窗口使用的课程制作工作台包。",
-        "你只需要完成一个结果：生成可导入“视界专注”的 `final.course-package.json`，并让打包器自动发布到 `output/courses/`。",
+        "主流程已经迁移到 GPT 课程总设计师 + Codex Skill 蓝图执行。",
         "",
-        "## 给新 Codex 对话复制的最短提示",
+        "请先读同目录的 `HANDOFF.md`。它会告诉你当前材料包到了哪一步、GPT 上传包在哪里、蓝图保存到哪里、Codex 提示从哪里复制。",
         "",
-        "```text",
-        f"请读取并执行这份视界专注材料包的 START_HERE.md：{os.path.join(material_dir, 'START_HERE.md')}",
-        "目标：生成可直接导入视界专注学习台的 Course Package JSON。",
-        "要求：先设计教学大纲，再分批生成 lesson，最后 strict 打包；不要把字幕证据、原材料分析或制课过程写进学生端正文。",
-        "```",
-        "",
-        "## 推荐流程",
-        "",
-        "1. 新开一个 Codex 窗口，只处理这一个材料包。",
-        "2. 把上面的最短提示，或 `codex_tasks/00_new_window_prompt.md` 里的提示发给新窗口。",
-        "3. 新窗口先读 `manifest.json`、`indexes/global_outline.json` 和 `codex_tasks/06_authoring_handbook.md`，不要先读 `raw_transcript.txt`。",
-        "4. 按 `codex_tasks/01_design_outline.md` 生成 `course_draft/outline.draft.json`。",
-        "5. 按 `codex_tasks/02_generate_lessons.md` 分批生成 lesson。",
-        "6. 按 `codex_tasks/03_review_course.md` 审稿。",
-        "7. 按 `codex_tasks/04_course_package_contract.md` 输出 `course_draft/final.course-package.json`。",
-        f"   推荐运行：`Set-Location \"{config.PROJECT_ROOT}\"; python src\\codex_course_packager.py \"{material_dir}\" --strict`。",
-        "   打包器会同时把最终课包复制到 `output/courses/`。",
-        "8. 如需模板和最终检查，参考 `codex_tasks/07_draft_templates.md` 和 `codex_tasks/08_final_delivery_checklist.md`。",
-        "9. 如果质量报告只有 error=0 但 info 很多，用 `codex_tasks/09_quality_upgrade_prompt.md` 做二次扩写。",
-        "",
-        "## 目录说明",
-        "",
-        "- `blocks/`：稳定分块后的原材料，每次只回读 1-3 个。",
-        "- `indexes/`：低上下文索引，用来先设计课程大纲。",
-        "- `course_draft/`：新 Codex 窗口写课程草稿和最终课包的位置。",
-        "- `schemas/`：材料包和课程包 schema。",
-        "- `raw_transcript.txt`：完整原文，只在必要时回读，不作为第一入口。",
-        "",
-        "## 核心原则",
-        "",
-        "- 软件负责素材整理；Codex 负责高质量课程设计。",
-        "- source/evidence/range/debug 信息不进入学生端正文。",
-        "- 学生端只显示可直接学习的 `teacher_ready_content`。",
-        "- 如需辅助脚本，只能放在本材料包的 `course_draft/tools/` 或系统临时目录，不能污染项目外目录。",
-        "- 最终汇报必须使用中文，不要输出英文内部备注、思考草稿或关于路径/Markdown 格式的自我提醒。",
+        "如果你看到 `codex_tasks/`，请把它当作旧流程兼容文件，不要作为当前主入口。",
     ]
     with open(os.path.join(material_dir, "START_HERE.md"), "w", encoding="utf-8") as file:
         file.write("\n".join(start_here_lines).strip() + "\n")
+
+    _write_gpt_designer_workspace(
+        material_dir,
+        course_title=str(video_info.get("title") or source.title or bvid),
+        material_id=str(manifest.get("material_id") or bvid),
+    )
+    _write_handoff_files(
+        material_dir=material_dir,
+        course_title=str(video_info.get("title") or source.title or bvid),
+        material_id=str(manifest.get("material_id") or bvid),
+        source_id=str(source.source_id or bvid),
+        text_length=raw_content_length,
+        block_count=len(material_blocks),
+    )
 
     return material_dir
 

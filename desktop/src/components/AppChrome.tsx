@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 type AppChromeProps = {
   windowFocused: boolean
   isMaximized: boolean
+  sidebarWidth: number
   onMinimize: () => void
   onToggleMaximize: () => void
   onClose: () => void
@@ -14,6 +15,7 @@ type AppChromeProps = {
 export function AppChrome({
   windowFocused,
   isMaximized,
+  sidebarWidth,
   onMinimize,
   onToggleMaximize,
   onClose,
@@ -26,7 +28,7 @@ export function AppChrome({
       )}
       onDoubleClick={onToggleMaximize}
     >
-      <div className="flex w-[240px] min-w-[240px] items-center gap-2.5 px-3">
+      <div className="flex items-center gap-2.5 px-3" style={{ width: sidebarWidth, minWidth: sidebarWidth }}>
         <img src={appIcon} alt="视界专注" className="size-6 object-contain opacity-95" draggable={false} />
         <div className="text-[14px] font-semibold tracking-tight text-foreground/92">视界专注</div>
       </div>

@@ -247,7 +247,7 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
     if (existingSummary) {
       try {
         const existingRecord = await window.desktopAPI.openLearningRecord(existingSummary.id)
-        if (isSameCoursePackage(existingRecord.courseText, course)) {
+        if (isSameCoursePackage(existingRecord.courseText, course) || existingRecord.packageId === course.package_id) {
           nextState = mergeRecordIntoCourseState(course, importedPath, existingRecord)
           activeRecordId = existingRecord.id
           activeRecordCreatedAt = existingRecord.createdAt

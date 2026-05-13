@@ -41,6 +41,8 @@ export type LessonProfile =
 export type TeacherReadyContent = {
   lesson_profile?: LessonProfile
   display_hints?: string[]
+  primary_training_action?: string
+  training_focus?: string[]
   teaching_markdown?: string
   quiz_question?: string
   standard_answer?: string
@@ -78,6 +80,152 @@ export type InformationGap = {
   affected_node_ids?: string[]
 }
 
+export type ChapterRoadmapType =
+  | 'workflow'
+  | 'concept_map'
+  | 'decision_tree'
+  | 'operation_flow'
+  | 'exam_strategy'
+  | 'architecture_map'
+  | 'case_reasoning'
+  | 'argument_map'
+  | 'viewpoint_map'
+
+export type ChapterRoadmapTone =
+  | 'green'
+  | 'blue'
+  | 'purple'
+  | 'amber'
+  | 'rose'
+  | 'neutral'
+
+export type ChapterRoadmapRole =
+  | 'foundation'
+  | 'concept'
+  | 'practice'
+  | 'risk'
+  | 'decision'
+  | 'review'
+  | 'integration'
+
+export type ChapterRoadmapNode = {
+  id: string
+  lesson_id?: string
+  title: string
+  map_label?: string
+  summary?: string
+  micro_question?: string
+  action_tag?: string
+  risk_tag?: string
+  output_tag?: string
+  core_question?: string
+  key_claim?: string
+  counterpoint?: string
+  completion_signal?: string
+  role?: ChapterRoadmapRole
+  tone?: ChapterRoadmapTone
+}
+
+export type ChapterRoadmapEdge = {
+  from: string
+  to: string
+  kind?: 'next' | 'depends_on' | 'contrast' | 'risk' | 'feedback' | 'supports' | 'tension' | 'counterpoint' | 'tradeoff' | 'open_question'
+  label?: string
+}
+
+export type ChapterRoadmapVisualAssetStatus = 'planned' | 'attached' | 'missing'
+
+export type ChapterRoadmapHotspot = {
+  id: string
+  lesson_id?: string
+  label: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export type ChapterRoadmapVisualAsset = {
+  asset_id?: string
+  kind: 'image'
+  uri?: string
+  alt: string
+  prompt: string
+  status: ChapterRoadmapVisualAssetStatus
+  hotspots?: ChapterRoadmapHotspot[]
+}
+
+export type CourseVisualMapHotspot = {
+  id: string
+  chapter_id?: string
+  lesson_id?: string
+  label: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export type CourseVisualMap = {
+  asset_id?: string
+  kind: 'image'
+  uri?: string
+  alt: string
+  prompt: string
+  status: ChapterRoadmapVisualAssetStatus
+  hotspots?: CourseVisualMapHotspot[]
+}
+
+export type ChapterRoadmapFocusCard = {
+  title: string
+  bullets: string[]
+}
+
+export type ChapterRoadmapTurningPoint = {
+  title: string
+  from?: string
+  to?: string
+  reason: string
+  lesson_ids?: string[]
+}
+
+export type ChapterRoadmapTensionEdge = {
+  from: string
+  to: string
+  label?: string
+  tension: string
+  resolution_hint?: string
+}
+
+export type ChapterRoadmapConflictNode = {
+  title: string
+  claim: string
+  counterpoint: string
+  why_it_matters: string
+  lesson_ids?: string[]
+}
+
+export type ChapterRoadmapOpenQuestion = {
+  question: string
+  why_it_matters: string
+  related_lesson_ids?: string[]
+}
+
+export type ChapterRoadmap = {
+  roadmap_type: ChapterRoadmapType
+  title: string
+  subtitle?: string
+  visual_asset?: ChapterRoadmapVisualAsset
+  nodes: ChapterRoadmapNode[]
+  edges?: ChapterRoadmapEdge[]
+  focus_cards?: ChapterRoadmapFocusCard[]
+  completion_signals?: string[]
+  turning_points?: ChapterRoadmapTurningPoint[]
+  tension_edges?: ChapterRoadmapTensionEdge[]
+  conflict_nodes?: ChapterRoadmapConflictNode[]
+  open_questions?: ChapterRoadmapOpenQuestion[]
+}
+
 export type CourseNode = {
   id: string
   node_type: 'chapter' | 'section' | 'lesson'
@@ -92,6 +240,7 @@ export type CourseNode = {
   children: CourseNode[]
   assets: AssetRef[]
   gaps: InformationGap[]
+  chapter_roadmap?: ChapterRoadmap
 }
 
 export type DependencyEdge = {
@@ -125,6 +274,7 @@ export type CoursePackage = {
     completion_definition: string
     estimated_total_minutes?: number
   }
+  course_visual_map?: CourseVisualMap
   chapters: CourseNode[]
   dependency_graph: DependencyEdge[]
   assets: AssetRef[]

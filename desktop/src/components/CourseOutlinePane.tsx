@@ -1,9 +1,10 @@
 import {
-  LibraryBig,
-  Settings2,
-  Sparkles,
+  Settings,
+  WandSparkles,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
+import sidebarArchiveIcon from '@/assets/sidebar-archive.svg'
+import sidebarLearnIcon from '@/assets/sidebar-learn.svg'
 import { OutlineNodeItem } from '@/components/OutlineNodeItem'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -14,6 +15,7 @@ import type { WorkspaceView } from '@/components/WorkspacePane'
 type CourseOutlinePaneProps = {
   workspaceView: WorkspaceView
   onSelectView: (view: WorkspaceView) => void
+  sidebarWidth: number
   windowFocused: boolean
 }
 
@@ -56,27 +58,27 @@ function NavEntry({
       type="button"
       onClick={onClick}
       className={cn(
-        'flex w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition',
+        'group flex w-full items-center gap-2.5 rounded-[11px] px-2.5 py-1.5 text-left transition-colors duration-150',
         active
-          ? 'border-[#6e84c8]/20 bg-[#5e73a8]/11 text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]'
-          : 'border-transparent text-muted-foreground hover:bg-white/[0.016] hover:text-foreground',
+          ? 'bg-white/[0.038] text-[#f4f7fb]'
+          : 'text-[#aab2bd] hover:bg-white/[0.038] hover:text-[#edf1f6]',
       )}
     >
       <span
         className={cn(
-          'flex size-6.5 shrink-0 items-center justify-center rounded-lg',
-          active ? 'bg-[#8ea4de]/9 text-foreground' : 'text-foreground/70',
+          'flex size-5 shrink-0 items-center justify-center transition-colors',
+          active ? 'text-[#f1f5fb]' : 'text-[#b6bec9] group-hover:text-[#f0f4fa]',
         )}
       >
         {icon}
       </span>
-      <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{title}</span>
+      <span className="min-w-0 flex-1 truncate text-[12px] font-semibold leading-[18px]">{title}</span>
       {trailing}
     </button>
   )
 }
 
-export function CourseOutlinePane({ workspaceView, onSelectView, windowFocused: _windowFocused }: CourseOutlinePaneProps) {
+export function CourseOutlinePane({ workspaceView, onSelectView, sidebarWidth, windowFocused: _windowFocused }: CourseOutlinePaneProps) {
   const courseData = useLearningStore((state) => state.courseData)
   const rootNodeIds = useLearningStore((state) => state.rootNodeIds)
   const nodeMap = useLearningStore((state) => state.nodeMap)
@@ -103,72 +105,60 @@ export function CourseOutlinePane({ workspaceView, onSelectView, windowFocused: 
   })
   const completedStageCount = stageSegments.filter((segment) => segment.completionRatio >= 1).length
   const progress =
-    stageSegments.length > 0 ? Math.round((stageSegments.reduce((sum, segment) => sum + segment.completionRatio, 0) / stageSegments.length) * 100) : 0
+    orderedStudyNodeIds.length > 0 ? Math.round((completedNodeIds.length / orderedStudyNodeIds.length) * 100) : 0
 
   return (
-    <aside className="flex h-full w-[240px] shrink-0 flex-col bg-transparent px-2 pb-2.5 pt-2">
+    <aside className="flex h-full shrink-0 flex-col bg-transparent px-2.5 pb-2.5 pt-2" style={{ width: sidebarWidth }}>
       <div className="space-y-2">
         <nav className="space-y-0.5 py-1">
           <NavEntry
-            icon={<Sparkles size={15} />}
+            icon={<img src={sidebarLearnIcon} alt="" className="size-[17px]" />}
             title="学习台"
             active={workspaceView === 'learn'}
-            trailing={courseData ? <Badge variant="outline" className="h-5 px-2 text-[10px]">{progress}%</Badge> : undefined}
+            trailing={courseData ? <Badge variant="outline" className="h-5 border-white/0 bg-black/18 px-2 text-[10px] text-foreground/74">{progress}%</Badge> : undefined}
             onClick={() => onSelectView('learn')}
           />
           <NavEntry
-            icon={<LibraryBig size={15} />}
-            title="课程中心"
-            active={workspaceView === 'hub'}
+            icon={<WandSparkles size={16} strokeWidth={2} />}
+            title="工作台"
+            active={workspaceView === 'workbench'}
+            onClick={() => onSelectView('workbench')}
+          />
+          <NavEntry
+            icon={<img src={sidebarArchiveIcon} alt="" className="size-[17px]" />}
+            title="学习档案"
+            active={workspaceView === 'archive'}
             trailing={
-              <Badge variant="outline" className="h-5 px-2 text-[10px]">
+              <Badge variant="outline" className="h-5 border-white/0 bg-black/18 px-2 text-[10px] text-foreground/74">
                 {activeLibraryCount + archivedLibraryCount}
               </Badge>
             }
-            onClick={() => onSelectView('hub')}
-          />
-          <NavEntry
-            icon={<Settings2 size={15} />}
-            title="设置"
-            active={workspaceView === 'settings'}
-            onClick={() => onSelectView('settings')}
+            onClick={() => onSelectView('archive')}
           />
         </nav>
       </div>
 
-      <div className="mt-2 flex min-h-0 flex-1 flex-col overflow-hidden border-t border-white/[0.02] pt-2.5">
-        <div className="flex items-center justify-between px-1 pb-2">
-          <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-muted-foreground">主线</div>
+      <div className="mt-2 flex min-h-0 flex-1 flex-col overflow-hidden pt-2.5">
+        <div className="flex items-center justify-between gap-2 px-1 pb-2">
+          <div className="text-[12px] font-semibold leading-[18px] text-[#aab2bd]">主线</div>
           {courseData ? (
-            <div className="flex items-center gap-2 rounded-full border border-white/[0.04] bg-white/[0.015] px-2.5 py-1">
-              <div className="flex h-2 w-[132px] items-center gap-[3px]">
-                {stageSegments.map((segment) => (
-                  <div key={segment.id} className="relative h-full flex-1 overflow-hidden rounded-full bg-white/[0.04]">
-                    {segment.unlockedRatio > 0 ? (
-                      <span
-                        className="absolute inset-y-0 left-0 rounded-full bg-white/[0.09]"
-                        style={{ width: `${Math.max(segment.unlockedRatio * 100, segment.unlockedRatio > 0 ? 14 : 0)}%` }}
-                      />
-                    ) : null}
-                    {segment.completionRatio > 0 ? (
-                      <span
-                        className="absolute inset-y-0 left-0 rounded-full bg-sky-300/85 shadow-[0_0_10px_rgba(125,211,252,0.24)]"
-                        style={{ width: `${Math.max(segment.completionRatio * 100, segment.completionRatio > 0 ? 16 : 0)}%` }}
-                      />
-                    ) : null}
-                  </div>
-                ))}
+            <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+              <div className="relative h-1.5 w-[132px] overflow-hidden rounded-full bg-white/[0.07]">
+                <div
+                  className="absolute inset-y-0 left-0 rounded-full bg-sky-300/90 shadow-[0_0_10px_rgba(125,211,252,0.22)] transition-[width] duration-300"
+                  style={{ width: `${Math.max(0, Math.min(100, progress))}%` }}
+                />
               </div>
-              <span className="text-[10px] font-medium text-foreground/78">{progress}%</span>
+              <span className="w-8 text-right text-[11px] font-semibold tabular-nums text-[#dbe4ef]">{progress}%</span>
             </div>
           ) : null}
         </div>
 
         <div className="subtle-scrollbar min-h-0 flex-1 overflow-y-auto px-0.5 pr-0">
           {courseData ? (
-            <div className="space-y-1">
+            <div className="space-y-0.5">
               {rootNodeIds.map((nodeId) => (
-                <OutlineNodeItem key={nodeId} nodeId={nodeId} />
+                <OutlineNodeItem key={nodeId} nodeId={nodeId} onActivateStudyNode={() => onSelectView('learn')} />
               ))}
             </div>
           ) : (
@@ -177,8 +167,8 @@ export function CourseOutlinePane({ workspaceView, onSelectView, windowFocused: 
                 课程载入后，主线会在这里展开。
               </div>
               <div className="mt-3 flex flex-wrap gap-1.5">
-                <Button size="sm" className="h-8 rounded-xl px-3" onClick={() => onSelectView('hub')}>
-                  课程中心
+                <Button size="sm" className="h-8 rounded-xl px-3" onClick={() => onSelectView('workbench')}>
+                  工作台
                 </Button>
                 <Button size="sm" variant="outline" className="h-8 rounded-xl px-3" onClick={() => onSelectView('learn')}>
                   学习台
@@ -187,6 +177,15 @@ export function CourseOutlinePane({ workspaceView, onSelectView, windowFocused: 
             </div>
           )}
         </div>
+      </div>
+
+      <div className="mt-2 pt-2">
+        <NavEntry
+          icon={<Settings size={16} strokeWidth={2} />}
+          title="设置"
+          active={workspaceView === 'settings'}
+          onClick={() => onSelectView('settings')}
+        />
       </div>
     </aside>
   )

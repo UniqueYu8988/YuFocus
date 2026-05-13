@@ -1,5 +1,5 @@
 import { LoaderCircle, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { AppChrome } from '@/components/AppChrome'
 import { CourseOutlinePane } from '@/components/CourseOutlinePane'
 import { WorkspacePane, type WorkspaceView } from '@/components/WorkspacePane'
@@ -13,10 +13,26 @@ import { useLearningStore } from '@/store'
 
 ensureDesktopApiFallback()
 
+const SIDEBAR_WIDTH_STORAGE_KEY = 'shijie-focus-sidebar-width'
+const SIDEBAR_MIN_WIDTH = 220
+const SIDEBAR_MAX_WIDTH = 380
+const SIDEBAR_DEFAULT_WIDTH = 240
+
+function clampSidebarWidth(value: number) {
+  return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, Math.round(value)))
+}
+
+function loadSidebarWidth() {
+  const raw = Number(globalThis.localStorage?.getItem(SIDEBAR_WIDTH_STORAGE_KEY))
+  return Number.isFinite(raw) && raw > 0 ? clampSidebarWidth(raw) : SIDEBAR_DEFAULT_WIDTH
+}
+
 function App() {
-  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('hub')
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('workbench')
   const [windowFocused, setWindowFocused] = useState(true)
   const [windowMaximized, setWindowMaximized] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
+  const [sidebarResizing, setSidebarResizing] = useState(false)
   const autoOpenedPackageRef = useRef<string | null>(null)
   const queryImportedPackageRef = useRef<string | null>(null)
 
@@ -95,6 +111,40 @@ function App() {
     setWorkspaceView('learn')
   }, [courseData, currentNodeId])
 
+  const handleSidebarResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = sidebarWidth
+    setSidebarResizing(true)
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const nextWidth = clampSidebarWidth(startWidth + moveEvent.clientX - startX)
+      setSidebarWidth(nextWidth)
+    }
+
+    const handlePointerUp = (upEvent: PointerEvent) => {
+      const nextWidth = clampSidebarWidth(startWidth + upEvent.clientX - startX)
+      setSidebarWidth(nextWidth)
+      globalThis.localStorage?.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(nextWidth))
+      setSidebarResizing(false)
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp, { once: true })
+  }
+
+  const showDistillNotice = distillRequestState === 'loading' || Boolean(distillError)
+  const workspaceNoticeStyle = {
+    left: `${sidebarWidth + 8}px`,
+    right: 0,
+  }
+
   if (bootState === 'booting') {
     return (
       <div className="work-surface flex h-screen items-center justify-center overflow-hidden p-6">
@@ -118,96 +168,123 @@ function App() {
       <AppChrome
         windowFocused={windowFocused}
         isMaximized={windowMaximized}
+        sidebarWidth={sidebarWidth}
         onMinimize={() => void window.desktopAPI.minimize()}
         onToggleMaximize={() => void window.desktopAPI.toggleMaximize()}
         onClose={() => void window.desktopAPI.close()}
       />
 
-      {distillRequestState === 'loading' || distillError ? (
-        <Card
-          className={cn(
-            'glass-panel-strong absolute left-[252px] top-12 z-20 w-[min(360px,calc(100vw-19rem))] overflow-hidden rounded-[22px]',
-            distillError && 'border-destructive/25',
-          )}
+      {showDistillNotice || toast ? (
+        <div
+          className="pointer-events-none absolute top-[52px] z-40 flex justify-center px-5"
+          style={workspaceNoticeStyle}
         >
-          <CardContent className="space-y-4 p-3.5">
-            <div className="flex items-start justify-between gap-3">
-              <div className="space-y-1.5">
-                  <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground">整理任务</div>
-                <div className="flex items-center gap-2">
-                  <span
+          <div className="flex w-full max-w-[540px] flex-col items-center gap-3">
+            {showDistillNotice ? (
+              <Card
+                className={cn(
+                  'glass-panel-strong toast-enter pointer-events-auto w-full overflow-hidden rounded-[22px]',
+                  distillError && 'border-destructive/25',
+                )}
+              >
+                <CardContent className="space-y-4 p-3.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground">整理任务</div>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={cn(
+                            'inline-flex size-2 rounded-full bg-white/70 shadow-[0_0_10px_rgba(255,255,255,0.18)]',
+                            distillError && 'bg-destructive shadow-[0_0_12px_hsl(var(--destructive)/0.8)]',
+                          )}
+                        />
+                        <p className="text-sm font-semibold text-foreground">
+                          {distillRequestState === 'loading' ? '后台整理中' : '整理失败'}
+                        </p>
+                      </div>
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        {distillRequestState === 'loading'
+                          ? distillStatusMessage || '正在抓取字幕、清洗文本并整理 Codex 原材料。'
+                          : distillError}
+                      </p>
+                    </div>
+                    {distillRequestState === 'loading' ? (
+                      <Badge variant="outline" className="border-white/10 bg-white/[0.06] text-foreground/85">
+                        {Math.max(0, Math.min(100, Math.round(distillProgressPercent)))}%
+                      </Badge>
+                    ) : null}
+                  </div>
+
+                  {distillRequestState === 'loading' ? (
+                    <div className="space-y-2.5">
+                      <Progress value={Math.max(4, Math.min(100, distillProgressPercent || 4))} className="h-1.5 bg-white/8" />
+                      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                        <span>整理不会打断你当前的学习流程。</span>
+                        <span>后台运行</span>
+                      </div>
+                    </div>
+                  ) : null}
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {toast ? (
+              <Card className="glass-panel-strong toast-enter pointer-events-auto w-[min(460px,100%)] overflow-hidden rounded-[22px]">
+                <CardContent className="flex items-start gap-3 p-3.5">
+                  <div
                     className={cn(
-                      'inline-flex size-2 rounded-full bg-white/70 shadow-[0_0_10px_rgba(255,255,255,0.18)]',
-                      distillError && 'bg-destructive shadow-[0_0_12px_hsl(var(--destructive)/0.8)]',
+                      'mt-1 size-2 rounded-full bg-white/65 shadow-[0_0_10px_rgba(255,255,255,0.16)]',
+                      toast.tone === 'success' && 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.8)]',
+                      toast.tone === 'error' && 'bg-destructive shadow-[0_0_12px_hsl(var(--destructive)/0.8)]',
                     )}
                   />
-                  <p className="text-sm font-semibold text-foreground">
-                  {distillRequestState === 'loading' ? '后台整理中' : '整理失败'}
-                  </p>
-                </div>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  {distillRequestState === 'loading'
-                    ? distillStatusMessage || '正在抓取字幕、清洗文本并整理 Codex 原材料。'
-                    : distillError}
-                </p>
-              </div>
-              {distillRequestState === 'loading' ? (
-                <Badge variant="outline" className="border-white/10 bg-white/[0.06] text-foreground/85">
-                  {Math.max(0, Math.min(100, Math.round(distillProgressPercent)))}%
-                </Badge>
-              ) : null}
-            </div>
-
-            {distillRequestState === 'loading' ? (
-              <div className="space-y-2.5">
-                <Progress value={Math.max(4, Math.min(100, distillProgressPercent || 4))} className="h-1.5 bg-white/8" />
-                <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                    <span>整理不会打断你当前的学习流程。</span>
-                  <span>后台运行</span>
-                </div>
-              </div>
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground">系统提示</div>
+                    <p className="text-sm font-semibold text-foreground">{toast.title}</p>
+                    {toast.description ? <p className="text-xs leading-5 text-muted-foreground">{toast.description}</p> : null}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 rounded-lg text-muted-foreground hover:text-foreground"
+                    onClick={dismissToast}
+                    aria-label="关闭提示"
+                  >
+                    <X size={14} />
+                  </Button>
+                </CardContent>
+                <div
+                  className={cn(
+                    'toast-progress-line h-[2px] w-full origin-left bg-white/22',
+                    toast.tone === 'success' && 'bg-emerald-400/70',
+                    toast.tone === 'error' && 'bg-destructive/80',
+                  )}
+                />
+              </Card>
             ) : null}
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {toast ? (
-        <Card className="glass-panel-strong toast-enter absolute right-4 top-12 z-20 w-[min(320px,calc(100vw-2rem))] overflow-hidden rounded-[22px]">
-          <CardContent className="flex items-start gap-3 p-3.5">
-            <div
-              className={cn(
-                'mt-1 size-2 rounded-full bg-white/65 shadow-[0_0_10px_rgba(255,255,255,0.16)]',
-                toast.tone === 'success' && 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.8)]',
-                toast.tone === 'error' && 'bg-destructive shadow-[0_0_12px_hsl(var(--destructive)/0.8)]',
-              )}
-            />
-            <div className="min-w-0 flex-1 space-y-1">
-              <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground">系统提示</div>
-              <p className="text-sm font-semibold text-foreground">{toast.title}</p>
-              {toast.description ? <p className="text-xs leading-5 text-muted-foreground">{toast.description}</p> : null}
-            </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-8 rounded-lg text-muted-foreground hover:text-foreground"
-              onClick={dismissToast}
-              aria-label="关闭提示"
-            >
-              <X size={14} />
-            </Button>
-          </CardContent>
-          <div
-            className={cn(
-              'toast-progress-line h-[2px] w-full origin-left bg-white/22',
-              toast.tone === 'success' && 'bg-emerald-400/70',
-              toast.tone === 'error' && 'bg-destructive/80',
-            )}
-          />
-        </Card>
+          </div>
+        </div>
       ) : null}
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <CourseOutlinePane workspaceView={workspaceView} onSelectView={setWorkspaceView} windowFocused={windowFocused} />
+        <CourseOutlinePane workspaceView={workspaceView} onSelectView={setWorkspaceView} sidebarWidth={sidebarWidth} windowFocused={windowFocused} />
+        <div
+          className={cn(
+            'app-no-drag group relative z-10 w-2 shrink-0 cursor-col-resize',
+            sidebarResizing && 'cursor-col-resize',
+          )}
+          onPointerDown={handleSidebarResizeStart}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整侧边栏宽度"
+        >
+          <div
+            className={cn(
+              'absolute inset-y-3 left-1/2 w-px -translate-x-1/2 rounded-full bg-white/[0.035] opacity-0 transition group-hover:opacity-100',
+              sidebarResizing && 'bg-sky-300/60 opacity-100',
+            )}
+          />
+        </div>
         <WorkspacePane
           view={workspaceView}
           runtimeSettings={runtimeSettings}

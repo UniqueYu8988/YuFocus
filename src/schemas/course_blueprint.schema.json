@@ -1,0 +1,1791 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://shijie-focus.local/schemas/course_blueprint.schema.json",
+  "title": "视界专注 Course Blueprint",
+  "description": "ChatGPT 课程总设计师输出给 Codex 的课程制作蓝图。它不是最终课包，而是课程结构、教学策略、展示形式和 Codex 执行说明的机器可读契约。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "blueprint_id",
+    "course_title",
+    "source_summary",
+    "learner_profile",
+    "course_strategy",
+    "chapters",
+    "codex_execution_policy"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "shijie.course-blueprint.v0.1"
+    },
+    "blueprint_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 120
+    },
+    "course_title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_genre": {
+      "$ref": "#/$defs/sourceGenre"
+    },
+    "learning_intent": {
+      "$ref": "#/$defs/learningIntent"
+    },
+    "course_design_mode": {
+      "$ref": "#/$defs/courseDesignMode"
+    },
+    "source_summary": {
+      "$ref": "#/$defs/sourceSummary"
+    },
+    "learner_profile": {
+      "$ref": "#/$defs/learnerProfile"
+    },
+    "course_strategy": {
+      "$ref": "#/$defs/courseStrategy"
+    },
+    "course_visual_map": {
+      "$ref": "#/$defs/courseVisualMap"
+    },
+    "chapters": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/chapterBlueprint"
+      }
+    },
+    "global_visual_plan": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/visualPlanItem"
+      }
+    },
+    "source_coverage_map": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/sourceCoverageItem"
+      }
+    },
+    "topic_inventory": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/topicInventoryItem"
+      }
+    },
+    "compression_review": {
+      "$ref": "#/$defs/compressionReview"
+    },
+    "design_review": {
+      "$ref": "#/$defs/designReview"
+    },
+    "codex_execution_policy": {
+      "$ref": "#/$defs/codexExecutionPolicy"
+    },
+    "notes": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "sourceGenre": {
+      "enum": [
+        "lecture",
+        "tutorial",
+        "interview",
+        "podcast",
+        "panel",
+        "documentary",
+        "demo",
+        "mixed"
+      ]
+    },
+    "learningIntent": {
+      "enum": [
+        "skill_mastery",
+        "concept_learning",
+        "viewpoint_understanding",
+        "decision_reference",
+        "biography_study",
+        "industry_observation",
+        "exam_preparation",
+        "general_learning"
+      ]
+    },
+    "courseDesignMode": {
+      "enum": [
+        "knowledge_map",
+        "concept_training",
+        "language_training",
+        "grammar_training",
+        "operation_training",
+        "tool_workflow",
+        "case_reasoning",
+        "exam_training",
+        "viewpoint_understanding",
+        "mixed"
+      ]
+    },
+    "sourceSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_type",
+        "source_id",
+        "material_scope",
+        "known_limits"
+      ],
+      "properties": {
+        "source_type": {
+          "type": "string"
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "source_title": {
+          "type": "string"
+        },
+        "material_scope": {
+          "type": "string"
+        },
+        "known_limits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "learnerProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_audience",
+        "assumed_background",
+        "learning_goal",
+        "risk_points"
+      ],
+      "properties": {
+        "target_audience": {
+          "type": "string"
+        },
+        "assumed_background": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "learning_goal": {
+          "type": "string"
+        },
+        "risk_points": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "courseStrategy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "course_type_tags",
+        "design_principles",
+        "sequence_rationale",
+        "knowledge_gap_policy"
+      ],
+      "properties": {
+        "course_type_tags": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/lessonTypeTag"
+          }
+        },
+        "design_principles": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "sequence_rationale": {
+          "type": "string"
+        },
+        "knowledge_gap_policy": {
+          "type": "string"
+        }
+      }
+    },
+    "chapterBlueprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chapter_id",
+        "title",
+        "chapter_goal",
+        "lessons"
+      ],
+      "properties": {
+        "chapter_id": {
+          "type": "string",
+          "pattern": "^chapter_[0-9]{3}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chapter_goal": {
+          "type": "string"
+        },
+        "chapter_roadmap": {
+          "$ref": "#/$defs/chapterRoadmapBlueprint"
+        },
+        "lessons": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/lessonBlueprint"
+          }
+        }
+      }
+    },
+    "lessonBlueprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lesson_id",
+        "title",
+        "lesson_type_tags",
+        "learning_goal",
+        "student_problem",
+        "source_scope",
+        "must_cover",
+        "must_not_do",
+        "knowledge_to_add",
+        "display_plan",
+        "active_recall_plan",
+        "standard_answer_plan",
+        "codex_instruction"
+      ],
+      "properties": {
+        "lesson_id": {
+          "type": "string",
+          "pattern": "^lesson_[0-9]{3}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lesson_type_tags": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/lessonTypeTag"
+          }
+        },
+        "learning_goal": {
+          "type": "string"
+        },
+        "student_problem": {
+          "type": "string"
+        },
+        "source_scope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "must_cover": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "must_not_do": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "knowledge_to_add": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "density_mode": {
+          "enum": [
+            "short_precise",
+            "normal",
+            "high_density",
+            "drill"
+          ]
+        },
+        "content_domain": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "enum": [
+              "medical",
+              "exam",
+              "computer_science",
+              "software_tool",
+              "operation_skill",
+              "case_reasoning",
+              "general_knowledge",
+              "mixed"
+            ]
+          }
+        },
+        "primary_training_action": {
+          "$ref": "#/$defs/trainingAction"
+        },
+        "secondary_training_actions": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/trainingAction"
+          }
+        },
+        "training_policy": {
+          "$ref": "#/$defs/trainingPolicy"
+        },
+        "target_length_range": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "min": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "rationale": {
+              "type": "string"
+            }
+          }
+        },
+        "natural_length_hint": {
+          "$ref": "#/$defs/naturalLengthHint"
+        },
+        "preferred_format": {
+          "enum": [
+            "narrative",
+            "step_list",
+            "decision_chain",
+            "comparison_table",
+            "troubleshooting_tree",
+            "spatial_schematic",
+            "case_reasoning",
+            "mixed"
+          ]
+        },
+        "primary_format": {
+          "$ref": "#/$defs/displayBlockType"
+        },
+        "supporting_formats": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/displayBlockType"
+          }
+        },
+        "avoid_formats": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/displayBlockType"
+          }
+        },
+        "format_policy": {
+          "$ref": "#/$defs/formatPolicy"
+        },
+        "teaching_voice": {
+          "$ref": "#/$defs/teachingVoice"
+        },
+        "verification_level": {
+          "enum": [
+            "stable_concept",
+            "version_sensitive",
+            "must_verify_official_docs",
+            "demo_only"
+          ]
+        },
+        "completion_signals": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "can_be_short": {
+          "type": "boolean"
+        },
+        "must_expand_reason": {
+          "type": "string"
+        },
+        "display_plan": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/displayPlanItem"
+          }
+        },
+        "visual_plan": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/visualPlanItem"
+          }
+        },
+        "active_recall_plan": {
+          "$ref": "#/$defs/activeRecallPlan"
+        },
+        "standard_answer_plan": {
+          "$ref": "#/$defs/standardAnswerPlan"
+        },
+        "codex_instruction": {
+          "type": "string",
+          "minLength": 20
+        },
+        "quality_bar": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "displayPlanItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "title",
+        "purpose"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/displayBlockType"
+        },
+        "title": {
+          "type": "string"
+        },
+        "priority": {
+          "$ref": "#/$defs/displayPriority"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "codex_instruction": {
+          "type": "string"
+        },
+        "why_this_format": {
+          "type": "string"
+        },
+        "must_follow_with": {
+          "type": "string"
+        },
+        "fallback_allowed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "visualPlanItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "title",
+        "purpose",
+        "codex_instruction"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "mermaid_diagram",
+            "comparison_table",
+            "flowchart",
+            "workflow_map",
+            "decision_tree",
+            "architecture_diagram",
+            "timeline",
+            "concept_map",
+            "spatial_schematic",
+            "interface_schematic",
+            "troubleshooting_tree",
+            "checklist",
+            "code_example",
+            "formula_walkthrough"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "codex_instruction": {
+          "type": "string"
+        }
+      }
+    },
+    "activeRecallPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "question_goal",
+        "question_style"
+      ],
+      "properties": {
+        "question_goal": {
+          "type": "string"
+        },
+        "question_style": {
+          "enum": [
+            "free_recall",
+            "sequence_recall",
+            "comparison",
+            "troubleshooting",
+            "application",
+            "case_judgement",
+            "scenario_diagnosis",
+            "operation_recall",
+            "configuration_recall",
+            "clinical_reasoning",
+            "decision_order",
+            "exam_response",
+            "explain_back",
+            "viewpoint_recall",
+            "argument_reconstruction",
+            "counterexample",
+            "transfer_reflection"
+          ]
+        },
+        "recall_task_type": {
+          "type": "string"
+        },
+        "scenario": {
+          "type": "string"
+        },
+        "task_prompt": {
+          "type": "string"
+        },
+        "expected_key_points": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "common_wrong_answers": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "answer_structure": {
+          "type": "string"
+        }
+      }
+    },
+    "standardAnswerPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "answer_shape",
+        "must_include",
+        "common_mistakes"
+      ],
+      "properties": {
+        "answer_shape": {
+          "enum": [
+            "bullet_points",
+            "step_sequence",
+            "comparison_table",
+            "reasoning_chain",
+            "checklist",
+            "exam_scoring_points",
+            "case_analysis",
+            "troubleshooting_order",
+            "configuration_checklist",
+            "clinical_answer"
+          ]
+        },
+        "must_include": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "common_mistakes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "must_be_specific_to_lesson": {
+          "type": "boolean"
+        },
+        "forbidden_generic_frame": {
+          "type": "string"
+        }
+      }
+    },
+    "codexExecutionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lesson_generation_order",
+        "quality_bar",
+        "software_display_notes"
+      ],
+      "properties": {
+        "lesson_generation_order": {
+          "type": "string"
+        },
+        "quality_bar": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "software_display_notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "designReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strengths",
+        "risk_points",
+        "high_density_lessons",
+        "rejected_alternatives",
+        "verification_needs",
+        "software_display_needs"
+      ],
+      "properties": {
+        "strengths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/designReviewNote"
+          }
+        },
+        "risk_points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/designRisk"
+          }
+        },
+        "high_density_lessons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/highDensityLesson"
+          }
+        },
+        "rejected_alternatives": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rejectedAlternative"
+          }
+        },
+        "verification_needs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/verificationNeed"
+          }
+        },
+        "software_display_needs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/softwareDisplayNeed"
+          }
+        }
+      }
+    },
+    "designReviewNote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "detail",
+        "why_it_matters"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "why_it_matters": {
+          "type": "string"
+        }
+      }
+    },
+    "designRisk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "risk",
+        "recommendation"
+      ],
+      "properties": {
+        "scope": {
+          "type": "string"
+        },
+        "risk": {
+          "type": "string"
+        },
+        "recommendation": {
+          "type": "string"
+        }
+      }
+    },
+    "highDensityLesson": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lesson_id",
+        "reason",
+        "codex_guardrail"
+      ],
+      "properties": {
+        "lesson_id": {
+          "type": "string",
+          "pattern": "^lesson_[0-9]{3}$"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "codex_guardrail": {
+          "type": "string"
+        }
+      }
+    },
+    "rejectedAlternative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "why_not"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "why_not": {
+          "type": "string"
+        }
+      }
+    },
+    "verificationNeed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "item",
+        "policy"
+      ],
+      "properties": {
+        "scope": {
+          "type": "string"
+        },
+        "item": {
+          "type": "string"
+        },
+        "policy": {
+          "type": "string"
+        }
+      }
+    },
+    "softwareDisplayNeed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "block_type",
+        "use_case",
+        "fallback_markdown"
+      ],
+      "properties": {
+        "block_type": {
+          "type": "string"
+        },
+        "use_case": {
+          "type": "string"
+        },
+        "fallback_markdown": {
+          "type": "string"
+        }
+      }
+    },
+    "sourceCoverageItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id",
+        "coverage_status",
+        "used_by_lessons"
+      ],
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "coverage_status": {
+          "enum": [
+            "core",
+            "partial",
+            "merged",
+            "skipped",
+            "noisy"
+          ]
+        },
+        "used_by_lessons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rationale": {
+          "type": "string"
+        }
+      }
+    },
+    "topicInventoryItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "topic",
+        "coverage_status"
+      ],
+      "properties": {
+        "topic": {
+          "type": "string"
+        },
+        "importance": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "coverage_status": {
+          "enum": [
+            "full",
+            "partial",
+            "merged",
+            "skipped",
+            "noise"
+          ]
+        },
+        "source_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "used_by_lessons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "should_be_lesson": {
+          "type": "boolean"
+        },
+        "handling_reason": {
+          "type": "string"
+        },
+        "training_value": {
+          "type": "string"
+        },
+        "error_frequency": {
+          "enum": [
+            "high",
+            "medium",
+            "low",
+            "unknown"
+          ]
+        },
+        "needs_examples": {
+          "type": "boolean"
+        },
+        "compression_learning_cost": {
+          "type": "string"
+        },
+        "compression_mitigation": {
+          "type": "string"
+        }
+      }
+    },
+    "compressionReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "material_scale",
+        "lesson_count_rationale",
+        "compression_risks",
+        "expansion_recommendation"
+      ],
+      "properties": {
+        "material_scale": {
+          "type": "string"
+        },
+        "lesson_count_rationale": {
+          "type": "string"
+        },
+        "minimum_lesson_check": {
+          "type": "string"
+        },
+        "compression_risks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/compressionRisk"
+          }
+        },
+        "expansion_recommendation": {
+          "type": "string"
+        }
+      }
+    },
+    "compressionRisk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "topic",
+        "risk",
+        "recommendation"
+      ],
+      "properties": {
+        "topic": {
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "risk": {
+          "type": "string"
+        },
+        "recommendation": {
+          "type": "string"
+        }
+      }
+    },
+    "chapterRoadmapBlueprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "roadmap_type",
+        "title",
+        "nodes"
+      ],
+      "properties": {
+        "roadmap_type": {
+          "enum": [
+            "workflow",
+            "concept_map",
+            "decision_tree",
+            "operation_flow",
+            "exam_strategy",
+            "architecture_map",
+            "case_reasoning",
+            "argument_map",
+            "viewpoint_map"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "subtitle": {
+          "type": "string"
+        },
+        "visual_asset": {
+          "$ref": "#/$defs/chapterRoadmapVisualAsset"
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapNodeBlueprint"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapEdgeBlueprint"
+          }
+        },
+        "focus_cards": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapFocusCardBlueprint"
+          }
+        },
+        "completion_signals": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "turning_points": {
+          "type": "array",
+          "default": [],
+          "description": "本章理解发生转向的关键点，例如从直觉到机制、从现象到判断、从观点A到观点B。",
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapTurningPointBlueprint"
+          }
+        },
+        "tension_edges": {
+          "type": "array",
+          "default": [],
+          "description": "本章节点之间的张力、冲突、取舍或反直觉关系，用于访谈/观点/复杂决策材料。",
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapTensionEdgeBlueprint"
+          }
+        },
+        "conflict_nodes": {
+          "type": "array",
+          "default": [],
+          "description": "本章需要特别看见的观点冲突、误解冲突、操作风险或判断分歧。",
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapConflictNodeBlueprint"
+          }
+        },
+        "open_questions": {
+          "type": "array",
+          "default": [],
+          "description": "本章学完后仍值得追问的问题，用于把课程延伸到个人实践、行业判断或后续学习。",
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapOpenQuestionBlueprint"
+          }
+        },
+        "codex_instruction": {
+          "type": "string"
+        }
+      }
+    },
+    "chapterRoadmapVisualAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "alt",
+        "prompt",
+        "status"
+      ],
+      "properties": {
+        "asset_id": {
+          "type": "string",
+          "pattern": "^asset_[a-z0-9._-]{3,80}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "image"
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "alt": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 300
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 30,
+          "maxLength": 2000
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "planned",
+            "attached",
+            "missing"
+          ]
+        },
+        "hotspots": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapHotspot"
+          }
+        }
+      }
+    },
+    "courseVisualMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "alt",
+        "prompt",
+        "status"
+      ],
+      "properties": {
+        "asset_id": {
+          "type": "string",
+          "pattern": "^asset_[a-z0-9._-]{3,80}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "image"
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "alt": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 300
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 30,
+          "maxLength": 2400
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "planned",
+            "attached",
+            "missing"
+          ]
+        },
+        "hotspots": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/courseVisualMapHotspot"
+          }
+        }
+      }
+    },
+    "courseVisualMapHotspot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^hotspot_[a-z0-9._-]{3,80}$"
+        },
+        "chapter_id": {
+          "type": "string"
+        },
+        "lesson_id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "x": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "y": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "chapterRoadmapHotspot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^hotspot_[a-z0-9._-]{3,80}$"
+        },
+        "lesson_id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "x": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "y": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "chapterRoadmapNodeBlueprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^rm_[a-z0-9._-]{1,48}$"
+        },
+        "lesson_id": {
+          "type": "string",
+          "pattern": "^lesson_[0-9]{3}$"
+        },
+        "title": {
+          "type": "string"
+        },
+        "map_label": {
+          "type": "string",
+          "description": "学生端章节地图优先展示的短标签；应比 title 更短，适合一屏地图。"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "micro_question": {
+          "type": "string",
+          "description": "学生端可选展示的极短问题标签，不要写成长句说明。"
+        },
+        "action_tag": {
+          "type": "string",
+          "description": "本节点主要动作短标签，例如识别、改错、配置、判断。"
+        },
+        "risk_tag": {
+          "type": "string",
+          "description": "本节点最大风险短标签，例如多谓语、漏检查、误判。"
+        },
+        "output_tag": {
+          "type": "string",
+          "description": "学完本节点能产出的短标签，例如能改句、会排错、能复述。"
+        },
+        "core_question": {
+          "type": "string"
+        },
+        "key_claim": {
+          "type": "string"
+        },
+        "counterpoint": {
+          "type": "string"
+        },
+        "completion_signal": {
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "foundation",
+            "concept",
+            "practice",
+            "risk",
+            "decision",
+            "review",
+            "integration"
+          ]
+        },
+        "tone": {
+          "enum": [
+            "green",
+            "blue",
+            "purple",
+            "amber",
+            "rose",
+            "neutral"
+          ]
+        }
+      }
+    },
+    "chapterRoadmapEdgeBlueprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "type": "string",
+          "pattern": "^rm_[a-z0-9._-]{1,48}$"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^rm_[a-z0-9._-]{1,48}$"
+        },
+        "kind": {
+          "enum": [
+            "next",
+            "depends_on",
+            "contrast",
+            "risk",
+            "feedback",
+            "supports",
+            "tension",
+            "counterpoint",
+            "tradeoff",
+            "open_question"
+          ]
+        },
+        "label": {
+          "type": "string"
+        }
+      }
+    },
+    "chapterRoadmapFocusCardBlueprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "bullets"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "bullets": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "chapterRoadmapTurningPointBlueprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "reason"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "lesson_ids": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "chapterRoadmapTensionEdgeBlueprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to",
+        "tension"
+      ],
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "tension": {
+          "type": "string"
+        },
+        "resolution_hint": {
+          "type": "string"
+        }
+      }
+    },
+    "chapterRoadmapConflictNodeBlueprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "claim",
+        "counterpoint",
+        "why_it_matters"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "claim": {
+          "type": "string"
+        },
+        "counterpoint": {
+          "type": "string"
+        },
+        "why_it_matters": {
+          "type": "string"
+        },
+        "lesson_ids": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "chapterRoadmapOpenQuestionBlueprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "question",
+        "why_it_matters"
+      ],
+      "properties": {
+        "question": {
+          "type": "string"
+        },
+        "why_it_matters": {
+          "type": "string"
+        },
+        "related_lesson_ids": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "lessonTypeTag": {
+      "enum": [
+        "concept_explain",
+        "system_map",
+        "operation_steps",
+        "tool_config",
+        "workflow",
+        "troubleshooting",
+        "comparison",
+        "case_analysis",
+        "exam_training",
+        "strategy",
+        "practice_drill",
+        "review_synthesis"
+      ]
+    },
+    "displayBlockType": {
+      "enum": [
+        "narrative",
+        "key_concept",
+        "step_list",
+        "flow_steps",
+        "workflow_map",
+        "decision_tree",
+        "checklist",
+        "comparison_table",
+        "mermaid_diagram",
+        "architecture_diagram",
+        "code_block",
+        "code_or_config_walkthrough",
+        "formula",
+        "formula_walkthrough",
+        "warning",
+        "troubleshooting",
+        "troubleshooting_tree",
+        "common_mistakes",
+        "case_example",
+        "case_reasoning",
+        "risk_matrix",
+        "operation_script_table",
+        "case_answer_template",
+        "oral_practice_prompt",
+        "flashcard",
+        "spatial_schematic",
+        "practice_task",
+        "active_recall",
+        "standard_answer",
+        "memory_hook",
+        "extension"
+      ]
+    },
+    "displayPriority": {
+      "enum": [
+        "required",
+        "optional",
+        "avoid_if_redundant"
+      ]
+    },
+    "trainingAction": {
+      "enum": [
+        "understand",
+        "identify",
+        "classify",
+        "parse",
+        "transform",
+        "correct",
+        "produce",
+        "compare",
+        "choose",
+        "diagnose",
+        "operate",
+        "configure",
+        "troubleshoot",
+        "argue",
+        "reflect",
+        "review"
+      ]
+    },
+    "trainingPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "must_include": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/trainingSlot"
+          }
+        },
+        "optional_include": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/trainingSlot"
+          }
+        },
+        "avoid_slots": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/trainingSlot"
+          }
+        },
+        "selection_rationale": {
+          "type": "string"
+        },
+        "example_policy": {
+          "$ref": "#/$defs/examplePolicy"
+        },
+        "practice_shape": {
+          "type": "string"
+        },
+        "avoid_training_shape": {
+          "type": "string"
+        }
+      }
+    },
+    "trainingSlot": {
+      "enum": [
+        "positive_examples",
+        "negative_examples",
+        "near_miss_pairs",
+        "correction_drill",
+        "transfer_task",
+        "worked_example",
+        "labeling_drill",
+        "function_vs_category_sort",
+        "explain_basis",
+        "clause_boundary_detection",
+        "main_clause_subordinate_clause_split",
+        "role_mapping",
+        "sentence_expansion",
+        "connected_unit_matching",
+        "logic_relation_choice",
+        "parallelism_check",
+        "number_reading",
+        "chunking_by_thousands",
+        "quantity_expression_conversion",
+        "common_error_fix",
+        "word_part_parsing",
+        "meaning_inference",
+        "part_of_speech_prediction",
+        "word_family_production",
+        "full_sentence_diagnosis",
+        "error_prioritization",
+        "multi_step_rewrite",
+        "real_context_transfer",
+        "verification_step",
+        "failure_modes",
+        "oral_script",
+        "operation_checkpoints",
+        "case_clues",
+        "counterarguments"
+      ]
+    },
+    "examplePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "positive_examples_min": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "negative_examples_min": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "near_miss_pairs_min": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "correction_drills_min": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "transfer_tasks_min": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rationale": {
+          "type": "string"
+        }
+      }
+    },
+    "naturalLengthHint": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "short_if_complete",
+            "normal",
+            "expand_until_signals_met"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "formatPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primary",
+        "reason"
+      ],
+      "properties": {
+        "primary": {
+          "$ref": "#/$defs/displayBlockType"
+        },
+        "supporting": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/displayBlockType"
+          }
+        },
+        "avoid": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/displayBlockType"
+          }
+        },
+        "reason": {
+          "type": "string"
+        },
+        "table_allowed_when": {
+          "type": "string"
+        },
+        "teacher_flow": {
+          "type": "string"
+        }
+      }
+    },
+    "teachingVoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "teacher_explains",
+            "coach_walkthrough",
+            "clinical_examiner",
+            "engineering_mentor",
+            "case_discussion",
+            "concise_reference"
+          ]
+        },
+        "opening_hint": {
+          "type": "string"
+        },
+        "transition_hint": {
+          "type": "string"
+        },
+        "avoid_tone": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -146,11 +146,26 @@ function isNodeReachable(
 }
 
 export function getUnlockedNodeIds(nodeMap: Record<string, FlatCourseNode>, completedNodeIds: string[]) {
-  const memo = new Map<string, boolean>()
-  const dependencyMemo = new Map<string, boolean>()
-  return Object.values(nodeMap)
-    .filter((node) => isNodeReachable(node.id, nodeMap, completedNodeIds, memo, dependencyMemo))
+  const unlocked = new Set<string>()
+  const orderedStudyNodeIds = Object.values(nodeMap)
+    .filter((node) => isStudyNode(node))
     .map((node) => node.id)
+  const nextNodeId = getNextNodeId(orderedStudyNodeIds, nodeMap, completedNodeIds)
+
+  const unlockPath = (nodeId: string | null) => {
+    let cursorId = nodeId
+    while (cursorId) {
+      const node = nodeMap[cursorId]
+      if (!node) return
+      unlocked.add(cursorId)
+      cursorId = node.parentId
+    }
+  }
+
+  completedNodeIds.forEach((nodeId) => unlockPath(nodeId))
+  unlockPath(nextNodeId)
+
+  return [...unlocked]
 }
 
 export function getNextNodeId(

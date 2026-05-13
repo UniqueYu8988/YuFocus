@@ -21,6 +21,11 @@ type RuntimeSettings = {
   mimo_tts_model: string
   mimo_tts_voice_id: string
   mimo_tts_style_prompt: string
+  video_summary_provider: string
+  video_summary_api_key: string
+  video_summary_base_url: string
+  video_summary_model: string
+  video_summary_output_dir: string
   transcription_provider: string
   local_transcription_root: string
   local_transcription_python: string
@@ -67,7 +72,9 @@ type TtsSynthesizeResult = {
   model: string
   voiceId: string
   filePath: string
+  filePaths: string[]
   dataUrl: string
+  dataUrls: string[]
   cached: boolean
   characters: number
   usage: TtsUsageSnapshot
@@ -77,6 +84,7 @@ type TtsCacheStatusResult = {
   cached: boolean
   characters: number
   filePath: string | null
+  filePaths: string[]
   usage: TtsUsageSnapshot
 }
 
@@ -128,14 +136,54 @@ type MaterialPackageSummary = {
   blockCount: number
   textLength: number
   updatedAt: number
+  handoffPath: string
+  handoffExists: boolean
+  handoffStatusPath: string
+  handoffStatusExists: boolean
+  workflowStage: string
+  workflowStageLabel: string
+  nextActionLabel: string
   startHerePath: string
   codexPromptPath: string
+  gptDesignerDir: string
+  gptDesignerStartPath: string
+  gptDesignerPromptPath: string
+  gptDesignerCopyPromptPath: string
+  gptWorkspaceZipPath: string
+  gptWorkspaceZipExists: boolean
+  courseBlueprintPath: string
+  courseBlueprintExists: boolean
+  codexBlueprintPromptPath: string
   finalCoursePath: string
   finalCourseExists: boolean
   publishedCoursePath: string
   publishedCourseExists: boolean
   importReadyCoursePath: string
   importReadyCourseExists: boolean
+}
+
+type VideoSummaryResult = {
+  title: string
+  sourceId: string
+  materialPath: string
+  markdownPath: string
+  keyPointCount: number
+  blockCount: number
+  textLength: number
+  summaryProvider?: string
+  stageTimings?: Record<string, unknown>
+}
+
+type VideoSummaryRecord = {
+  name: string
+  path: string
+  title: string
+  sourceId: string
+  keyPointCount: number
+  blockCount: number
+  textLength: number
+  updatedAt: number
+  summaryProvider: string
 }
 
   interface Window {
@@ -148,8 +196,10 @@ type MaterialPackageSummary = {
       loadSettingsStatus: () => Promise<SettingsStatus>
       pickDirectory: () => Promise<string | null>
       pickMediaFile: () => Promise<{ path: string; name: string } | null>
+      pickImageFile: () => Promise<{ path: string; name: string } | null>
       importCoursePackage: () => Promise<{ path: string; text: string } | null>
       readCoursePackage: (targetPath: string) => Promise<{ path: string; text: string }>
+      attachCourseVisualMap: (payload: { targetPath: string; imagePath: string }) => Promise<{ path: string; text: string; assetPath: string; syncedRecordCount: number }>
       runDistillation: (payload: { video?: string; sourceKind?: 'bilibili' | 'local_media'; mediaPath?: string }) => Promise<{
         packagePath: string
         packageId: string
@@ -187,11 +237,18 @@ type MaterialPackageSummary = {
         }
         text: string
       }>
+      runVideoSummary: (payload: { video?: string; sourceKind?: 'bilibili' | 'local_media'; mediaPath?: string }) => Promise<VideoSummaryResult>
+      listVideoSummaries: () => Promise<{
+        rootDir: string
+        records: VideoSummaryRecord[]
+      }>
+      deleteVideoSummary: (markdownPath: string) => Promise<{ deletedPaths: string[] }>
       listMaterialPackages: () => Promise<{
         rootDir: string
         coursePackageRootDir: string
         records: MaterialPackageSummary[]
       }>
+      deleteMaterialPackage: (materialPath: string) => Promise<{ deletedPaths: string[] }>
       loadLearningLibrary: () => Promise<LearningLibraryPayload>
       openLearningRecord: (recordId: string) => Promise<LearningRecord>
       refreshLearningLibraryStructure: () => Promise<LearningLibraryRefreshResult>
@@ -201,6 +258,7 @@ type MaterialPackageSummary = {
       openObsidianCourse: (payload: { course: Record<string, unknown>; currentNodeId: string | null; completedNodeIds: string[]; target?: 'current' | 'board' | 'index' }) => Promise<ObsidianOpenResult>
       synthesizeSpeech: (payload: { text: string; nodeId?: string | null }) => Promise<TtsSynthesizeResult>
       checkSpeechCache: (payload: { text: string; nodeId?: string | null }) => Promise<TtsCacheStatusResult>
+      readTextFile: (targetPath: string) => Promise<string>
       openPath: (targetPath: string) => Promise<void>
       showItem: (targetPath: string) => Promise<void>
       openExternal: (targetUrl: string) => Promise<void>

@@ -30,6 +30,9 @@
     "course": {
       "$ref": "#/$defs/courseInfo"
     },
+    "course_visual_map": {
+      "$ref": "#/$defs/courseVisualMap"
+    },
     "chapters": {
       "type": "array",
       "minItems": 1,
@@ -231,6 +234,9 @@
         "teacher_ready_content": {
           "$ref": "#/$defs/teacherReadyContent"
         },
+        "chapter_roadmap": {
+          "$ref": "#/$defs/chapterRoadmap"
+        },
         "source_refs": {
           "type": "array",
           "default": [],
@@ -289,9 +295,31 @@
             "mixed"
           ]
         },
+        "lesson_type_tags": {
+          "type": "array",
+          "default": [],
+          "description": "从课程蓝图保留下来的多维课型标签，用于未来展示层和 TTS/学习策略适配。",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
         "display_hints": {
           "type": "array",
           "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "primary_training_action": {
+          "type": "string",
+          "description": "从蓝图继承的主训练动作，例如 identify、operate、correct、troubleshoot。仅用于学习策略和审计，不要求学生端展示。"
+        },
+        "training_focus": {
+          "type": "array",
+          "default": [],
+          "description": "本节实际落地的训练槽位，例如 near_miss_pairs、correction_drill、verification_step。仅用于审计和未来展示适配。",
           "items": {
             "type": "string",
             "minLength": 1
@@ -524,6 +552,547 @@
         "takeaway": {
           "type": "string",
           "minLength": 1
+        }
+      }
+    },
+    "chapterRoadmap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "roadmap_type",
+        "title",
+        "nodes"
+      ],
+      "properties": {
+        "roadmap_type": {
+          "type": "string",
+          "enum": [
+            "workflow",
+            "concept_map",
+            "decision_tree",
+            "operation_flow",
+            "exam_strategy",
+            "architecture_map",
+            "case_reasoning",
+            "argument_map",
+            "viewpoint_map"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subtitle": {
+          "type": "string"
+        },
+        "visual_asset": {
+          "$ref": "#/$defs/chapterRoadmapVisualAsset"
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapNode"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapEdge"
+          }
+        },
+        "focus_cards": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapFocusCard"
+          }
+        },
+        "completion_signals": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "turning_points": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapTurningPoint"
+          }
+        },
+        "tension_edges": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapTensionEdge"
+          }
+        },
+        "conflict_nodes": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapConflictNode"
+          }
+        },
+        "open_questions": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapOpenQuestion"
+          }
+        }
+      }
+    },
+    "chapterRoadmapVisualAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "alt",
+        "prompt",
+        "status"
+      ],
+      "properties": {
+        "asset_id": {
+          "type": "string",
+          "pattern": "^asset_[a-z0-9._-]{3,80}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "image"
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "alt": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 300
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 30,
+          "maxLength": 2000
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "planned",
+            "attached",
+            "missing"
+          ]
+        },
+        "hotspots": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/chapterRoadmapHotspot"
+          }
+        }
+      }
+    },
+    "courseVisualMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "alt",
+        "prompt",
+        "status"
+      ],
+      "properties": {
+        "asset_id": {
+          "type": "string",
+          "pattern": "^asset_[a-z0-9._-]{3,80}$"
+        },
+        "kind": {
+          "type": "string",
+          "const": "image"
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "alt": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 300
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 30,
+          "maxLength": 2400
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "planned",
+            "attached",
+            "missing"
+          ]
+        },
+        "hotspots": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/courseVisualMapHotspot"
+          }
+        }
+      }
+    },
+    "courseVisualMapHotspot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^hotspot_[a-z0-9._-]{3,80}$"
+        },
+        "chapter_id": {
+          "type": "string"
+        },
+        "lesson_id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "x": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "y": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "chapterRoadmapHotspot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^hotspot_[a-z0-9._-]{3,80}$"
+        },
+        "lesson_id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "x": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "y": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "chapterRoadmapNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^rm_[a-z0-9._-]{1,48}$"
+        },
+        "lesson_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{1,63}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "map_label": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "micro_question": {
+          "type": "string"
+        },
+        "action_tag": {
+          "type": "string"
+        },
+        "risk_tag": {
+          "type": "string"
+        },
+        "output_tag": {
+          "type": "string"
+        },
+        "core_question": {
+          "type": "string"
+        },
+        "key_claim": {
+          "type": "string"
+        },
+        "counterpoint": {
+          "type": "string"
+        },
+        "completion_signal": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "foundation",
+            "concept",
+            "practice",
+            "risk",
+            "decision",
+            "review",
+            "integration"
+          ]
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "green",
+            "blue",
+            "purple",
+            "amber",
+            "rose",
+            "neutral"
+          ]
+        }
+      }
+    },
+    "chapterRoadmapEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "type": "string",
+          "pattern": "^rm_[a-z0-9._-]{1,48}$"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^rm_[a-z0-9._-]{1,48}$"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "next",
+            "depends_on",
+            "contrast",
+            "risk",
+            "feedback",
+            "supports",
+            "tension",
+            "counterpoint",
+            "tradeoff",
+            "open_question"
+          ]
+        },
+        "label": {
+          "type": "string"
+        }
+      }
+    },
+    "chapterRoadmapFocusCard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "bullets"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bullets": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "chapterRoadmapTurningPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "reason"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lesson_ids": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "chapterRoadmapTensionEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to",
+        "tension"
+      ],
+      "properties": {
+        "from": {
+          "type": "string",
+          "minLength": 1
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string"
+        },
+        "tension": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resolution_hint": {
+          "type": "string"
+        }
+      }
+    },
+    "chapterRoadmapConflictNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "claim",
+        "counterpoint",
+        "why_it_matters"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "claim": {
+          "type": "string",
+          "minLength": 1
+        },
+        "counterpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "why_it_matters": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lesson_ids": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "chapterRoadmapOpenQuestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "question",
+        "why_it_matters"
+      ],
+      "properties": {
+        "question": {
+          "type": "string",
+          "minLength": 1
+        },
+        "why_it_matters": {
+          "type": "string",
+          "minLength": 1
+        },
+        "related_lesson_ids": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       }
     },

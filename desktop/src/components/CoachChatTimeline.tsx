@@ -32,8 +32,11 @@ export function CoachChatTimeline() {
   const previousMessageIdsRef = useRef<string[]>([])
   const scrollNodeIdRef = useRef<string | null>(null)
   const scrollMessageCountRef = useRef(0)
+  const suppressInitialAutoScrollRef = useRef(false)
+  const pendingScrollTargetMessageIdRef = useRef<string | null>(null)
   const revealTimersRef = useRef<number[]>([])
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const speechTokenRef = useRef(0)
   const [revealedMessageIds, setRevealedMessageIds] = useState<string[]>([])
   const [ttsState, setTtsState] = useState<{ messageId: string; status: 'loading' | 'playing' } | null>(null)
   const pushToast = useLearningStore((state) => state.pushToast)
@@ -61,16 +64,26 @@ export function CoachChatTimeline() {
     return () => {
       revealTimersRef.current.forEach((timer) => window.clearTimeout(timer))
       revealTimersRef.current = []
+      speechTokenRef.current += 1
       audioRef.current?.pause()
+      audioRef.current?.removeAttribute('src')
+      audioRef.current?.load()
       audioRef.current = null
     }
   }, [])
 
   const stopSpeech = () => {
+    speechTokenRef.current += 1
     audioRef.current?.pause()
+    audioRef.current?.removeAttribute('src')
+    audioRef.current?.load()
     audioRef.current = null
     setTtsState(null)
   }
+
+  useEffect(() => {
+    stopSpeech()
+  }, [currentNodeId])
 
   const playSpeech = async (speechId: string, content: string) => {
     if (ttsState?.messageId === speechId) {
@@ -79,48 +92,51 @@ export function CoachChatTimeline() {
     }
 
     stopSpeech()
+    const speechToken = speechTokenRef.current + 1
+    speechTokenRef.current = speechToken
     setTtsState({ messageId: speechId, status: 'loading' })
     try {
       const result = await window.desktopAPI.synthesizeSpeech({
         text: content,
         nodeId: currentNodeId,
       })
+      if (speechTokenRef.current !== speechToken) return
       if (!result.cached) {
         pushToast(
           '语音已生成',
           result.provider === 'minimax'
             ? `本节消耗约 ${formatMiniMaxCharacters(result.characters)} MiniMax 字符；今日本地估算剩余 ${formatMiniMaxCharacters(result.usage.remainingCharacters)}。`
-            : `本节已用 MiMo 生成，约 ${formatMiniMaxCharacters(result.characters)} TTS 字符；缓存命中不会重复调用。`,
+            : '本节已用 MiMo 生成；缓存命中不会重复调用。',
           'success',
         )
       }
-      const audio = new Audio(result.dataUrl)
-      audioRef.current = audio
-      audio.onended = () => {
-        if (audioRef.current === audio) {
-          audioRef.current = null
-          setTtsState(null)
+      setTtsState({ messageId: speechId, status: 'playing' })
+      const dataUrls = result.dataUrls?.length ? result.dataUrls : [result.dataUrl]
+      for (let index = 0; index < dataUrls.length; index += 1) {
+        if (speechTokenRef.current !== speechToken) return
+        const audio = new Audio(dataUrls[index])
+        audioRef.current = audio
+        audio.ontimeupdate = () => {
+          const container = containerRef.current
+          if (!container || !Number.isFinite(audio.duration) || audio.duration <= 0) return
+          const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
+          const segmentProgress = Math.min(1, audio.currentTime / audio.duration)
+          container.scrollTo({
+            top: maxScrollTop * Math.min(1, (index + segmentProgress) / dataUrls.length),
+            behavior: 'smooth',
+          })
         }
-      }
-      audio.onerror = () => {
-        if (audioRef.current === audio) {
-          audioRef.current = null
-          setTtsState(null)
-        }
-        pushToast('朗读失败', '音频播放失败，请检查系统音频设置。', 'error')
-      }
-      audio.ontimeupdate = () => {
-        const container = containerRef.current
-        if (!container || !Number.isFinite(audio.duration) || audio.duration <= 0) return
-        const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
-        container.scrollTo({
-          top: maxScrollTop * Math.min(1, audio.currentTime / audio.duration),
-          behavior: 'smooth',
+        await new Promise<void>((resolve, reject) => {
+          audio.onended = () => resolve()
+          audio.onerror = () => reject(new Error('音频播放失败，请检查系统音频设置。'))
+          void audio.play().catch(reject)
         })
       }
-      setTtsState({ messageId: speechId, status: 'playing' })
-      await audio.play()
+      if (speechTokenRef.current !== speechToken) return
+      audioRef.current = null
+      setTtsState(null)
     } catch (error) {
+      if (speechTokenRef.current !== speechToken) return
       setTtsState(null)
       pushToast('朗读失败', error instanceof Error ? error.message : String(error), 'error')
     }
@@ -145,6 +161,12 @@ export function CoachChatTimeline() {
     if (addedMessages.length === 0) {
       previousMessageIdsRef.current = currentIds
       return
+    }
+
+    const addedCoachMessage = addedMessages.find((message) => message.role === 'coach') ?? null
+    const addedUserMessage = addedMessages.some((message) => message.role === 'user')
+    if (addedUserMessage && addedCoachMessage) {
+      pendingScrollTargetMessageIdRef.current = addedCoachMessage.id
     }
 
     const baseIds = currentIds.filter((id) => previousIds.includes(id))
@@ -189,11 +211,37 @@ export function CoachChatTimeline() {
     scrollMessageCountRef.current = renderedMessages.length
 
     if (isNewNode) {
+      suppressInitialAutoScrollRef.current = renderedMessages.length === 0
       container.scrollTo({
         top: 0,
         behavior: 'auto',
       })
       return
+    }
+
+    if (suppressInitialAutoScrollRef.current) {
+      if (renderedMessages.length > 0) {
+        suppressInitialAutoScrollRef.current = false
+        container.scrollTo({
+          top: 0,
+          behavior: 'auto',
+        })
+      }
+      return
+    }
+
+    if (pendingScrollTargetMessageIdRef.current && hasNewMessageInSameNode) {
+      const target = container.querySelector<HTMLElement>(
+        `[data-message-id="${pendingScrollTargetMessageIdRef.current}"]`,
+      )
+      pendingScrollTargetMessageIdRef.current = null
+      if (target) {
+        container.scrollTo({
+          top: Math.max(0, target.offsetTop - 12),
+          behavior: 'smooth',
+        })
+        return
+      }
     }
 
     if (!hasNewMessageInSameNode && requestState !== 'loading' && hiddenCoachMessageCount === 0) return
@@ -207,31 +255,9 @@ export function CoachChatTimeline() {
   return (
     <div
       ref={containerRef}
-      className="subtle-scrollbar h-full min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-t-[24px] bg-[#181818] pr-1"
+      className="subtle-scrollbar h-full min-h-0 flex-1 overflow-y-auto overscroll-contain bg-[#171717] pr-1"
     >
-      <div className="flex w-full flex-col gap-3 pt-2 pb-4">
-        {lessonSpeechText ? (
-          <div className="pointer-events-none sticky -left-16 top-0 z-20 -mr-1 flex justify-end rounded-t-[24px] bg-transparent pb-1 pl-16 pr-1 pt-1">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="pointer-events-auto h-8 rounded-xl bg-[#181818]/96 px-3 text-[11px] shadow-[0_8px_18px_rgba(0,0,0,0.16)]"
-              onClick={() => void playSpeech(lessonSpeechId, lessonSpeechText)}
-              title={`只朗读本节正文，预计 ${lessonSpeechCharacters} TTS 字符；小测和标准答案不默认朗读。`}
-            >
-              {ttsState?.messageId === lessonSpeechId && ttsState.status === 'loading' ? (
-                <LoaderCircle className="size-3.5 animate-spin" />
-              ) : ttsState?.messageId === lessonSpeechId && ttsState.status === 'playing' ? (
-                <Square className="size-3.5" />
-              ) : (
-                <Volume2 className="size-3.5" />
-              )}
-              {ttsState?.messageId === lessonSpeechId ? '停止朗读' : `朗读本节 · ${formatMiniMaxCharacters(lessonSpeechCharacters)}`}
-            </Button>
-          </div>
-        ) : null}
-
+      <div className="flex w-full flex-col gap-3 pt-2 pb-28">
         {renderedMessages.length ? (
           renderedMessages.map((message, index) => {
             const previousMessage = index > 0 ? renderedMessages[index - 1] : null
@@ -244,6 +270,7 @@ export function CoachChatTimeline() {
             return (
               <article
                 key={message.id}
+                data-message-id={message.id}
                 className={cn(
                   'chat-message-enter flex w-full',
                   message.role === 'user' ? 'justify-end' : 'justify-start',
@@ -260,7 +287,7 @@ export function CoachChatTimeline() {
                     <div
                       className={cn(
                         'flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/[0.08] bg-[#202224]',
-                        message.role === 'coach' ? 'mt-[20px]' : 'mt-[2px]',
+                        message.role === 'coach' ? 'mt-0 translate-x-6' : 'mt-[2px]',
                         message.role === 'coach'
                           ? 'shadow-[0_8px_18px_rgba(0,0,0,0.12),0_0_0_1px_rgba(255,255,255,0.02)_inset]'
                           : 'shadow-[0_8px_16px_rgba(0,0,0,0.10),0_0_0_1px_rgba(255,255,255,0.02)_inset]',
@@ -276,11 +303,11 @@ export function CoachChatTimeline() {
                     <div className="size-9 shrink-0" aria-hidden />
                   )}
 
-                  <div className={cn('min-w-0 max-w-full', message.role === 'user' && 'flex flex-col items-end')}>
+                  <div className={cn('min-w-0 max-w-full', message.role === 'coach' && 'pl-6', message.role === 'user' && 'flex flex-col items-end')}>
                     {showAvatar && groupLabel ? (
                       <div
                         className={cn(
-                          'mb-1 pl-3 text-[12px] font-medium tracking-[0.03em] text-muted-foreground/72',
+                          'mb-1 pl-3 text-[12px] font-semibold leading-[18px] tracking-tight text-[#d7dee8]',
                           message.role === 'user' && 'text-right',
                         )}
                       >
@@ -330,7 +357,7 @@ export function CoachChatTimeline() {
         {showTypingBubble ? (
           <article className="chat-message-enter flex w-full justify-start">
             <div className="flex min-w-0 max-w-[94%] items-start gap-2">
-              <div className="mt-[20px] flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/[0.08] bg-[#202224] shadow-[0_8px_18px_rgba(0,0,0,0.12),0_0_0_1px_rgba(255,255,255,0.02)_inset]">
+              <div className="mt-0 flex size-9 shrink-0 translate-x-6 items-center justify-center overflow-hidden rounded-full border border-white/[0.08] bg-[#202224] shadow-[0_8px_18px_rgba(0,0,0,0.12),0_0_0_1px_rgba(255,255,255,0.02)_inset]">
                 <img
                   src={teacherAvatar}
                   alt="老师头像"
@@ -338,8 +365,8 @@ export function CoachChatTimeline() {
                 />
               </div>
 
-              <div className="min-w-0 max-w-full">
-                <div className="mb-1 pl-3 text-[12px] font-medium tracking-[0.03em] text-muted-foreground/72">{coachDisplayName}</div>
+              <div className="min-w-0 max-w-full pl-6">
+                <div className="mb-1 pl-3 text-[12px] font-semibold leading-[18px] tracking-tight text-[#d7dee8]">{coachDisplayName}</div>
                 <div className="w-fit min-w-0 max-w-full">
                   <div className="max-w-[280px] rounded-[24px] border border-white/[0.075] bg-[linear-gradient(180deg,rgba(29,29,30,0.98),rgba(26,26,27,0.98))] px-4 py-3.5 shadow-[0_0_0_1px_rgba(255,255,255,0.025)_inset]">
                     <div className="flex items-center gap-1.5">

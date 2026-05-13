@@ -139,6 +139,11 @@ type RuntimeSettings = {
   mimo_tts_model: string
   mimo_tts_voice_id: string
   mimo_tts_style_prompt: string
+  video_summary_provider: string
+  video_summary_api_key: string
+  video_summary_base_url: string
+  video_summary_model: string
+  video_summary_output_dir: string
   transcription_provider: string
   local_transcription_root: string
   local_transcription_python: string
@@ -194,14 +199,35 @@ type MaterialPackageSummary = {
   blockCount: number
   textLength: number
   updatedAt: number
+  handoffPath: string
+  handoffExists: boolean
+  handoffStatusPath: string
+  handoffStatusExists: boolean
+  workflowStage: string
+  workflowStageLabel: string
+  nextActionLabel: string
   startHerePath: string
   codexPromptPath: string
+  gptDesignerDir: string
+  gptDesignerStartPath: string
+  gptDesignerPromptPath: string
+  gptDesignerCopyPromptPath: string
+  gptWorkspaceZipPath: string
+  gptWorkspaceZipExists: boolean
+  courseBlueprintPath: string
+  courseBlueprintExists: boolean
+  codexBlueprintPromptPath: string
   finalCoursePath: string
   finalCourseExists: boolean
   publishedCoursePath: string
   publishedCourseExists: boolean
   importReadyCoursePath: string
   importReadyCourseExists: boolean
+}
+
+type CourseVisualMapAttachmentPayload = {
+  targetPath: string
+  imagePath: string
 }
 
 type DistillOutlinePreview = {
@@ -242,6 +268,40 @@ type DistillPayload = {
   mediaPath?: string
 }
 
+type VideoSummaryPayload = {
+  video?: string
+  sourceKind?: 'bilibili' | 'local_media'
+  mediaPath?: string
+}
+
+type VideoSummaryResult = {
+  title: string
+  sourceId: string
+  materialPath: string
+  markdownPath: string
+  keyPointCount: number
+  blockCount: number
+  textLength: number
+  summaryProvider?: string
+  stageTimings?: Record<string, unknown>
+}
+
+type VideoSummaryRecord = {
+  name: string
+  path: string
+  title: string
+  sourceId: string
+  keyPointCount: number
+  blockCount: number
+  textLength: number
+  updatedAt: number
+  summaryProvider: string
+}
+
+type DeleteResult = {
+  deletedPaths: string[]
+}
+
 type ObsidianExportPayload = {
   course: Record<string, unknown>
   currentNodeId: string | null
@@ -273,7 +333,9 @@ type TtsSynthesizeResult = {
   model: string
   voiceId: string
   filePath: string
+  filePaths: string[]
   dataUrl: string
+  dataUrls: string[]
   cached: boolean
   characters: number
   usage: TtsUsageSnapshot
@@ -283,6 +345,7 @@ type TtsCacheStatusResult = {
   cached: boolean
   characters: number
   filePath: string | null
+  filePaths: string[]
   usage: TtsUsageSnapshot
 }
 
@@ -448,7 +511,22 @@ function sanitizeTtsProvider(value: unknown) {
   const normalized = String(value ?? '').trim().toLowerCase()
   if (normalized === 'minimax') return normalized
   if (normalized === 'mimo') return normalized
-  return 'none'
+  return 'mimo'
+}
+
+function sanitizeVideoSummaryProvider(value: unknown) {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (normalized === 'mimo') return normalized
+  return 'minimax'
+}
+
+const MIMO_TTS_PRESET_VOICES = ['茉莉', '冰糖', '苏打', '白桦'] as const
+
+function sanitizeMimoTtsVoiceId(value: unknown, fallback = '茉莉') {
+  const normalized = sanitizeDisplayText(value ?? fallback, fallback)
+  return MIMO_TTS_PRESET_VOICES.includes(normalized as (typeof MIMO_TTS_PRESET_VOICES)[number])
+    ? normalized
+    : fallback
 }
 
 function sanitizeNumberInRange(value: unknown, fallback: number, min: number, max: number) {
@@ -511,7 +589,7 @@ function defaultSettings(): RuntimeSettings {
     obsidian_vault_path: '',
     obsidian_export_folder: '视界专注',
     obsidian_auto_sync: true,
-    tts_provider: 'none',
+    tts_provider: 'mimo',
     minimax_api_key: '',
     minimax_tts_endpoint: 'https://api.minimaxi.com/v1/t2a_v2',
     minimax_tts_model: 'speech-2.8-hd',
@@ -523,7 +601,12 @@ function defaultSettings(): RuntimeSettings {
     mimo_tts_endpoint: 'https://api.xiaomimimo.com/v1/chat/completions',
     mimo_tts_model: 'mimo-v2.5-tts',
     mimo_tts_voice_id: '茉莉',
-    mimo_tts_style_prompt: '用清晰、年轻、温和的中文女声朗读，语速适中，像耐心老师讲课。',
+    mimo_tts_style_prompt: '自然 清晰 语速适中',
+    video_summary_provider: 'mimo',
+    video_summary_api_key: '',
+    video_summary_base_url: 'https://token-plan-cn.xiaomimimo.com/v1/chat/completions',
+    video_summary_model: 'mimo-v2.5-pro',
+    video_summary_output_dir: '',
     transcription_provider: 'local_sensevoice',
     local_transcription_root: guessedLocalRoot,
     local_transcription_python: '',
@@ -580,10 +663,15 @@ function normalizeSettings(raw: Partial<RuntimeSettings> | null | undefined): Ru
     minimax_tts_pitch: sanitizeNumberInRange(raw?.minimax_tts_pitch, defaults.minimax_tts_pitch, -12, 12),
     mimo_api_key: sanitizeSecret(raw?.mimo_api_key ?? defaults.mimo_api_key),
     mimo_tts_endpoint: sanitizeBaseUrl(raw?.mimo_tts_endpoint ?? defaults.mimo_tts_endpoint, defaults.mimo_tts_endpoint),
-    mimo_tts_model:
-      sanitizeSecret(raw?.mimo_tts_model ?? defaults.mimo_tts_model) || defaults.mimo_tts_model,
-    mimo_tts_voice_id: sanitizeDisplayText(raw?.mimo_tts_voice_id ?? defaults.mimo_tts_voice_id, defaults.mimo_tts_voice_id),
-    mimo_tts_style_prompt: sanitizeDisplayText(raw?.mimo_tts_style_prompt ?? defaults.mimo_tts_style_prompt, defaults.mimo_tts_style_prompt),
+    mimo_tts_model: defaults.mimo_tts_model,
+    mimo_tts_voice_id: sanitizeMimoTtsVoiceId(raw?.mimo_tts_voice_id ?? defaults.mimo_tts_voice_id, defaults.mimo_tts_voice_id),
+    mimo_tts_style_prompt: defaults.mimo_tts_style_prompt,
+    video_summary_provider: sanitizeVideoSummaryProvider(raw?.video_summary_provider ?? defaults.video_summary_provider),
+    video_summary_api_key: sanitizeSecret(raw?.video_summary_api_key ?? defaults.video_summary_api_key),
+    video_summary_base_url: sanitizeBaseUrl(raw?.video_summary_base_url ?? defaults.video_summary_base_url, defaults.video_summary_base_url),
+    video_summary_model:
+      sanitizeSecret(raw?.video_summary_model ?? defaults.video_summary_model) || defaults.video_summary_model,
+    video_summary_output_dir: sanitizeOptionalPath(raw?.video_summary_output_dir ?? defaults.video_summary_output_dir),
     transcription_provider: sanitizeTranscriptionProvider(raw?.transcription_provider || defaults.transcription_provider),
     local_transcription_root: sanitizeOptionalPath(raw?.local_transcription_root || defaults.local_transcription_root),
     local_transcription_python: sanitizeOptionalPath(raw?.local_transcription_python || defaults.local_transcription_python),
@@ -696,6 +784,19 @@ function listMaterialPackages(settings: RuntimeSettings) {
     const stat = fs.statSync(materialPath)
     const title = sanitizeDisplayText(source.title ?? entry.name.replace(/\.course_material$/u, ''), entry.name)
     const sourceId = sanitizeDisplayText(source.source_id ?? '')
+    const handoffPath = path.join(materialPath, 'HANDOFF.md')
+    const handoffStatusPath = path.join(materialPath, 'handoff_status.json')
+    let handoffStatus: Record<string, unknown> = {}
+    try {
+      if (fs.existsSync(handoffStatusPath)) {
+        handoffStatus = JSON.parse(fs.readFileSync(handoffStatusPath, 'utf-8')) as Record<string, unknown>
+      }
+    } catch {
+      handoffStatus = {}
+    }
+    const gptDesignerDir = path.join(materialPath, 'gpt_designer')
+    const gptWorkspaceZipPath = path.join(gptDesignerDir, 'gpt_course_design_workspace.zip')
+    const courseBlueprintPath = path.join(materialPath, 'course_blueprint.json')
     const finalCoursePath = path.join(materialPath, 'course_draft', 'final.course-package.json')
     const publishedCoursePath =
       (sourceId ? publishedBySourceId.get(sourceId) : '') ||
@@ -703,7 +804,33 @@ function listMaterialPackages(settings: RuntimeSettings) {
       path.join(coursePackageRootDir, `${sanitizeFileNameSegment(title, entry.name)}.course-package.json`)
     const finalCourseExists = fs.existsSync(finalCoursePath)
     const publishedCourseExists = fs.existsSync(publishedCoursePath)
-    const importReadyCoursePath = finalCourseExists ? finalCoursePath : publishedCoursePath
+    const importReadyCoursePath = publishedCourseExists ? publishedCoursePath : finalCoursePath
+    const gptWorkspaceZipExists = fs.existsSync(gptWorkspaceZipPath)
+    const courseBlueprintExists = fs.existsSync(courseBlueprintPath)
+    const importReadyCourseExists = finalCourseExists || publishedCourseExists
+    const workflowStage = importReadyCourseExists
+      ? 'course_ready'
+      : courseBlueprintExists
+        ? 'blueprint_ready'
+        : gptWorkspaceZipExists
+          ? 'material_ready'
+          : sanitizeDisplayText(handoffStatus.stage ?? 'legacy', 'legacy')
+    const workflowStageLabel =
+      workflowStage === 'course_ready'
+        ? '课包可导入'
+        : workflowStage === 'blueprint_ready'
+          ? '待 Codex 制课'
+          : workflowStage === 'material_ready'
+            ? '待 GPT 设计'
+            : sanitizeDisplayText(handoffStatus.stage_label ?? '旧材料', '旧材料')
+    const nextActionLabel =
+      workflowStage === 'course_ready'
+        ? '导入最终课包'
+        : workflowStage === 'blueprint_ready'
+          ? '复制 Codex 提示，新开制课对话'
+          : workflowStage === 'material_ready'
+            ? '上传 GPT 工作包并生成蓝图'
+            : sanitizeDisplayText(handoffStatus.next_action ?? '查看材料目录', '查看材料目录')
     records.push({
       name: entry.name,
       path: materialPath,
@@ -712,14 +839,30 @@ function listMaterialPackages(settings: RuntimeSettings) {
       blockCount: Number(manifest.block_count ?? 0) || 0,
       textLength: Number(manifest.text_length ?? manifest.raw_transcript_length ?? 0) || 0,
       updatedAt: stat.mtimeMs,
+      handoffPath,
+      handoffExists: fs.existsSync(handoffPath),
+      handoffStatusPath,
+      handoffStatusExists: fs.existsSync(handoffStatusPath),
+      workflowStage,
+      workflowStageLabel,
+      nextActionLabel,
       startHerePath: path.join(materialPath, 'START_HERE.md'),
       codexPromptPath: path.join(materialPath, 'codex_tasks', '00_new_window_prompt.md'),
+      gptDesignerDir,
+      gptDesignerStartPath: path.join(gptDesignerDir, 'START_GPT_DESIGNER.md'),
+      gptDesignerPromptPath: path.join(gptDesignerDir, 'chatgpt-course-designer-v1.md'),
+      gptDesignerCopyPromptPath: path.join(gptDesignerDir, '01_copy_to_chatgpt.md'),
+      gptWorkspaceZipPath,
+      gptWorkspaceZipExists,
+      courseBlueprintPath,
+      courseBlueprintExists,
+      codexBlueprintPromptPath: path.join(gptDesignerDir, '02_copy_to_codex_after_blueprint.md'),
       finalCoursePath,
       finalCourseExists,
       publishedCoursePath,
       publishedCourseExists,
       importReadyCoursePath,
-      importReadyCourseExists: finalCourseExists || publishedCourseExists,
+      importReadyCourseExists,
     })
   }
 
@@ -728,6 +871,168 @@ function listMaterialPackages(settings: RuntimeSettings) {
     coursePackageRootDir,
     records: records.sort((left, right) => right.updatedAt - left.updatedAt),
   }
+}
+
+function assertPathInside(targetPath: string, allowedRoot: string, label: string) {
+  const resolvedTarget = path.resolve(targetPath)
+  const resolvedRoot = path.resolve(allowedRoot)
+  const comparableTarget = process.platform === 'win32' ? resolvedTarget.toLowerCase() : resolvedTarget
+  const comparableRoot = process.platform === 'win32' ? resolvedRoot.toLowerCase() : resolvedRoot
+  if (comparableTarget !== comparableRoot && !comparableTarget.startsWith(`${comparableRoot}${path.sep}`)) {
+    throw new Error(`${label} 不在允许的目录内，已取消删除。`)
+  }
+  return resolvedTarget
+}
+
+function deletePathIfExists(targetPath: string, deletedPaths: string[]) {
+  if (!targetPath || !fs.existsSync(targetPath)) return
+  fs.rmSync(targetPath, { recursive: true, force: true })
+  deletedPaths.push(targetPath)
+}
+
+function deleteMaterialPackage(settings: RuntimeSettings, materialPath: string): DeleteResult {
+  const rootDir = resolveMaterialOutputDir(settings)
+  const coursePackageRootDir = resolveCoursePackageOutputDir(settings)
+  const safeMaterialPath = assertPathInside(materialPath, rootDir, '原材料包')
+  const inventory = listMaterialPackages(settings)
+  const record = inventory.records.find((item) => path.resolve(item.path) === safeMaterialPath)
+  if (!record) {
+    throw new Error('没有找到这条原材料记录，可能已经被删除。')
+  }
+
+  const deletedPaths: string[] = []
+  deletePathIfExists(safeMaterialPath, deletedPaths)
+
+  for (const candidate of [record.finalCoursePath, record.publishedCoursePath]) {
+    if (!candidate) continue
+    const safeCoursePath = assertPathInside(candidate, coursePackageRootDir, '课程包')
+    deletePathIfExists(safeCoursePath, deletedPaths)
+  }
+
+  return { deletedPaths }
+}
+
+function resolveVideoSummaryOutputDir(settings: RuntimeSettings) {
+  return settings.video_summary_output_dir || path.join(settings.output_dir, 'workbench', 'summaries')
+}
+
+function readMarkdownFrontmatter(markdown: string) {
+  if (!markdown.startsWith('---')) return {}
+  const endIndex = markdown.indexOf('\n---', 3)
+  if (endIndex < 0) return {}
+  const raw = markdown.slice(3, endIndex).trim()
+  const result: Record<string, string> = {}
+  for (const line of raw.split(/\r?\n/u)) {
+    const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/u)
+    if (!match) continue
+    const key = match[1]
+    let value = match[2].trim()
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      try {
+        value = JSON.parse(value)
+      } catch {
+        value = value.slice(1, -1)
+      }
+    }
+    result[key] = value
+  }
+  return result
+}
+
+function listVideoSummaries(settings: RuntimeSettings) {
+  const rootDir = resolveVideoSummaryOutputDir(settings)
+  fs.mkdirSync(rootDir, { recursive: true })
+  const records: VideoSummaryRecord[] = []
+
+  for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue
+    const markdownPath = path.join(rootDir, entry.name)
+    try {
+      const stat = fs.statSync(markdownPath)
+      const markdown = fs.readFileSync(markdownPath, 'utf-8')
+      const frontmatter = readMarkdownFrontmatter(markdown)
+      const headingMatch = markdown.match(/^#\s+(.+)$/mu)
+      const title = sanitizeDisplayText(frontmatter.title || headingMatch?.[1] || entry.name.replace(/\.md$/iu, ''), entry.name)
+      const sourceId = sanitizeDisplayText(frontmatter.source_id || '')
+      const summaryProvider = sanitizeDisplayText(frontmatter.summary_provider || 'local', 'local')
+      records.push({
+        name: entry.name,
+        path: markdownPath,
+        title,
+        sourceId,
+        keyPointCount: (markdown.match(/^\s*-\s+\*\*/gmu) || []).length,
+        blockCount: (markdown.match(/^####\s+/gmu) || []).length,
+        textLength: markdown.replace(/^---[\s\S]*?\n---/u, '').replace(/\s+/gu, '').length,
+        updatedAt: stat.mtimeMs,
+        summaryProvider,
+      })
+    } catch {
+      // Ignore malformed or locked files.
+    }
+  }
+
+  return {
+    rootDir,
+    records: records.sort((left, right) => right.updatedAt - left.updatedAt),
+  }
+}
+
+function findVideoSummaryMaterialPath(settings: RuntimeSettings, frontmatter: Record<string, string>, markdownPath: string) {
+  const explicitPath = sanitizeDisplayText(frontmatter.material_path || '')
+  if (explicitPath) return explicitPath
+
+  const summaryMaterialRoot = path.join(settings.output_dir, 'workbench', 'summary_materials')
+  if (!fs.existsSync(summaryMaterialRoot)) return ''
+
+  const sourceId = sanitizeDisplayText(frontmatter.source_id || '')
+  const title = sanitizeDisplayText(frontmatter.title || path.basename(markdownPath).replace(/\.md$/iu, ''))
+
+  for (const entry of fs.readdirSync(summaryMaterialRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name === 'cache') continue
+    const candidate = path.join(summaryMaterialRoot, entry.name)
+    const manifestPath = path.join(candidate, 'manifest.json')
+    if (!fs.existsSync(manifestPath)) continue
+    try {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as Record<string, unknown>
+      const source = (manifest.source || {}) as Record<string, unknown>
+      const candidateSourceId = sanitizeDisplayText(source.source_id || '')
+      const candidateTitle = sanitizeDisplayText(source.title || '')
+      if ((sourceId && candidateSourceId === sourceId) || (title && candidateTitle === title)) {
+        return candidate
+      }
+    } catch {
+      // Ignore malformed material manifests.
+    }
+  }
+
+  return ''
+}
+
+function deleteVideoSummary(settings: RuntimeSettings, markdownPath: string): DeleteResult {
+  const rootDir = resolveVideoSummaryOutputDir(settings)
+  const safeMarkdownPath = assertPathInside(markdownPath, rootDir, '视频总结')
+  if (!safeMarkdownPath.toLowerCase().endsWith('.md')) {
+    throw new Error('只能删除视频总结 Markdown 文件。')
+  }
+
+  const deletedPaths: string[] = []
+  let materialPath = ''
+  if (fs.existsSync(safeMarkdownPath)) {
+    const markdown = fs.readFileSync(safeMarkdownPath, 'utf-8')
+    const frontmatter = readMarkdownFrontmatter(markdown)
+    const materialMatch = markdown.match(/原材料包：`([^`]+)`/u)
+    materialPath = findVideoSummaryMaterialPath(settings, frontmatter, safeMarkdownPath) || materialMatch?.[1] || ''
+  }
+
+  deletePathIfExists(safeMarkdownPath, deletedPaths)
+
+  if (materialPath) {
+    const summaryMaterialRoot = path.join(settings.output_dir, 'workbench', 'summary_materials')
+    const safeMaterialPath = assertPathInside(materialPath, summaryMaterialRoot, '视频总结材料')
+    deletePathIfExists(safeMaterialPath, deletedPaths)
+  }
+
+  return { deletedPaths }
 }
 
 function normalizeCourseTextValue(value: unknown) {
@@ -1270,6 +1575,72 @@ function normalizeCoursePackageText(courseText: string, targetPath?: string | nu
   }
 }
 
+function buildCourseVisualMapAssetPaths(packagePath: string, imagePath: string) {
+  const packageDir = path.dirname(packagePath)
+  const packageBaseName = path.basename(packagePath).replace(/\.course-package\.json$/iu, '')
+  const extension = path.extname(imagePath) || '.png'
+  const assetDirName = `${packageBaseName}.assets`
+  const relativeAssetPath = path.join(assetDirName, 'maps', `global-course-map${extension}`).replace(/\\/g, '/')
+  const absoluteAssetPath = path.join(packageDir, relativeAssetPath)
+  return { relativeAssetPath, absoluteAssetPath }
+}
+
+function attachCourseVisualMap(payload: CourseVisualMapAttachmentPayload) {
+  const targetPath = path.resolve(String(payload?.targetPath || ''))
+  const imagePath = path.resolve(String(payload?.imagePath || ''))
+  if (!targetPath || !fs.existsSync(targetPath)) {
+    throw new Error('没有找到要更新的课程包。')
+  }
+  if (!imagePath || !fs.existsSync(imagePath)) {
+    throw new Error('没有找到要导入的地图图片。')
+  }
+
+  const rawText = fs.readFileSync(targetPath, 'utf-8')
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(rawText) as Record<string, unknown>
+  } catch {
+    throw new Error('课程包 JSON 解析失败，无法写入地图图片。')
+  }
+
+  const course = parsed.course && typeof parsed.course === 'object' ? (parsed.course as Record<string, unknown>) : {}
+  const source = parsed.source && typeof parsed.source === 'object' ? (parsed.source as Record<string, unknown>) : {}
+  const currentMap =
+    parsed.course_visual_map && typeof parsed.course_visual_map === 'object'
+      ? ({ ...(parsed.course_visual_map as Record<string, unknown>) } as Record<string, unknown>)
+      : {}
+
+  const { relativeAssetPath, absoluteAssetPath } = buildCourseVisualMapAssetPaths(targetPath, imagePath)
+  fs.mkdirSync(path.dirname(absoluteAssetPath), { recursive: true })
+  fs.copyFileSync(imagePath, absoluteAssetPath)
+
+  const title = String(course.title ?? source.title ?? '课程').trim() || '课程'
+  const nextMap: Record<string, unknown> = {
+    ...currentMap,
+    kind: 'image',
+    status: 'attached',
+    uri: relativeAssetPath,
+    alt: String(currentMap.alt ?? '').trim() || `${title} 全局学习地图`,
+    prompt: String(currentMap.prompt ?? '').trim() || `请生成《${title}》的 16:9 全局学习地图，展示章节主线、能力成长和关键转折，少文字、强结构，适合作为课程导览图。`,
+  }
+
+  const nextPayload = {
+    ...parsed,
+    course_visual_map: nextMap,
+  }
+
+  const serialized = JSON.stringify(nextPayload, null, 2)
+  fs.writeFileSync(targetPath, serialized, 'utf-8')
+  const normalized = normalizeCoursePackageText(serialized, targetPath)
+  const syncedRecordCount = syncLearningRecordsForCoursePackage(targetPath, normalized.text)
+  return {
+    path: targetPath,
+    text: normalized.text,
+    assetPath: absoluteAssetPath,
+    syncedRecordCount,
+  }
+}
+
 function defaultLearningLibraryState(): LearningLibraryState {
   return {
     currentRecordId: null,
@@ -1411,6 +1782,61 @@ function loadLearningLibraryState(): LearningLibraryState {
 function saveLearningLibraryState(next: LearningLibraryState) {
   secureStore.set('learningLibrary', next)
   return next
+}
+
+function syncLearningRecordsForCoursePackage(packagePath: string, courseText: string) {
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(courseText) as Record<string, unknown>
+  } catch {
+    return 0
+  }
+
+  const resolvedPackagePath = path.resolve(packagePath)
+  const packageId = String(parsed.package_id ?? '').trim()
+  const course = parsed.course && typeof parsed.course === 'object' ? (parsed.course as Record<string, unknown>) : {}
+  const source = parsed.source && typeof parsed.source === 'object' ? (parsed.source as Record<string, unknown>) : {}
+  const library = loadLearningLibraryState()
+  const now = Date.now()
+  let updateCount = 0
+
+  const nextRecords = Object.entries(library.records).reduce<Record<string, LearningRecord>>((accumulator, [recordId, record]) => {
+    const recordPackagePath = record.packagePath ?? record.importedCoursePath
+    const pathMatches = recordPackagePath ? path.resolve(recordPackagePath) === resolvedPackagePath : false
+    const packageMatches = Boolean(packageId && record.packageId === packageId)
+
+    if (!pathMatches && !packageMatches) {
+      accumulator[recordId] = record
+      return accumulator
+    }
+
+    updateCount += 1
+    accumulator[recordId] = normalizeLearningRecord(
+      {
+        ...record,
+        packageId: packageId || record.packageId,
+        title: String(course.title ?? record.title),
+        sourceTitle: String(source.title ?? record.sourceTitle),
+        sourceId: String(source.source_id ?? record.sourceId),
+        sourceUrl: String(source.url ?? record.sourceUrl ?? ''),
+        importedCoursePath: record.importedCoursePath ?? resolvedPackagePath,
+        packagePath: record.packagePath ?? resolvedPackagePath,
+        courseText,
+        updatedAt: now,
+      },
+      record,
+    )
+    return accumulator
+  }, {})
+
+  if (updateCount > 0) {
+    saveLearningLibraryState({
+      currentRecordId: library.currentRecordId,
+      records: nextRecords,
+    })
+  }
+
+  return updateCount
 }
 
 function sortLearningRecords(records: LearningRecord[]) {
@@ -1779,7 +2205,7 @@ function ensureBackendRuntimeRoot() {
   return runtimeBackendRoot
 }
 
-function resolveBackendScriptPath(scriptName: 'main.py' | 'distiller.py') {
+function resolveBackendScriptPath(scriptName: 'main.py' | 'distiller.py' | 'video_summary.py') {
   const backendRoot = ensureBackendRuntimeRoot()
   const scriptPath = path.join(backendRoot, scriptName)
 
@@ -1935,6 +2361,10 @@ function buildPythonEnv(settings: RuntimeSettings, extraEnv: NodeJS.ProcessEnv =
     SHIJIE_FOCUS_SETTINGS_PATH: settingsPath,
     SHIJIE_FOCUS_OUTPUT_DIR: settings.output_dir,
     BILIBILI_SESSDATA: settings.sessdata,
+    SHIJIE_VIDEO_SUMMARY_PROVIDER: settings.video_summary_provider,
+    SHIJIE_VIDEO_SUMMARY_API_KEY: settings.video_summary_api_key,
+    SHIJIE_VIDEO_SUMMARY_BASE_URL: settings.video_summary_base_url,
+    SHIJIE_VIDEO_SUMMARY_MODEL: settings.video_summary_model,
     ONBOARD_TRANSCRIPTION_PROVIDER: settings.transcription_provider,
     ONBOARD_LOCAL_TRANSCRIPTION_ROOT: settings.local_transcription_root,
     ONBOARD_LOCAL_TRANSCRIPTION_PYTHON: settings.local_transcription_python,
@@ -2804,9 +3234,38 @@ function getTtsAudioMime(settings: RuntimeSettings) {
   return settings.tts_provider === 'mimo' ? 'audio/wav' : 'audio/mpeg'
 }
 
+function toTtsDataUrl(buffer: Buffer, mime: string) {
+  return `data:${mime};base64,${buffer.toString('base64')}`
+}
+
+function buildTtsCacheEntries(settings: RuntimeSettings, text: string) {
+  const chunks = splitSpeechText(text)
+  const extension = getTtsAudioExtension(settings)
+  const cacheDir = resolveTtsCacheDir()
+
+  if (chunks.length === 1) {
+    const cacheKey = buildTtsCacheKey(settings, text)
+    return [{
+      text,
+      filePath: path.join(cacheDir, `${cacheKey}.${extension}`),
+    }]
+  }
+
+  return chunks.map((chunk, index) => {
+    const chunkKey = buildTtsCacheKey(settings, [
+      `chunk:${index + 1}/${chunks.length}`,
+      chunk,
+    ].join('\n'))
+    return {
+      text: chunk,
+      filePath: path.join(cacheDir, `${chunkKey}.${extension}`),
+    }
+  })
+}
+
 function formatTtsUsageLine(settings: RuntimeSettings, usage: TtsUsageSnapshot, requestedCharacters: number) {
   if (settings.tts_provider === 'mimo') {
-    return `本节预计 ${requestedCharacters} TTS 字符；MiMo TTS 当前按官方说明为限时免费，本机只记录缓存状态。缓存命中不重复调用。`
+    return 'MiMo TTS 当前按官方说明为限时免费；本机只记录缓存状态，缓存命中不重复调用。'
   }
   return `本节预计 ${requestedCharacters} MiniMax 字符；今日本地已新合成 ${usage.usedCharacters}/${usage.dailyLimit}，估算剩余 ${usage.remainingCharacters}。缓存命中不消耗额度。`
 }
@@ -2815,6 +3274,7 @@ function buildTtsCacheKey(settings: RuntimeSettings, text: string) {
   const providerSettings = settings.tts_provider === 'mimo'
     ? {
         provider: settings.tts_provider,
+        requestVersion: 'mimo-direct-speech-v4',
         endpoint: settings.mimo_tts_endpoint,
         model: settings.mimo_tts_model,
         voiceId: settings.mimo_tts_voice_id,
@@ -2934,24 +3394,20 @@ async function requestMiniMaxSpeechAudio(settings: RuntimeSettings, text: string
 }
 
 async function requestMiMoSpeechAudio(settings: RuntimeSettings, text: string) {
-  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = []
-  if (settings.mimo_tts_style_prompt.trim()) {
-    messages.push({
+  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
+    {
       role: 'user',
-      content: settings.mimo_tts_style_prompt.trim(),
-    })
-  }
-  messages.push({
-    role: 'assistant',
-    content: text,
-  })
-
-  const response = await fetch(settings.mimo_tts_endpoint, {
-    method: 'POST',
-    headers: {
-      'api-key': settings.mimo_api_key,
-      'Content-Type': 'application/json',
+      content: '请把 assistant 消息中的文本转换成中文口播音频，只朗读原文，不要朗读任何配置、标签、说明或额外内容。',
     },
+    {
+      role: 'assistant',
+      content: text,
+    },
+  ]
+
+  const response = await fetch(resolveMiMoTtsEndpoint(settings), {
+    method: 'POST',
+    headers: buildMiMoTtsHeaders(settings),
     body: JSON.stringify({
       model: settings.mimo_tts_model,
       messages,
@@ -2962,11 +3418,8 @@ async function requestMiMoSpeechAudio(settings: RuntimeSettings, text: string) {
     }),
   })
 
-  if (!response.ok) {
-    throw new Error(`MiMo TTS 请求失败：${response.status} ${response.statusText}`)
-  }
-
-  const result = await response.json() as {
+  const responseText = await response.text()
+  let result: {
     error?: { message?: string; code?: string | number }
     choices?: Array<{
       message?: {
@@ -2975,7 +3428,19 @@ async function requestMiMoSpeechAudio(settings: RuntimeSettings, text: string) {
         }
       }
     }>
+  } = {}
+
+  try {
+    result = responseText ? JSON.parse(responseText) : {}
+  } catch {
+    result = {}
   }
+
+  if (!response.ok) {
+    const rawMessage = result.error?.message || responseText || `${response.status} ${response.statusText}`
+    throw new Error(formatMiMoTtsError(`HTTP ${response.status}：${rawMessage}`))
+  }
+
   if (result.error) {
     throw new Error(formatMiMoTtsError(result.error.message || `MiMo TTS 返回错误：${result.error.code ?? 'unknown'}`))
   }
@@ -2984,6 +3449,49 @@ async function requestMiMoSpeechAudio(settings: RuntimeSettings, text: string) {
     throw new Error('MiMo TTS 未返回音频数据。')
   }
   return Buffer.from(audioBase64, 'base64')
+}
+
+function resolveMiMoTtsEndpoint(settings: RuntimeSettings) {
+  const apiKey = settings.mimo_api_key.trim()
+  const isTokenPlan = apiKey.startsWith('tp-')
+  const defaultPayAsYouGoEndpoint = 'https://api.xiaomimimo.com/v1/chat/completions'
+  const defaultTokenPlanEndpoint = 'https://token-plan-cn.xiaomimimo.com/v1/chat/completions'
+  let endpoint = settings.mimo_tts_endpoint.trim() || (isTokenPlan ? defaultTokenPlanEndpoint : defaultPayAsYouGoEndpoint)
+
+  if (isTokenPlan && endpoint.includes('api.xiaomimimo.com')) {
+    endpoint = defaultTokenPlanEndpoint
+  }
+
+  endpoint = endpoint.replace(/\/+$/, '')
+  if (/\/anthropic$/i.test(endpoint)) {
+    endpoint = endpoint.replace(/\/anthropic$/i, '/v1/chat/completions')
+  }
+  if (/\/v1$/i.test(endpoint)) {
+    return `${endpoint}/chat/completions`
+  }
+  if (/\/v1\/chat\/completions$/i.test(endpoint)) {
+    return endpoint
+  }
+
+  try {
+    const parsed = new URL(endpoint)
+    if (!parsed.pathname || parsed.pathname === '/') {
+      return `${parsed.origin}/v1/chat/completions`
+    }
+  } catch {
+    return endpoint
+  }
+
+  return endpoint
+}
+
+function buildMiMoTtsHeaders(settings: RuntimeSettings) {
+  const apiKey = settings.mimo_api_key.trim()
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${apiKey}`,
+    'api-key': apiKey,
+  }
 }
 
 function formatMiniMaxTtsError(statusCode: number, statusMsg?: string) {
@@ -3049,16 +3557,20 @@ function getTtsCacheStatus(settings: RuntimeSettings, payload: TtsSynthesizePayl
       cached: false,
       characters: 0,
       filePath: null,
+      filePaths: [],
       usage,
     }
   }
 
-  const cacheKey = buildTtsCacheKey(settings, text)
-  const filePath = path.join(resolveTtsCacheDir(), `${cacheKey}.${getTtsAudioExtension(settings)}`)
+  const entries = buildTtsCacheEntries(settings, text)
+  const filePaths = entries.map((entry) => entry.filePath)
+  const cachedFilePaths = filePaths.filter((filePath) => fs.existsSync(filePath))
+  const cached = entries.length > 0 && cachedFilePaths.length === entries.length
   return {
-    cached: fs.existsSync(filePath),
+    cached,
     characters: estimateMiniMaxSpeechCharacters(text),
-    filePath: fs.existsSync(filePath) ? filePath : null,
+    filePath: cached ? filePaths[0] : null,
+    filePaths: cached ? filePaths : cachedFilePaths,
     usage,
   }
 }
@@ -3086,47 +3598,57 @@ async function synthesizeSpeech(settings: RuntimeSettings, payload: TtsSynthesiz
 
   const cacheDir = resolveTtsCacheDir()
   fs.mkdirSync(cacheDir, { recursive: true })
-  const cacheKey = buildTtsCacheKey(settings, text)
-  const filePath = path.join(cacheDir, `${cacheKey}.${getTtsAudioExtension(settings)}`)
   const audioMime = getTtsAudioMime(settings)
+  const entries = buildTtsCacheEntries(settings, text)
+  const cachedBuffers = entries.every((entry) => fs.existsSync(entry.filePath))
+    ? entries.map((entry) => fs.readFileSync(entry.filePath))
+    : []
 
-  if (fs.existsSync(filePath)) {
-    const cached = fs.readFileSync(filePath)
+  if (cachedBuffers.length === entries.length && entries.length > 0) {
     return {
       provider: settings.tts_provider,
       model: getTtsModel(settings),
       voiceId: getTtsVoiceId(settings),
-      filePath,
-      dataUrl: `data:${audioMime};base64,${cached.toString('base64')}`,
+      filePath: entries[0].filePath,
+      filePaths: entries.map((entry) => entry.filePath),
+      dataUrl: toTtsDataUrl(cachedBuffers[0], audioMime),
+      dataUrls: cachedBuffers.map((buffer) => toTtsDataUrl(buffer, audioMime)),
       cached: true,
       characters,
       usage: usageBefore,
     }
   }
 
-  let audioBuffer: Buffer
+  const audioBuffers: Buffer[] = []
+  let generatedCharacters = 0
   try {
-    const audioBuffers = []
-    for (const chunk of splitSpeechText(text)) {
-      audioBuffers.push(
-        settings.tts_provider === 'mimo'
-          ? await requestMiMoSpeechAudio(settings, chunk)
-          : await requestMiniMaxSpeechAudio(settings, chunk),
-      )
+    for (const entry of entries) {
+      if (fs.existsSync(entry.filePath)) {
+        audioBuffers.push(fs.readFileSync(entry.filePath))
+        continue
+      }
+      const audioBuffer = settings.tts_provider === 'mimo'
+        ? await requestMiMoSpeechAudio(settings, entry.text)
+        : await requestMiniMaxSpeechAudio(settings, entry.text)
+      fs.writeFileSync(entry.filePath, audioBuffer)
+      generatedCharacters += estimateMiniMaxSpeechCharacters(entry.text)
+      audioBuffers.push(audioBuffer)
     }
-    audioBuffer = Buffer.concat(audioBuffers)
   } catch (error) {
     throw new Error(formatTtsFailureMessage(settings, error, characters, usageBefore))
   }
 
-  fs.writeFileSync(filePath, audioBuffer)
-  const usageAfter = settings.tts_provider === 'minimax' ? recordTtsUsage(characters) : usageBefore
+  const usageAfter = settings.tts_provider === 'minimax' && generatedCharacters > 0
+    ? recordTtsUsage(generatedCharacters)
+    : usageBefore
   return {
     provider: settings.tts_provider,
     model: getTtsModel(settings),
     voiceId: getTtsVoiceId(settings),
-    filePath,
-    dataUrl: `data:${audioMime};base64,${audioBuffer.toString('base64')}`,
+    filePath: entries[0].filePath,
+    filePaths: entries.map((entry) => entry.filePath),
+    dataUrl: toTtsDataUrl(audioBuffers[0], audioMime),
+    dataUrls: audioBuffers.map((buffer) => toTtsDataUrl(buffer, audioMime)),
     cached: false,
     characters,
     usage: usageAfter,
@@ -3367,6 +3889,120 @@ function runPythonDistiller(payload: DistillPayload): Promise<DistillResult> {
   })
 }
 
+function runPythonVideoSummary(payload: VideoSummaryPayload): Promise<VideoSummaryResult> {
+  return new Promise((resolve, reject) => {
+    const sourceKind = payload.sourceKind === 'local_media' ? 'local_media' : 'bilibili'
+    const videoInput = sourceKind === 'local_media'
+      ? String(payload?.mediaPath ?? payload?.video ?? '').trim()
+      : String(payload?.video ?? '').trim()
+    if (!videoInput) {
+      reject(new Error(sourceKind === 'local_media' ? '请先选择本地音视频文件。' : '请先填写 B 站视频链接或 BV 号。'))
+      return
+    }
+
+    const runtimeSettings = loadSettings()
+    const pythonCommand = resolvePythonCommand()
+    const summaryEntryPath = resolveBackendScriptPath('video_summary.py')
+    const workbenchOutputDir = path.join(runtimeSettings.output_dir, 'workbench')
+    const summaryOutputDir = runtimeSettings.video_summary_output_dir || path.join(workbenchOutputDir, 'summaries')
+    fs.mkdirSync(workbenchOutputDir, { recursive: true })
+    fs.mkdirSync(summaryOutputDir, { recursive: true })
+
+    const args = [
+      ...pythonCommand.prefixArgs,
+      summaryEntryPath,
+      videoInput,
+      '--output-dir',
+      workbenchOutputDir,
+      '--summary-dir',
+      summaryOutputDir,
+      ...(sourceKind === 'local_media' ? ['--local-media'] : []),
+      '--result-json',
+    ]
+    appendRuntimeLog(`spawn video summary command=${pythonCommand.command} args=${JSON.stringify(args)} cwd=${dataRoot}`)
+
+    const child = spawn(pythonCommand.command, args, {
+      cwd: dataRoot,
+      windowsHide: true,
+      env: buildPythonEnv(runtimeSettings),
+    })
+
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+
+    const finalizeReject = (error: Error) => {
+      if (settled) return
+      settled = true
+      appendRuntimeLog(`video summary rejected: ${error.message}`)
+      reject(error)
+    }
+
+    const finalizeResolve = (result: VideoSummaryResult) => {
+      if (settled) return
+      settled = true
+      appendRuntimeLog(`video summary resolved markdownPath=${result.markdownPath}`)
+      resolve(result)
+    }
+
+    const timeoutHandle = setTimeout(() => {
+      appendRuntimeLog(`video summary timeout after ${DISTILL_PROCESS_TIMEOUT_MS}ms; killing child pid=${child.pid ?? 'unknown'}`)
+      try {
+        child.kill()
+      } catch {
+        // ignore kill failure
+      }
+      finalizeReject(new Error(`视频总结超时（>${Math.floor(DISTILL_PROCESS_TIMEOUT_MS / 1000)} 秒）。`))
+    }, DISTILL_PROCESS_TIMEOUT_MS)
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString()
+    })
+
+    child.stderr.on('data', (chunk) => {
+      const text = chunk.toString()
+      stderr += text
+      appendRuntimeLog(`video summary stderr ${text.trim()}`)
+    })
+
+    child.on('error', (error) => {
+      clearTimeout(timeoutHandle)
+      finalizeReject(new Error(`视频总结进程启动失败：${error.message}`))
+    })
+
+    child.on('close', (code, signal) => {
+      clearTimeout(timeoutHandle)
+      appendRuntimeLog(
+        `video summary close code=${String(code)} signal=${String(signal)} stdoutLength=${stdout.length} stderrLength=${stderr.length}`,
+      )
+
+      if (settled) return
+
+      if (code !== 0) {
+        finalizeReject(new Error((stderr || stdout || `Python process exited with code ${code}`).trim()))
+        return
+      }
+
+      const match = stdout.match(/__SHIJIE_VIDEO_SUMMARY_RESULT__=(\{.*\})/s)
+      if (!match) {
+        appendRuntimeLog(`video summary stdout tail=${stdout.slice(-800)}`)
+        finalizeReject(new Error('未能从视频总结进程输出中解析结果。'))
+        return
+      }
+
+      try {
+        const parsed = JSON.parse(match[1]) as VideoSummaryResult
+        if (!parsed.markdownPath || !fs.existsSync(parsed.markdownPath)) {
+          throw new Error('视频总结完成，但没有找到生成的 Markdown 文件。')
+        }
+        finalizeResolve(parsed)
+      } catch (error) {
+        finalizeReject(error instanceof Error ? error : new Error(String(error)))
+      }
+    })
+  })
+}
+
 function getCliArgValue(flag: string) {
   const index = process.argv.indexOf(flag)
   if (index < 0) return ''
@@ -3505,6 +4141,24 @@ ipcMain.handle('dialog:pickMediaFile', async () => {
   }
 })
 
+ipcMain.handle('dialog:pickImageFile', async () => {
+  const result = await dialog.showOpenDialog({
+    title: '选择全局学习地图图片',
+    buttonLabel: '使用这张图片',
+    properties: ['openFile'],
+    filters: [
+      { name: '图片文件', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  const targetPath = result.filePaths[0]
+  return {
+    path: targetPath,
+    name: path.basename(targetPath),
+  }
+})
+
 ipcMain.handle('course:import', async () => {
   const runtimeSettings = loadSettings()
   const result = await dialog.showOpenDialog({
@@ -3541,12 +4195,32 @@ ipcMain.handle('course:read', async (_event, targetPath: string) => {
   }
 })
 
+ipcMain.handle('course:attach-visual-map', async (_event, payload: CourseVisualMapAttachmentPayload) => {
+  return attachCourseVisualMap(payload)
+})
+
 ipcMain.handle('distill:run', async (_event, payload: DistillPayload) => {
   return runPythonDistiller(payload)
 })
 
+ipcMain.handle('summary:run', async (_event, payload: VideoSummaryPayload) => {
+  return runPythonVideoSummary(payload)
+})
+
+ipcMain.handle('summary:list', async () => {
+  return listVideoSummaries(loadSettings())
+})
+
+ipcMain.handle('summary:delete', async (_event, markdownPath: string) => {
+  return deleteVideoSummary(loadSettings(), markdownPath)
+})
+
 ipcMain.handle('materials:list', async () => {
   return listMaterialPackages(loadSettings())
+})
+
+ipcMain.handle('materials:delete', async (_event, materialPath: string) => {
+  return deleteMaterialPackage(loadSettings(), materialPath)
 })
 
 ipcMain.handle('learning:library:load', async () => loadLearningLibraryPayload())
@@ -3590,6 +4264,14 @@ ipcMain.handle('tts:synthesize', async (_event, payload: TtsSynthesizePayload) =
 
 ipcMain.handle('tts:status', async (_event, payload: TtsSynthesizePayload) => {
   return getTtsCacheStatus(loadSettings(), payload)
+})
+
+ipcMain.handle('file:readText', async (_event, targetPath: string) => {
+  const resolvedPath = path.resolve(String(targetPath || ''))
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error(`文件不存在：${resolvedPath}`)
+  }
+  return fs.readFileSync(resolvedPath, 'utf-8')
 })
 
 ipcMain.handle('shell:openPath', async (_event, targetPath: string) => {

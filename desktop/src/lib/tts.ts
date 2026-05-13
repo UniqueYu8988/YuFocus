@@ -63,6 +63,27 @@ export function buildLessonSpeechMarkdown(node: FlatCourseNode) {
   return [node.title, node.summary].filter(Boolean).join('\n\n').trim()
 }
 
+export function buildStandardAnswerSpeechMarkdown(node: FlatCourseNode) {
+  const teacher = node.teacher_ready_content
+  const standardAnswer = teacher?.standard_answer?.trim()
+  if (!standardAnswer) return ''
+
+  const keyPoints = (teacher?.key_points ?? []).map((item) => item.trim()).filter(Boolean)
+  const mistakes = (teacher?.common_mistakes ?? []).map((item) => item.trim()).filter(Boolean)
+
+  return [
+    '标准答案',
+    '',
+    standardAnswer,
+    '',
+    keyPoints.length > 0 ? ['关键点', '', ...keyPoints.map((item) => `- ${item}`)].join('\n') : '',
+    mistakes.length > 0 ? ['常见误区', '', ...mistakes.map((item) => `- ${item}`)].join('\n') : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+    .trim()
+}
+
 export function formatMiniMaxCharacters(value: number) {
   if (value >= 10000) return `${(value / 10000).toFixed(1)}万`
   if (value >= 1000) return `${(value / 1000).toFixed(1)}k`

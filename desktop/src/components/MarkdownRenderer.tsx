@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, useId, useState, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
 type HeadingBlock = { type: 'heading'; level: number; text: string }
@@ -31,7 +31,7 @@ function renderInline(text: string) {
 
     if (token.startsWith('**') && token.endsWith('**')) {
       parts.push(
-        <strong key={`${offset}-bold`} className="font-semibold text-foreground">
+        <strong key={`${offset}-bold`} className="font-bold text-[#f4f7fb]">
           {token.slice(2, -2)}
         </strong>,
       )
@@ -80,8 +80,188 @@ function looksLikeTableRow(line: string) {
   return line.includes('|')
 }
 
+function hasReadableContent(value: string) {
+  return /[\p{L}\p{N}]/u.test(value)
+}
+
+function cleanGeneratedListItem(value: string) {
+  const cleaned = value
+    .replace(/^[\s、，,；;。！？：:]+/u, '')
+    .replace(/[、，,；;]\s*$/u, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
+
+  return hasReadableContent(cleaned) ? cleaned : ''
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function splitInlineTableFragments(text: string) {
+  return text
+    .split('\n')
+    .map((line) => {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('|')) {
+        if (trimmed.endsWith('|')) return line
+        return line.replace(/^(\s*\|[^|\n]+(?:\|[^|\n]+){2,}\|)\s+([^|\n].*)$/u, '$1\n\n$2')
+      }
+
+      return line.replace(/\s+(\|[^|\n]+(?:\|[^|\n]+){2,}\|)/gu, '\n\n$1')
+    })
+    .join('\n')
+}
+
+function normalizeGeneratedMarkdown(markdown: string) {
+  const compactHeadings = [
+    '这一关要学会什么',
+    '核心概念',
+    '前置条件',
+    '关键关系',
+    '操作或使用流程',
+    '标准学习步骤',
+    '检查清单',
+    '为什么重要',
+    '流程图',
+    '一句话记忆',
+    '回忆问题',
+    '主动回忆',
+    '标准答案',
+    '关键点',
+    '常见误区',
+    '应用场景',
+    '案例演示',
+    '练习任务',
+    '拓展理解',
+    '补充理解',
+    '延伸学习',
+    '下一步',
+  ]
+  let text = markdown
+    .replace(/\r\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .trim()
+
+  text = text
+    .replace(/([。！？])\s*[、，,；;]\s*/gu, '$1 ')
+    .replace(/([；;])\s*[、，,]\s*/gu, '$1 ')
+    .replace(/([^\n])[ \t]+(#{1,4}\s+)/g, '$1\n\n$2')
+    .replace(/([。！？；;：:])\s+([-*]\s+)/gu, '$1\n$2')
+    .replace(/([。！？；;：:])\s+(\d+\.\s+)/gu, '$1\n$2')
+    .replace(/([。！？])\s+(这些要点|这一关|需要画图|每完成一步|本关还要补足|再补三条|把这一关)/gu, '$1\n\n$2')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+  text = splitInlineTableFragments(text)
+
+  compactHeadings.forEach((heading) => {
+    text = text.replace(
+      new RegExp(`(^|\\n)(#{1,4}\\s+${escapeRegExp(heading)})(?:[：:]?)[ \\t]+(?=\\S)`, 'gu'),
+      '$1$2\n\n',
+    )
+  })
+
+  text = text
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+  return text
+}
+
+export function MermaidDiagram({
+  code,
+  index,
+  className,
+}: {
+  code: string
+  index: number
+  className?: string
+}) {
+  const reactId = useId()
+  const diagramId = `shijie-mermaid-${reactId.replace(/[^a-zA-Z0-9_-]/g, '')}-${index}`
+  const [svg, setSvg] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+
+    async function renderDiagram() {
+      const diagram = code.trim()
+      if (!diagram) return
+
+      setError('')
+      setSvg('')
+
+      try {
+        const mermaid = (await import('mermaid')).default
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          theme: 'base',
+          flowchart: {
+            curve: 'basis',
+            htmlLabels: true,
+            nodeSpacing: 58,
+            rankSpacing: 92,
+            padding: 18,
+          },
+          themeVariables: {
+            background: 'transparent',
+            mainBkg: '#17201d',
+            secondBkg: '#1f1f28',
+            tertiaryBkg: '#1b2230',
+            primaryColor: '#15352e',
+            primaryBorderColor: '#3fd8b4',
+            primaryTextColor: '#f4f7fb',
+            lineColor: '#7dd3fc',
+            textColor: '#f4f7fb',
+            fontFamily: 'inherit',
+            fontSize: '18px',
+          },
+        })
+        const result = await mermaid.render(diagramId, diagram)
+        const normalizedSvg = result.svg.replace(/max-width:[^;"']+;?/g, '')
+        if (active) setSvg(normalizedSvg)
+      } catch (reason) {
+        if (active) setError(reason instanceof Error ? reason.message : String(reason))
+      }
+    }
+
+    void renderDiagram()
+
+    return () => {
+      active = false
+    }
+  }, [code, diagramId])
+
+  if (error) {
+    return (
+      <div className={cn('rounded-2xl border border-amber-300/14 bg-[#1f1d19] p-4', className)}>
+        <div className="mb-2 text-xs font-medium text-amber-100/80">Mermaid 图表渲染失败，已显示原始代码。</div>
+        <pre className="overflow-x-auto rounded-xl border border-white/8 bg-[#171717] p-3">
+          <code className="font-mono text-[12px] leading-6 text-foreground/82">{code}</code>
+        </pre>
+      </div>
+    )
+  }
+
+  return (
+    <div className={cn('overflow-x-auto rounded-2xl border border-emerald-300/14 bg-[#131917] p-4', className)}>
+      {svg ? (
+        <div
+          className="h-full w-full [&_svg]:mx-auto [&_svg]:block [&_svg]:h-auto [&_svg]:!w-full [&_svg]:!max-w-none [&_.edgeLabel]:rounded-md [&_.edgeLabel]:bg-[#101115]/80 [&_.nodeLabel]:font-semibold"
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+      ) : (
+        <div className="text-sm text-muted-foreground">正在渲染图表...</div>
+      )}
+    </div>
+  )
+}
+
 function parseMarkdown(markdown: string) {
-  const lines = markdown.replace(/\r\n/g, '\n').split('\n')
+  const lines = normalizeGeneratedMarkdown(markdown).split('\n')
   const blocks: Block[] = []
   let index = 0
 
@@ -106,7 +286,7 @@ function parseMarkdown(markdown: string) {
         rows.push(parseTableCells(lines[index]))
         index += 1
       }
-      blocks.push({ type: 'table', headers, rows })
+      blocks.push({ type: 'table', headers, rows: normalizeTableRows(headers, rows) })
       continue
     }
 
@@ -143,9 +323,9 @@ function parseMarkdown(markdown: string) {
     if (/^[-*]\s+/.test(line)) {
       const items: string[] = []
       while (index < lines.length && /^[-*]\s+/.test(lines[index])) {
-        const rawItem = lines[index].replace(/^[-*]\s+/, '').trim()
+        const rawItem = cleanGeneratedListItem(lines[index].replace(/^[-*]\s+/, ''))
         const inlineItems = splitInlineUnorderedItems(rawItem)
-        items.push(...(inlineItems ?? [rawItem]))
+        items.push(...(inlineItems ?? [rawItem]).filter(Boolean))
         index += 1
       }
       blocks.push({ type: 'list', items })
@@ -159,7 +339,8 @@ function parseMarkdown(markdown: string) {
         if (inlineItems) {
           items.push(...inlineItems)
         } else {
-          items.push(lines[index].replace(/^\d+\.\s+/, '').trim())
+          const item = cleanGeneratedListItem(lines[index].replace(/^\d+\.\s+/, ''))
+          if (item) items.push(item)
         }
         index += 1
       }
@@ -306,11 +487,11 @@ function splitInlineOrderedItems(text: string) {
   if (!/^\d+\.\s+/u.test(normalized)) return null
   const matches = normalized.match(/\d+\.\s+[\s\S]*?(?=(?:\s+\d+\.\s+)|$)/g)
   if (!matches || matches.length < 2) return null
-  return matches.map((item) => item.replace(/^\d+\.\s+/u, '').trim()).filter(Boolean)
+  return matches.map((item) => cleanGeneratedListItem(item.replace(/^\d+\.\s+/u, ''))).filter(Boolean)
 }
 
 function splitInlineUnorderedItems(text: string) {
-  const parts = text.split(/\s+[-*]\s+/u).map((item) => item.trim()).filter(Boolean)
+  const parts = text.split(/\s+[-*]\s+/u).map(cleanGeneratedListItem).filter(Boolean)
   return parts.length > 1 ? parts : null
 }
 
@@ -321,13 +502,30 @@ function splitLongParagraphItems(text: string) {
 
   const items = normalized
     .match(/[^。！？；;]+[。！？；;]?/gu)
-    ?.map((item) => item.trim())
+    ?.map(cleanGeneratedListItem)
     .filter((item) => item.length >= 8)
 
   if (!items || items.length < 2) return null
   const shortEnough = items.every((item) => item.length <= 150)
   if (!shortEnough) return null
   return items
+}
+
+function normalizeTableRows(headers: string[], rows: string[][]) {
+  const columnCount = Math.max(headers.length, 1)
+
+  return rows
+    .map((row) => {
+      const cells = row.map((cell) => cell.trim())
+      if (cells.length < columnCount) {
+        return [...cells, ...Array.from({ length: columnCount - cells.length }, () => '')]
+      }
+      if (cells.length > columnCount) {
+        return [...cells.slice(0, columnCount - 1), cells.slice(columnCount - 1).join(' | ')]
+      }
+      return cells
+    })
+    .filter((row) => row.some(hasReadableContent))
 }
 
 function hasMeaningfulBlock(block: Exclude<Block, { type: 'heading' }>) {
@@ -402,9 +600,12 @@ function renderBlock(
       )
     }
 
+    const isLabelParagraph = /^\*\*[^*]+：\*\*/u.test(block.text.trim())
     return (
       <div key={`p-shell-${index}`} className={bubbleClass}>
-        <p className="w-full indent-[2em] text-sm leading-7 text-foreground/90">{renderInline(block.text)}</p>
+        <p className={cn('w-full text-sm leading-7 text-foreground/90', isLabelParagraph ? 'indent-0' : 'indent-[2em]')}>
+          {renderInline(block.text)}
+        </p>
       </div>
     )
   }
@@ -420,10 +621,11 @@ function renderBlock(
   }
 
   if (block.type === 'list') {
+    const visibleItems = block.items.map(cleanGeneratedListItem).filter(Boolean)
     return (
       <div key={`l-shell-${index}`} className={bubbleClass}>
         <ul className="w-full space-y-2 pl-5 text-sm text-foreground/90">
-          {block.items.map((item, itemIndex) => (
+          {visibleItems.map((item, itemIndex) => (
             <li key={`li-${index}-${itemIndex}`} className="list-disc">
               {renderInline(item)}
             </li>
@@ -434,10 +636,11 @@ function renderBlock(
   }
 
   if (block.type === 'ordered-list') {
+    const visibleItems = block.items.map(cleanGeneratedListItem).filter(Boolean)
     return (
       <div key={`ol-shell-${index}`} className={bubbleClass}>
         <ol className="w-full space-y-2 pl-6 text-sm text-foreground/90">
-          {block.items.map((item, itemIndex) => (
+          {visibleItems.map((item, itemIndex) => (
             <li key={`oli-${index}-${itemIndex}`} className="list-decimal leading-7">
               {renderInline(item)}
             </li>
@@ -450,7 +653,7 @@ function renderBlock(
   if (block.type === 'table') {
     return (
       <div key={`t-${index}`} className="overflow-x-auto rounded-2xl border border-white/8 bg-[#1a1a1a]">
-        <table className="min-w-full border-collapse text-left text-sm">
+        <table className="w-full min-w-[720px] border-collapse text-left text-sm">
           <thead className="bg-[#222222] text-foreground">
             <tr>
               {block.headers.map((header, headerIndex) => (
@@ -476,6 +679,10 @@ function renderBlock(
     )
   }
 
+  if (block.type === 'code' && block.lang.trim().toLowerCase() === 'mermaid') {
+    return <MermaidDiagram key={`m-${index}`} code={block.text} index={index} />
+  }
+
   return (
     <pre key={`c-${index}`} className="overflow-x-auto rounded-2xl border border-white/8 bg-[#1a1a1a] p-4">
       <code className="font-mono text-[13px] leading-6 text-foreground/88" data-lang={block.lang || undefined}>
@@ -483,6 +690,62 @@ function renderBlock(
       </code>
     </pre>
   )
+}
+
+function isFlowSectionTitle(text: string | undefined) {
+  return Boolean(text && /流程图|流程|步骤图|路线图/u.test(text))
+}
+
+function shouldRenderCompactFlow(text: string | undefined, items: string[]) {
+  if (!isFlowSectionTitle(text)) return false
+  if (text && /操作|使用|步骤|标准|配置/u.test(text)) return false
+  return items.length >= 2 && items.every((item) => item.trim().length <= 28)
+}
+
+function renderFlowSteps(items: string[], index: number) {
+  const cleanedItems = items.map((item) => item.trim()).filter(Boolean)
+  if (!cleanedItems.length) return null
+
+  return (
+    <div key={`flow-${index}`} className="w-full">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+        {cleanedItems.map((item, itemIndex) => (
+          <div key={`flow-item-${index}-${itemIndex}`} className="flex min-w-0 items-center gap-2">
+            <div className="flex max-w-full items-center gap-2 rounded-full border border-emerald-300/14 bg-emerald-300/[0.055] px-3 py-1.5 text-sm leading-5 text-foreground/90">
+              <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-emerald-300/12 text-[11px] font-semibold text-emerald-100">
+                {itemIndex + 1}
+              </span>
+              <span className="min-w-0 break-words">{renderInline(item)}</span>
+            </div>
+            {itemIndex < cleanedItems.length - 1 ? (
+              <span aria-hidden className="hidden text-xs text-emerald-100/36 sm:inline">
+                →
+              </span>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function renderSectionBlocks(
+  section: Section,
+  tone: SectionTone,
+  shouldBubbleBlocks: boolean,
+) {
+  const isFlowSection = isFlowSectionTitle(section.heading?.text)
+  return section.blocks.map((block, blockIndex) => {
+    if (
+      isFlowSection &&
+      (block.type === 'ordered-list' || block.type === 'list') &&
+      shouldRenderCompactFlow(section.heading?.text, block.items)
+    ) {
+      return renderFlowSteps(block.items, blockIndex)
+    }
+
+    return renderBlock(block, blockIndex, tone, shouldBubbleBlocks)
+  })
 }
 
 export function MarkdownRenderer({
@@ -534,7 +797,7 @@ export function MarkdownRenderer({
                   <span>{renderInline(sectionHeading.text)}</span>
                 </div>
               ) : null}
-              {section.blocks.map((block, blockIndex) => renderBlock(block, blockIndex, tone, shouldBubbleBlocks))}
+              {renderSectionBlocks(section, tone, shouldBubbleBlocks)}
             </div>
           )
         }
@@ -542,7 +805,7 @@ export function MarkdownRenderer({
         if (!showSectionShell) {
           return (
             <div key={`section-${sectionIndex}`} className="space-y-2.5">
-              {section.blocks.map((block, blockIndex) => renderBlock(block, blockIndex, tone, shouldBubbleBlocks))}
+              {renderSectionBlocks(section, tone, shouldBubbleBlocks)}
             </div>
           )
         }
@@ -569,7 +832,7 @@ export function MarkdownRenderer({
             ) : null}
 
             <div className="space-y-2.5">
-              {section.blocks.map((block, blockIndex) => renderBlock(block, blockIndex, tone, shouldBubbleBlocks))}
+              {renderSectionBlocks(section, tone, shouldBubbleBlocks)}
             </div>
           </div>
         )

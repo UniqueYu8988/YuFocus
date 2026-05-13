@@ -34,6 +34,20 @@ SCHEMA_VERSION = "onboard.course-package.v0.1"
 PACKAGE_ID_LIMIT = 64
 NODE_ID_LIMIT = 64
 LESSON_PROFILES = {"concept", "operation", "tool_config", "exam", "case_analysis", "strategy", "mixed"}
+LESSON_TYPE_TAG_TO_PROFILE = {
+    "tool_config": "tool_config",
+    "operation": "operation",
+    "operation_steps": "operation",
+    "workflow": "operation",
+    "exam": "exam",
+    "case_analysis": "case_analysis",
+    "strategy": "strategy",
+    "practice_drill": "strategy",
+    "concept": "concept",
+    "concept_explain": "concept",
+    "system_map": "concept",
+    "troubleshooting": "tool_config",
+}
 
 PROFILE_KEYWORDS = {
     "tool_config": ("安装", "配置", "环境", "命令", "终端", "端口", "网络", "代理", "路径", "运行", "报错", "openclaw", "npm", "python", "api"),
@@ -45,6 +59,32 @@ PROFILE_KEYWORDS = {
 }
 TOOL_TECH_TERMS = ("openclaw", "openclash", "clash", "npm", "node", "python", "api", "git", "github", "端口", "网络", "代理", "命令", "终端", "路径", "环境变量")
 TOOL_SETUP_TERMS = ("安装", "配置", "环境", "初始化", "运行", "启动", "报错", "setup", "install", "run")
+ROADMAP_TYPES = {
+    "workflow",
+    "concept_map",
+    "decision_tree",
+    "operation_flow",
+    "exam_strategy",
+    "architecture_map",
+    "case_reasoning",
+    "argument_map",
+    "viewpoint_map",
+}
+ROADMAP_ROLES = {"foundation", "concept", "practice", "risk", "decision", "review", "integration"}
+ROADMAP_TONES = {"green", "blue", "purple", "amber", "rose", "neutral"}
+ROADMAP_EDGE_KINDS = {
+    "next",
+    "depends_on",
+    "contrast",
+    "risk",
+    "feedback",
+    "supports",
+    "tension",
+    "counterpoint",
+    "tradeoff",
+    "open_question",
+}
+ROADMAP_VISUAL_ASSET_STATUSES = {"planned", "attached", "missing"}
 
 
 class PackageError(RuntimeError):
@@ -151,13 +191,23 @@ def _as_list(value: Any, limit: int | None = None) -> list[str]:
 
 
 def _infer_lesson_profile(raw: dict[str, Any], title: str, teaching: str) -> str:
-    explicit = _clean_text(
-        (raw.get("teacher_ready_content") or {}).get("lesson_profile")
-        if isinstance(raw.get("teacher_ready_content"), dict)
-        else raw.get("lesson_profile")
-    ).lower()
+    teacher = raw.get("teacher_ready_content") if isinstance(raw.get("teacher_ready_content"), dict) else {}
+    lesson_type_tags = _as_list(teacher.get("lesson_type_tags") or raw.get("lesson_type_tags"), 12)
+    tag_profile = next(
+        (
+            LESSON_TYPE_TAG_TO_PROFILE[tag.casefold()]
+            for tag in lesson_type_tags
+            if tag.casefold() in LESSON_TYPE_TAG_TO_PROFILE
+        ),
+        "",
+    )
+    explicit = _clean_text(teacher.get("lesson_profile") or raw.get("lesson_profile")).lower()
+    if explicit == "mixed" and tag_profile:
+        return tag_profile
     if explicit in LESSON_PROFILES:
         return explicit
+    if tag_profile:
+        return tag_profile
 
     haystack = f"{title} {raw.get('summary') or ''} {teaching}".casefold()
     if (
@@ -175,12 +225,17 @@ def _normalize_teacher_ready(raw: dict[str, Any], title: str) -> dict[str, Any]:
     teacher = raw.get("teacher_ready_content") if isinstance(raw.get("teacher_ready_content"), dict) else {}
     teaching = _clean_markdown(teacher.get("teaching_markdown"))
     question = _clean_text(teacher.get("quiz_question"))
-    answer = _clean_text(teacher.get("standard_answer"))
+    answer = _clean_markdown(teacher.get("standard_answer"))
     key_points = _as_list(teacher.get("key_points"), 10)
     mistakes = _as_list(teacher.get("common_mistakes"), 8)
     memory_hook = _clean_text(teacher.get("memory_hook"))
     lesson_profile = _infer_lesson_profile(raw, title, teaching)
+    lesson_type_tags = _as_list(teacher.get("lesson_type_tags") or raw.get("lesson_type_tags"), 12)
     display_hints = _as_list(teacher.get("display_hints") or raw.get("display_hints"), 6)
+    primary_training_action = _clean_text(
+        teacher.get("primary_training_action") or raw.get("primary_training_action")
+    )
+    training_focus = _as_list(teacher.get("training_focus") or raw.get("training_focus"), 12)
 
     if not teaching:
         raise PackageError(f"课程节点「{title}」缺少 teacher_ready_content.teaching_markdown")
@@ -199,6 +254,12 @@ def _normalize_teacher_ready(raw: dict[str, Any], title: str) -> dict[str, Any]:
     }
     if display_hints:
         result["display_hints"] = display_hints
+    if lesson_type_tags:
+        result["lesson_type_tags"] = lesson_type_tags
+    if primary_training_action:
+        result["primary_training_action"] = primary_training_action
+    if training_focus:
+        result["training_focus"] = training_focus
     if memory_hook:
         result["memory_hook"] = memory_hook
     return result
@@ -286,6 +347,373 @@ def _normalize_source_refs(raw: dict[str, Any]) -> list[dict[str, Any]]:
             }
         refs.append(ref)
     return refs
+
+
+def _roadmap_id(value: Any, fallback_index: int) -> str:
+    raw = _slug(value, f"rm_{fallback_index:03d}", 52)
+    if raw.startswith("rm_"):
+        return raw
+    return _slug(f"rm_{raw}", f"rm_{fallback_index:03d}", 52)
+
+
+def _clamp_unit(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(1.0, number))
+
+
+def _normalize_chapter_roadmap_visual_asset(
+    value: Any,
+    lesson_ids: set[str],
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+
+    alt = _clean_text(value.get("alt"))
+    prompt = _clean_text(value.get("prompt"))
+    if not alt or not prompt:
+        return None
+
+    status = _clean_text(value.get("status"), "planned").lower()
+    if status not in ROADMAP_VISUAL_ASSET_STATUSES:
+        status = "planned"
+
+    uri = _clean_text(value.get("uri"))
+    if status == "attached" and not uri:
+        status = "planned"
+
+    result: dict[str, Any] = {
+        "kind": "image",
+        "alt": alt[:300],
+        "prompt": prompt[:2000],
+        "status": status,
+    }
+
+    asset_id = _slug(value.get("asset_id"), "", 86)
+    if asset_id:
+        if not asset_id.startswith("asset_"):
+            asset_id = _slug(f"asset_{asset_id}", "asset_roadmap", 86)
+        result["asset_id"] = asset_id
+    if uri:
+        result["uri"] = uri
+
+    hotspots: list[dict[str, Any]] = []
+    for index, item in enumerate(value.get("hotspots") or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        label = _clean_text(item.get("label"))
+        x = _clamp_unit(item.get("x"))
+        y = _clamp_unit(item.get("y"))
+        width = _clamp_unit(item.get("width"))
+        height = _clamp_unit(item.get("height"))
+        if not label or x is None or y is None or not width or not height:
+            continue
+        hotspot_id = _slug(item.get("id"), f"hotspot_{index:03d}", 88)
+        if not hotspot_id.startswith("hotspot_"):
+            hotspot_id = _slug(f"hotspot_{hotspot_id}", f"hotspot_{index:03d}", 88)
+        hotspot: dict[str, Any] = {
+            "id": hotspot_id,
+            "label": label[:40],
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+        }
+        lesson_id = _slug(item.get("lesson_id"), "")
+        if lesson_id and lesson_id in lesson_ids:
+            hotspot["lesson_id"] = lesson_id
+        hotspots.append(hotspot)
+    if hotspots:
+        result["hotspots"] = hotspots
+
+    return result
+
+
+def _normalize_course_visual_map(
+    value: Any,
+    *,
+    chapter_ids: set[str],
+    lesson_ids: set[str],
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+
+    alt = _clean_text(value.get("alt"))
+    prompt = _clean_text(value.get("prompt"))
+    if not alt or not prompt:
+        return None
+
+    status = _clean_text(value.get("status"), "planned").lower()
+    if status not in ROADMAP_VISUAL_ASSET_STATUSES:
+        status = "planned"
+
+    uri = _clean_text(value.get("uri"))
+    if status == "attached" and not uri:
+        status = "planned"
+
+    result: dict[str, Any] = {
+        "kind": "image",
+        "alt": alt[:300],
+        "prompt": prompt[:2400],
+        "status": status,
+    }
+
+    asset_id = _slug(value.get("asset_id"), "", 86)
+    if asset_id:
+        if not asset_id.startswith("asset_"):
+            asset_id = _slug(f"asset_{asset_id}", "asset_course_visual_map", 86)
+        result["asset_id"] = asset_id
+    if uri:
+        result["uri"] = uri
+
+    hotspots: list[dict[str, Any]] = []
+    for index, item in enumerate(value.get("hotspots") or [], start=1):
+        if not isinstance(item, dict):
+            continue
+        label = _clean_text(item.get("label"))
+        x = _clamp_unit(item.get("x"))
+        y = _clamp_unit(item.get("y"))
+        width = _clamp_unit(item.get("width"))
+        height = _clamp_unit(item.get("height"))
+        if not label or x is None or y is None or not width or not height:
+            continue
+        hotspot_id = _slug(item.get("id"), f"hotspot_{index:03d}", 88)
+        if not hotspot_id.startswith("hotspot_"):
+            hotspot_id = _slug(f"hotspot_{hotspot_id}", f"hotspot_{index:03d}", 88)
+        hotspot: dict[str, Any] = {
+            "id": hotspot_id,
+            "label": label[:60],
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+        }
+        chapter_id = _slug(item.get("chapter_id"), "")
+        if chapter_id and chapter_id in chapter_ids:
+            hotspot["chapter_id"] = chapter_id
+        lesson_id = _slug(item.get("lesson_id"), "")
+        if lesson_id and lesson_id in lesson_ids:
+            hotspot["lesson_id"] = lesson_id
+        hotspots.append(hotspot)
+    if hotspots:
+        result["hotspots"] = hotspots
+
+    return result
+
+
+def _normalize_chapter_roadmap(
+    raw_chapter: dict[str, Any],
+    title: str,
+    summary: str,
+    chapter_lessons: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    raw = raw_chapter.get("chapter_roadmap")
+    if not isinstance(raw, dict):
+        raw = raw_chapter.get("roadmap")
+    if not isinstance(raw, dict):
+        return None
+
+    lesson_ids = {lesson["id"] for lesson in chapter_lessons}
+    raw_nodes = raw.get("nodes")
+    if not isinstance(raw_nodes, list) or not raw_nodes:
+        return None
+
+    nodes: list[dict[str, Any]] = []
+    node_ids: set[str] = set()
+    for index, item in enumerate(raw_nodes, start=1):
+        if not isinstance(item, dict):
+            continue
+        node_title = _clean_text(item.get("title"))
+        if not node_title:
+            continue
+        node_id = _roadmap_id(item.get("id"), index)
+        if node_id in node_ids:
+            node_id = _roadmap_id(f"{node_id}_{index}", index)
+        node_ids.add(node_id)
+        node: dict[str, Any] = {
+            "id": node_id,
+            "title": node_title,
+        }
+        lesson_id = _slug(item.get("lesson_id"), "")
+        if lesson_id and lesson_id in lesson_ids:
+            node["lesson_id"] = lesson_id
+        summary_text = _clean_text(item.get("summary"))
+        if summary_text:
+            node["summary"] = summary_text
+        for key in (
+            "map_label",
+            "micro_question",
+            "action_tag",
+            "risk_tag",
+            "output_tag",
+            "core_question",
+            "key_claim",
+            "counterpoint",
+            "completion_signal",
+        ):
+            value = _clean_text(item.get(key))
+            if value:
+                node[key] = value
+        role = _clean_text(item.get("role")).lower()
+        if role in ROADMAP_ROLES:
+            node["role"] = role
+        tone = _clean_text(item.get("tone")).lower()
+        if tone in ROADMAP_TONES:
+            node["tone"] = tone
+        nodes.append(node)
+
+    if not nodes:
+        return None
+
+    edges: list[dict[str, Any]] = []
+    for item in raw.get("edges") or []:
+        if not isinstance(item, dict):
+            continue
+        from_id = _roadmap_id(item.get("from"), 0)
+        to_id = _roadmap_id(item.get("to"), 0)
+        if from_id not in node_ids or to_id not in node_ids:
+            continue
+        edge: dict[str, Any] = {"from": from_id, "to": to_id}
+        kind = _clean_text(item.get("kind")).lower()
+        if kind in ROADMAP_EDGE_KINDS:
+            edge["kind"] = kind
+        label = _clean_text(item.get("label"))
+        if label:
+            edge["label"] = label
+        edges.append(edge)
+
+    focus_cards: list[dict[str, Any]] = []
+    for item in raw.get("focus_cards") or []:
+        if not isinstance(item, dict):
+            continue
+        card_title = _clean_text(item.get("title"))
+        bullets = _as_list(item.get("bullets"), 6)
+        if card_title and bullets:
+            focus_cards.append({"title": card_title, "bullets": bullets})
+
+    def _roadmap_ref(value: Any) -> str:
+        text = _clean_text(value)
+        if not text:
+            return ""
+        normalized = _roadmap_id(text, 0)
+        return normalized if normalized in node_ids else text
+
+    def _lesson_ids(value: Any, limit: int = 8) -> list[str]:
+        ids: list[str] = []
+        for item in _as_list(value, limit):
+            lesson_id = _slug(item, "")
+            if lesson_id and lesson_id in lesson_ids:
+                ids.append(lesson_id)
+        return ids
+
+    turning_points: list[dict[str, Any]] = []
+    for item in raw.get("turning_points") or []:
+        if not isinstance(item, dict):
+            continue
+        point_title = _clean_text(item.get("title"))
+        reason = _clean_text(item.get("reason"))
+        if not point_title or not reason:
+            continue
+        point: dict[str, Any] = {"title": point_title, "reason": reason}
+        from_ref = _roadmap_ref(item.get("from"))
+        to_ref = _roadmap_ref(item.get("to"))
+        if from_ref:
+            point["from"] = from_ref
+        if to_ref:
+            point["to"] = to_ref
+        ids = _lesson_ids(item.get("lesson_ids"))
+        if ids:
+            point["lesson_ids"] = ids
+        turning_points.append(point)
+
+    tension_edges: list[dict[str, Any]] = []
+    for item in raw.get("tension_edges") or []:
+        if not isinstance(item, dict):
+            continue
+        from_ref = _roadmap_ref(item.get("from"))
+        to_ref = _roadmap_ref(item.get("to"))
+        tension = _clean_text(item.get("tension"))
+        if not from_ref or not to_ref or not tension:
+            continue
+        edge: dict[str, Any] = {"from": from_ref, "to": to_ref, "tension": tension}
+        label = _clean_text(item.get("label"))
+        if label:
+            edge["label"] = label
+        resolution_hint = _clean_text(item.get("resolution_hint"))
+        if resolution_hint:
+            edge["resolution_hint"] = resolution_hint
+        tension_edges.append(edge)
+
+    conflict_nodes: list[dict[str, Any]] = []
+    for item in raw.get("conflict_nodes") or []:
+        if not isinstance(item, dict):
+            continue
+        conflict_title = _clean_text(item.get("title"))
+        claim = _clean_text(item.get("claim"))
+        counterpoint = _clean_text(item.get("counterpoint"))
+        why_it_matters = _clean_text(item.get("why_it_matters"))
+        if not conflict_title or not claim or not counterpoint or not why_it_matters:
+            continue
+        conflict: dict[str, Any] = {
+            "title": conflict_title,
+            "claim": claim,
+            "counterpoint": counterpoint,
+            "why_it_matters": why_it_matters,
+        }
+        ids = _lesson_ids(item.get("lesson_ids"))
+        if ids:
+            conflict["lesson_ids"] = ids
+        conflict_nodes.append(conflict)
+
+    open_questions: list[dict[str, Any]] = []
+    for item in raw.get("open_questions") or []:
+        if not isinstance(item, dict):
+            continue
+        question = _clean_text(item.get("question"))
+        why_it_matters = _clean_text(item.get("why_it_matters"))
+        if not question or not why_it_matters:
+            continue
+        open_question: dict[str, Any] = {"question": question, "why_it_matters": why_it_matters}
+        ids = _lesson_ids(item.get("related_lesson_ids"))
+        if ids:
+            open_question["related_lesson_ids"] = ids
+        open_questions.append(open_question)
+
+    roadmap_type = _clean_text(raw.get("roadmap_type"), "workflow")
+    if roadmap_type not in ROADMAP_TYPES:
+        roadmap_type = "workflow"
+
+    result: dict[str, Any] = {
+        "roadmap_type": roadmap_type,
+        "title": _clean_text(raw.get("title"), f"{title}：章节地图"),
+        "nodes": nodes,
+    }
+    subtitle = _clean_text(raw.get("subtitle"), summary)
+    if subtitle:
+        result["subtitle"] = subtitle
+    visual_asset = _normalize_chapter_roadmap_visual_asset(raw.get("visual_asset"), lesson_ids)
+    if visual_asset:
+        result["visual_asset"] = visual_asset
+    if edges:
+        result["edges"] = edges
+    if focus_cards:
+        result["focus_cards"] = focus_cards
+    completion_signals = _as_list(raw.get("completion_signals"), 6)
+    if completion_signals:
+        result["completion_signals"] = completion_signals
+    if turning_points:
+        result["turning_points"] = turning_points
+    if tension_edges:
+        result["tension_edges"] = tension_edges
+    if conflict_nodes:
+        result["conflict_nodes"] = conflict_nodes
+    if open_questions:
+        result["open_questions"] = open_questions
+    return result
 
 
 def _empty_assets() -> list[dict[str, Any]]:
@@ -389,29 +817,32 @@ def _build_chapters(outline: dict[str, Any], normalized_lessons: list[dict[str, 
 
         title = _clean_text(raw_chapter.get("title"), f"第 {chapter_index} 章")
         summary = _clean_text(raw_chapter.get("summary"), title)
-        chapters.append(
-            {
-                "id": chapter_id,
-                "node_type": "chapter",
-                "title": title,
-                "summary": summary,
-                "order": int(raw_chapter.get("order") or chapter_index),
-                "learning_objectives": _as_list(raw_chapter.get("learning_objectives")) or [summary],
-                "teacher_ready_content": {
-                    "teaching_markdown": _clean_text(raw_chapter.get("teaching_markdown"), f"## 这一章要学会什么\n\n{summary}"),
-                    "quiz_question": _clean_text(raw_chapter.get("quiz_question"), f"用自己的话说说「{title}」这一章的主线。"),
-                    "standard_answer": _clean_text(raw_chapter.get("standard_answer"), summary),
-                    "key_points": _as_list(raw_chapter.get("key_points")) or [summary],
-                    "common_mistakes": _as_list(raw_chapter.get("common_mistakes")),
-                },
-                "source_refs": _normalize_source_refs(raw_chapter),
-                "dependencies": [_slug(item, "chapter") for item in _as_list(raw_chapter.get("dependencies"))],
-                "knowledge": _normalize_knowledge(raw_chapter),
-                "children": sorted(chapter_lessons, key=lambda item: int(item.get("order") or 0)),
-                "assets": _empty_assets(),
-                "gaps": _empty_gaps(),
-            }
-        )
+        sorted_chapter_lessons = sorted(chapter_lessons, key=lambda item: int(item.get("order") or 0))
+        chapter: dict[str, Any] = {
+            "id": chapter_id,
+            "node_type": "chapter",
+            "title": title,
+            "summary": summary,
+            "order": int(raw_chapter.get("order") or chapter_index),
+            "learning_objectives": _as_list(raw_chapter.get("learning_objectives")) or [summary],
+            "teacher_ready_content": {
+                "teaching_markdown": _clean_text(raw_chapter.get("teaching_markdown"), f"## 这一章要学会什么\n\n{summary}"),
+                "quiz_question": _clean_text(raw_chapter.get("quiz_question"), f"用自己的话说说「{title}」这一章的主线。"),
+                "standard_answer": _clean_text(raw_chapter.get("standard_answer"), summary),
+                "key_points": _as_list(raw_chapter.get("key_points")) or [summary],
+                "common_mistakes": _as_list(raw_chapter.get("common_mistakes")),
+            },
+            "source_refs": _normalize_source_refs(raw_chapter),
+            "dependencies": [_slug(item, "chapter") for item in _as_list(raw_chapter.get("dependencies"))],
+            "knowledge": _normalize_knowledge(raw_chapter),
+            "children": sorted_chapter_lessons,
+            "assets": _empty_assets(),
+            "gaps": _empty_gaps(),
+        }
+        chapter_roadmap = _normalize_chapter_roadmap(raw_chapter, title, summary, sorted_chapter_lessons)
+        if chapter_roadmap:
+            chapter["chapter_roadmap"] = chapter_roadmap
+        chapters.append(chapter)
 
     unassigned = [lesson for lesson in normalized_lessons if lesson["id"] not in assigned]
     if unassigned:
@@ -460,8 +891,21 @@ def assemble_course_package(material_dir: Path) -> dict[str, Any]:
         "能用自己的话讲清课程主线。",
         "能完成每节主动回忆并对照标准答案修正。",
     ]
+    chapters = _build_chapters(outline, normalized_lessons, raw_lessons)
+    visual_maps = outline.get("visual_maps") if isinstance(outline.get("visual_maps"), dict) else {}
+    course_visual_map_raw = (
+        outline.get("course_visual_map")
+        or outline_course.get("course_visual_map")
+        or visual_maps.get("global_course_map")
+        or visual_maps.get("course_visual_map")
+    )
+    course_visual_map = _normalize_course_visual_map(
+        course_visual_map_raw,
+        chapter_ids={chapter["id"] for chapter in chapters},
+        lesson_ids={lesson["id"] for lesson in normalized_lessons},
+    )
 
-    return {
+    package = {
         "schema_version": SCHEMA_VERSION,
         "package_id": package_id,
         "source": {
@@ -488,18 +932,25 @@ def assemble_course_package(material_dir: Path) -> dict[str, Any]:
             ),
             "estimated_total_minutes": int(outline_course.get("estimated_total_minutes") or max(15, len(normalized_lessons) * 8)),
         },
-        "chapters": _build_chapters(outline, normalized_lessons, raw_lessons),
+        "chapters": chapters,
         "dependency_graph": [],
         "assets": [],
         "gaps": [],
     }
+    if course_visual_map:
+        package["course_visual_map"] = course_visual_map
+    return package
 
 
-def _audit_or_raise(package: dict[str, Any], strict: bool) -> dict[str, Any]:
+def _audit_or_raise(package: dict[str, Any], strict: bool, report_path: Path | None = None) -> dict[str, Any]:
     report = audit_course_package(package)
-    errors = int((report.get("severity_counts") or {}).get("error") or 0)
-    if strict and errors:
-        raise PackageError(f"课程包质量审计发现 {errors} 个 error，请先修正 course_draft 后再打包。")
+    if report_path is not None:
+        _save_json(report_path, report)
+    counts = report.get("severity_counts") or {}
+    errors = int(counts.get("error") or 0)
+    warnings = int(counts.get("warning") or 0)
+    if strict and (errors or warnings):
+        raise PackageError(f"课程包质量审计发现 {errors} 个 error、{warnings} 个 warning，请先修正 course_draft 后再打包。")
     return report
 
 
@@ -533,12 +984,58 @@ def publish_course_package(
     }
 
 
+def update_handoff_status(
+    material_dir: Path,
+    *,
+    package_path: Path,
+    report_path: Path,
+    publish_result: dict[str, str],
+    package: dict[str, Any],
+) -> None:
+    status_path = material_dir / "handoff_status.json"
+    if not status_path.exists():
+        return
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    status["stage"] = "course_ready"
+    status["stage_label"] = "课包可导入"
+    status["next_action"] = "回到视界专注工作台，点击这条制作记录的导入按钮。"
+    paths = status.setdefault("paths", {})
+    paths["final_course"] = str(package_path)
+    paths["quality_report"] = str(report_path)
+    if publish_result.get("publishedCoursePath"):
+        paths["published_course"] = publish_result["publishedCoursePath"]
+    if publish_result.get("publishedReportPath"):
+        paths["published_report"] = publish_result["publishedReportPath"]
+
+    steps = status.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            if step.get("id") in {"gpt_blueprint", "codex_course"}:
+                step["status"] = "done"
+            if step.get("id") == "import_course":
+                step["status"] = "next"
+
+    status["course"] = {
+        "package_id": package.get("package_id"),
+        "title": (package.get("course") or {}).get("title"),
+        "lesson_count": sum(1 for chapter in package.get("chapters", []) for node in chapter.get("children", []) if isinstance(node, dict)),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _save_json(status_path, status)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Assemble Codex lesson drafts into a Course Package JSON.")
     parser.add_argument("material_dir", help="Path to course_material directory containing manifest.json and course_draft/.")
     parser.add_argument("--output", help="Output .course-package.json path. Defaults to course_draft/final.course-package.json.")
     parser.add_argument("--report", help="Optional quality audit report path.")
-    parser.add_argument("--strict", action="store_true", help="Fail when course quality audit reports student-facing errors.")
+    parser.add_argument("--strict", action="store_true", help="Fail when course quality audit reports student-facing errors or warnings.")
     parser.add_argument("--no-publish", action="store_true", help="Only write course_draft/final.course-package.json; do not copy into output/courses.")
     args = parser.parse_args(argv)
 
@@ -548,13 +1045,20 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         package = assemble_course_package(material_dir)
-        report = _audit_or_raise(package, args.strict)
+        report = _audit_or_raise(package, args.strict, report_path)
         _save_json(output_path, package)
         _save_json(report_path, report)
         publish_result = (
             {}
             if args.no_publish
             else publish_course_package(material_dir, output_path, report_path, package)
+        )
+        update_handoff_status(
+            material_dir,
+            package_path=output_path,
+            report_path=report_path,
+            publish_result=publish_result,
+            package=package,
         )
     except PackageError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
@@ -569,6 +1073,7 @@ def main(argv: list[str] | None = None) -> int:
         "auditScore": report.get("score"),
         "premiumScore": report.get("premium_score"),
         "auditErrors": (report.get("severity_counts") or {}).get("error", 0),
+        "auditWarnings": (report.get("severity_counts") or {}).get("warning", 0),
     }, ensure_ascii=False, indent=2))
     return 0
 

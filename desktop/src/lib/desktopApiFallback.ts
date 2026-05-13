@@ -10,7 +10,7 @@ const defaultRuntimeSettings: RuntimeSettingsShape = {
   obsidian_vault_path: '',
   obsidian_export_folder: '视界专注',
   obsidian_auto_sync: true,
-  tts_provider: 'none',
+  tts_provider: 'mimo',
   minimax_api_key: '',
   minimax_tts_endpoint: 'https://api.minimaxi.com/v1/t2a_v2',
   minimax_tts_model: 'speech-2.8-hd',
@@ -22,7 +22,12 @@ const defaultRuntimeSettings: RuntimeSettingsShape = {
   mimo_tts_endpoint: 'https://api.xiaomimimo.com/v1/chat/completions',
   mimo_tts_model: 'mimo-v2.5-tts',
   mimo_tts_voice_id: '茉莉',
-  mimo_tts_style_prompt: '用清晰、年轻、温和的中文女声朗读，语速适中，像耐心老师讲课。',
+  mimo_tts_style_prompt: '自然 清晰 语速适中',
+  video_summary_provider: 'mimo',
+  video_summary_api_key: '',
+  video_summary_base_url: 'https://token-plan-cn.xiaomimimo.com/v1/chat/completions',
+  video_summary_model: 'mimo-v2.5-pro',
+  video_summary_output_dir: '',
   transcription_provider: 'local_sensevoice',
   local_transcription_root: '',
   local_transcription_python: '',
@@ -66,10 +71,21 @@ function unsubscribe() {
 export function ensureDesktopApiFallback() {
   if (window.desktopAPI) {
     window.desktopAPI.pickMediaFile ??= async () => null
+    window.desktopAPI.pickImageFile ??= async () => null
     window.desktopAPI.listMaterialPackages ??= async () => ({
       rootDir: '',
       coursePackageRootDir: '',
       records: [],
+    })
+    window.desktopAPI.listVideoSummaries ??= async () => ({
+      rootDir: '',
+      records: [],
+    })
+    window.desktopAPI.deleteVideoSummary ??= async () => ({
+      deletedPaths: [],
+    })
+    window.desktopAPI.deleteMaterialPackage ??= async () => ({
+      deletedPaths: [],
     })
     return
   }
@@ -91,6 +107,7 @@ export function ensureDesktopApiFallback() {
     }),
     pickDirectory: async () => null,
     pickMediaFile: async () => null,
+    pickImageFile: async () => null,
     importCoursePackage: async () => null,
     readCoursePackage: async (targetPath) => {
       const response = await fetch(toViteFileUrl(targetPath), { cache: 'no-store' })
@@ -102,13 +119,29 @@ export function ensureDesktopApiFallback() {
         text: await response.text(),
       }
     },
+    attachCourseVisualMap: async () => {
+      throw unavailable('导入全局学习地图')
+    },
     runDistillation: async () => {
       throw unavailable('原材料整理')
     },
+    runVideoSummary: async () => {
+      throw unavailable('视频总结')
+    },
+    listVideoSummaries: async () => ({
+      rootDir: '',
+      records: [],
+    }),
+    deleteVideoSummary: async () => ({
+      deletedPaths: [],
+    }),
     listMaterialPackages: async () => ({
       rootDir: '',
       coursePackageRootDir: '',
       records: [],
+    }),
+    deleteMaterialPackage: async () => ({
+      deletedPaths: [],
     }),
     loadLearningLibrary: async () => ({
       currentRecordId: null,
@@ -140,11 +173,12 @@ export function ensureDesktopApiFallback() {
     synthesizeSpeech: async () => {
       throw unavailable('语音朗读')
     },
-  checkSpeechCache: async (payload: { text?: string }) => ({
-    cached: false,
-    characters: estimateMiniMaxSpeechCharacters(payload?.text || ''),
-    filePath: null,
-    usage: {
+    checkSpeechCache: async (payload: { text?: string }) => ({
+      cached: false,
+      characters: estimateMiniMaxSpeechCharacters(payload?.text || ''),
+      filePath: null,
+      filePaths: [],
+      usage: {
       date: new Date().toISOString().slice(0, 10),
       usedCharacters: 0,
       dailyLimit: 4000,
@@ -152,6 +186,9 @@ export function ensureDesktopApiFallback() {
       note: '浏览器预览模式下不记录真实 TTS 用量。',
     },
   }),
+    readTextFile: async () => {
+      throw unavailable('读取本地文本文件')
+    },
     openPath: async () => undefined,
     showItem: async () => undefined,
     openExternal: async (targetUrl) => {

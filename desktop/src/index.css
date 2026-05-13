@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: "Segoe UI", "PingFang SC", "Microsoft YaHei UI", ui-sans-serif, sans-serif;
+  --font-sans: "HarmonyOS Sans SC", "Inter", "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", ui-sans-serif, sans-serif;
   --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 
   --color-background: hsl(var(--background));
@@ -47,8 +47,8 @@
   --input: 0 0% 14%;
   --ring: 210 7% 84%;
   --radius: 1rem;
-  --chrome-mica: #202634;
-  --chrome-mica-unfocused: #1a202b;
+  --chrome-mica: #1a2136;
+  --chrome-mica-unfocused: #1a2136;
   --work-surface: #181818;
   --surface-seam: rgba(255, 255, 255, 0.035);
 }
@@ -71,7 +71,8 @@
 
   button,
   input,
-  textarea {
+  textarea,
+  select {
     font: inherit;
   }
 
@@ -257,8 +258,10 @@
   .chrome-mica {
     background-color: var(--chrome-mica);
     background-image:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.018), rgba(255, 255, 255, 0) 16%),
-      radial-gradient(96% 84% at 0% 0%, rgba(72, 96, 146, 0.08), transparent 36%);
+      linear-gradient(180deg, rgba(255, 255, 255, 0.014), rgba(255, 255, 255, 0) 16%),
+      radial-gradient(92% 86% at 0% 0%, rgba(96, 83, 168, 0.15), transparent 36%),
+      radial-gradient(86% 78% at 16% 18%, rgba(47, 88, 168, 0.1), transparent 42%),
+      linear-gradient(90deg, rgba(26, 33, 54, 0.98), rgba(21, 28, 45, 0.95));
     background-repeat: no-repeat;
   }
 
@@ -266,7 +269,9 @@
     background-color: var(--chrome-mica-unfocused);
     background-image:
       linear-gradient(180deg, rgba(255, 255, 255, 0.014), rgba(255, 255, 255, 0) 16%),
-      radial-gradient(96% 84% at 0% 0%, rgba(53, 69, 102, 0.055), transparent 34%);
+      radial-gradient(92% 86% at 0% 0%, rgba(96, 83, 168, 0.15), transparent 36%),
+      radial-gradient(86% 78% at 16% 18%, rgba(47, 88, 168, 0.1), transparent 42%),
+      linear-gradient(90deg, rgba(26, 33, 54, 0.98), rgba(21, 28, 45, 0.95));
     background-repeat: no-repeat;
   }
 

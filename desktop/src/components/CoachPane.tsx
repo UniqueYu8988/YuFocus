@@ -1,17 +1,24 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowRight,
   FolderSync,
+  LoaderCircle,
   Sparkles,
+  Square,
   Trophy,
 } from 'lucide-react'
+import { ChapterRoadmapDialog } from '@/components/ChapterRoadmapDialog'
+import { CourseVisualMapDialog } from '@/components/CourseVisualMapDialog'
+import learnChapterMapIcon from '@/assets/learn-chapter-map.svg'
+import learnOpenNoteIcon from '@/assets/learn-open-note.svg'
+import learnReadSectionIcon from '@/assets/learn-read-section.svg'
+import warmStageIcon from '@/assets/warm-stage.svg'
 import { CoachChatTimeline } from '@/components/CoachChatTimeline'
 import { CoachComposer } from '@/components/CoachComposer'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { getNextSequentialNodeId } from '@/lib/courseTree'
-import { cn } from '@/lib/utils'
+import { buildLessonSpeechMarkdown, buildStandardAnswerSpeechMarkdown, formatMiniMaxCharacters } from '@/lib/tts'
 import { useLearningStore } from '@/store'
 
 function stripStagePrefix(title: string) {
@@ -63,6 +70,7 @@ function formatCompletionDate(timestamp: number | null) {
 
 export function CoachPane() {
   const courseData = useLearningStore((state) => state.courseData)
+  const importedCoursePath = useLearningStore((state) => state.importedCoursePath)
   const currentNodeId = useLearningStore((state) => state.currentNodeId)
   const nodeMap = useLearningStore((state) => state.nodeMap)
   const completedNodeIds = useLearningStore((state) => state.completedNodeIds)
@@ -78,6 +86,12 @@ export function CoachPane() {
     state.currentNodeId ? state.isNodeUnlocked(state.currentNodeId) : false,
   )
   const [obsidianSyncing, setObsidianSyncing] = useState(false)
+  const [ttsState, setTtsState] = useState<'idle' | 'loading' | 'playing' | 'paused'>('idle')
+  const [stageWarmState, setStageWarmState] = useState<'idle' | 'warming' | 'ready'>('idle')
+  const [roadmapOpen, setRoadmapOpen] = useState(false)
+  const speechClickTimerRef = useRef<number | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const speechTokenRef = useRef(0)
   const currentNode = currentNodeId ? nodeMap[currentNodeId] ?? null : null
   const effectiveCompletedNodeIds = useMemo(() => {
     if (!currentNodeId || !currentSession) return completedNodeIds
@@ -115,6 +129,7 @@ export function CoachPane() {
     () => (currentStage ? collectStageStudyNodeIds(currentStage.id, nodeMap) : []),
     [currentStage, nodeMap],
   )
+  const courseVisualMap = courseData?.course_visual_map
   const stageCompletedCount = useMemo(
     () => currentStageStudyNodeIds.filter((nodeId) => effectiveCompletedNodeIds.includes(nodeId)).length,
     [currentStageStudyNodeIds, effectiveCompletedNodeIds],
@@ -130,30 +145,162 @@ export function CoachPane() {
       : archiveMilestones.some((event) => event.kind === 'stage_complete')
         ? '你是靠一段一段稳稳推进，把整门课完整打通下来的。'
         : '你把这门课完整学完了，而且路径非常干净，说明理解链路已经相当顺。'
-  const lightweightStatusHint = useMemo(() => {
-    if (!isCurrentNodeUnlocked) {
-      return '预览模式：按顺序学到这里后再答题'
+  const lessonSpeechText = useMemo(() => (currentNode ? buildLessonSpeechMarkdown(currentNode) : ''), [currentNode])
+  const standardAnswerSpeechText = useMemo(
+    () => (currentNode ? buildStandardAnswerSpeechMarkdown(currentNode) : ''),
+    [currentNode],
+  )
+
+  const stopSpeech = () => {
+    speechTokenRef.current += 1
+    audioRef.current?.pause()
+    audioRef.current?.removeAttribute('src')
+    audioRef.current?.load()
+    audioRef.current = null
+    setTtsState('idle')
+  }
+
+  useEffect(() => {
+    stopSpeech()
+  }, [currentNodeId])
+
+  useEffect(() => {
+    return () => {
+      if (speechClickTimerRef.current) {
+        window.clearTimeout(speechClickTimerRef.current)
+        speechClickTimerRef.current = null
+      }
+      stopSpeech()
     }
-    if (currentSession?.learningStatus === 'completed' && nextNodeId) {
-      return '这一关已掌握，点击下一节继续'
+  }, [])
+
+  const playSpeechText = async (text: string, nodeId: string | null) => {
+    if (!text.trim()) return
+    stopSpeech()
+    const speechToken = speechTokenRef.current + 1
+    speechTokenRef.current = speechToken
+    setTtsState('loading')
+    try {
+      const result = await window.desktopAPI.synthesizeSpeech({
+        text,
+        nodeId,
+      })
+      if (speechTokenRef.current !== speechToken) return
+      if (!result.cached) {
+        pushToast(
+          '语音已生成',
+          result.provider === 'minimax'
+            ? `本节消耗约 ${formatMiniMaxCharacters(result.characters)} MiniMax 字符；今日本地估算剩余 ${formatMiniMaxCharacters(result.usage.remainingCharacters)}。`
+            : '本节已用 MiMo 生成；缓存命中不会重复调用。',
+          'success',
+        )
+      }
+      setTtsState('playing')
+      const dataUrls = result.dataUrls?.length ? result.dataUrls : [result.dataUrl]
+      for (const dataUrl of dataUrls) {
+        if (speechTokenRef.current !== speechToken) return
+        const audio = new Audio(dataUrl)
+        audioRef.current = audio
+        await new Promise<void>((resolve, reject) => {
+          audio.onended = () => resolve()
+          audio.onerror = () => reject(new Error('音频播放失败，请检查系统音频设置。'))
+          void audio.play().catch(reject)
+        })
+      }
+      if (speechTokenRef.current !== speechToken) return
+      audioRef.current = null
+      setTtsState('idle')
+    } catch (error) {
+      if (speechTokenRef.current !== speechToken) return
+      setTtsState('idle')
+      pushToast('朗读失败', error instanceof Error ? error.message : String(error), 'error')
     }
-    if (currentSession?.learningStatus === 'quizzing') {
-      return '先写下你的回忆，再对照标准答案和关键点'
+  }
+
+  const playSpeech = async () => {
+    if (!lessonSpeechText) return
+    if (ttsState === 'playing') {
+      audioRef.current?.pause()
+      setTtsState('paused')
+      return
     }
-    return '先阅读这一关，再写下自己的回忆'
-  }, [
-    currentSession?.learningStatus,
-    isCurrentNodeUnlocked,
-    nextNodeId,
-  ])
-  const lightweightStatusTone: 'neutral' | 'progress' | 'warning' | 'success' =
-    !isCurrentNodeUnlocked
-      ? 'warning'
-      : currentSession?.learningStatus === 'completed'
-        ? 'success'
-        : currentSession?.learningStatus === 'quizzing'
-          ? 'progress'
-          : 'neutral'
+    if (ttsState === 'paused') {
+      setTtsState('playing')
+      await audioRef.current?.play().catch((error) => {
+        setTtsState('paused')
+        pushToast('继续播放失败', error instanceof Error ? error.message : String(error), 'error')
+      })
+      return
+    }
+    if (ttsState === 'loading') return
+    await playSpeechText(lessonSpeechText, currentNodeId)
+  }
+
+  const handleSpeechClick = () => {
+    if (speechClickTimerRef.current) {
+      window.clearTimeout(speechClickTimerRef.current)
+      speechClickTimerRef.current = null
+    }
+    speechClickTimerRef.current = window.setTimeout(() => {
+      speechClickTimerRef.current = null
+      void playSpeech()
+    }, 220)
+  }
+
+  const handleSpeechDoubleClick = () => {
+    if (speechClickTimerRef.current) {
+      window.clearTimeout(speechClickTimerRef.current)
+      speechClickTimerRef.current = null
+    }
+    stopSpeech()
+    void playSpeechText(lessonSpeechText, currentNodeId)
+  }
+
+  const warmCurrentStageSpeech = async () => {
+    if (stageWarmState === 'warming') return
+    const targetIds = currentStageStudyNodeIds.length > 0
+      ? currentStageStudyNodeIds
+      : currentNodeId
+        ? [currentNodeId]
+        : []
+    if (targetIds.length === 0) return
+
+    setStageWarmState('warming')
+    try {
+      let warmedTextCount = 0
+      for (const nodeId of targetIds) {
+        const node = nodeMap[nodeId]
+        if (!node) continue
+        const texts = [buildLessonSpeechMarkdown(node), buildStandardAnswerSpeechMarkdown(node)]
+          .map((text) => text.trim())
+          .filter(Boolean)
+        for (const text of texts) {
+          const cacheStatus = await window.desktopAPI.checkSpeechCache({ text, nodeId })
+          if (!cacheStatus.cached) {
+            await window.desktopAPI.synthesizeSpeech({ text, nodeId })
+          }
+          warmedTextCount += 1
+        }
+      }
+      setStageWarmState('ready')
+      pushToast('章节语音已预热', `已准备 ${targetIds.length} 节内容，包含答后标准答案。`, 'success')
+      window.setTimeout(() => setStageWarmState('idle'), 2200)
+      void warmedTextCount
+    } catch (error) {
+      setStageWarmState('idle')
+      pushToast('章节预热失败', error instanceof Error ? error.message : String(error), 'error')
+    }
+  }
+
+  const playStandardAnswerIfCached = async () => {
+    if (!standardAnswerSpeechText || !currentNodeId) return
+    const cacheStatus = await window.desktopAPI.checkSpeechCache({
+      text: standardAnswerSpeechText,
+      nodeId: currentNodeId,
+    })
+    if (!cacheStatus.cached) return
+    await playSpeechText(standardAnswerSpeechText, currentNodeId)
+  }
 
   const syncObsidian = async (target: 'current' | 'board' | 'index') => {
     if (!courseData) return
@@ -166,7 +313,7 @@ export function CoachPane() {
         target,
       })
       pushToast(
-        'Obsidian 已同步',
+        target === 'current' ? '笔记已打开' : 'Obsidian 已打开',
         target === 'current'
           ? `已打开当前小节笔记：${result.openedPath}`
           : target === 'board'
@@ -175,7 +322,7 @@ export function CoachPane() {
         'success',
       )
     } catch (error) {
-      pushToast('Obsidian 同步失败', error instanceof Error ? error.message : String(error), 'error')
+      pushToast('打开 Obsidian 失败', error instanceof Error ? error.message : String(error), 'error')
     } finally {
       setObsidianSyncing(false)
     }
@@ -231,163 +378,118 @@ export function CoachPane() {
   }
 
   return (
-    <section className="flex min-h-0 flex-1">
-      <Card className="work-surface flex min-h-0 w-full flex-col overflow-hidden rounded-l-[24px] rounded-r-none border-0 bg-[#181818] shadow-[-14px_0_34px_rgba(0,0,0,0.12)]">
-        <CardHeader className="pl-7 pr-5 py-2">
-          <div className="flex min-h-[52px] flex-wrap items-center justify-between gap-2.5">
-            <div className="min-w-0 flex-1 space-y-0.5">
-              <div>
-                <CardTitle className="flex items-center gap-2 text-[18px] leading-tight tracking-tight">
-                  <span aria-hidden className="text-[14px] opacity-90">✨</span>
-                  <span>{currentNode.title}</span>
-                </CardTitle>
-              </div>
-              <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                {currentStage ? `${stageTitle} · ` : ''}
-                  {progressPercent}% 已完成
-                {!isCurrentNodeUnlocked ? ' · 预览中' : ''}
-                {currentSession.requestState === 'loading' ? ' · 老师思考中' : ''}
-              </div>
-            </div>
+    <section className="work-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-l-[24px] bg-[#171717]">
+      <header className="flex h-[58px] shrink-0 items-center justify-between gap-4 px-6">
+        <h1 className="min-w-0 truncate text-[15px] font-semibold tracking-tight text-foreground/92">
+          {currentNode.title}
+        </h1>
 
-            <div className="flex shrink-0 items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                className="h-8 rounded-xl px-3 text-[11px]"
-                onClick={() => void syncObsidian('board')}
-                disabled={obsidianSyncing}
-              >
-                <FolderSync size={13} />
-                同步 Obsidian
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-8 rounded-xl px-3 text-[11px]"
-                onClick={() => void syncObsidian('current')}
-                disabled={obsidianSyncing}
-              >
-                打开笔记
-              </Button>
-            </div>
-          </div>
-
-          {currentSession.error ? (
-            <div className="rounded-2xl border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground">
-              {currentSession.error}
-            </div>
-          ) : null}
-
-          {isCourseCompleted ? (
-            <Card className="border-emerald-500/14 bg-[linear-gradient(180deg,rgba(24,32,28,0.96),rgba(19,24,21,0.96))] shadow-[0_0_30px_rgba(16,185,129,0.06)]">
-              <CardContent className="space-y-5 p-4.5">
-                <div className="flex items-start gap-4">
-                  <div className="flex size-11 shrink-0 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/12 text-emerald-300 shadow-[0_0_20px_rgba(16,185,129,0.12)]">
-                    <Trophy size={18} />
-                  </div>
-                  <div className="space-y-1">
-                    <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-emerald-200/80">课程征服回顾</div>
-                    <div className="text-base font-semibold text-foreground">《{courseData?.course.title ?? '当前课程'}》已经完整结课</div>
-                    <p className="text-sm leading-6 text-muted-foreground">
-                    全部 {totalStudyCount} 个小关已完成，这门课会自动沉淀进归档区，之后随时都能回来继续学习。
-                    </p>
-                    <div className="text-[11px] text-emerald-100/78">
-                      {completionMilestone ? `结课时间：${formatCompletionDate(completionMilestone.createdAt)}` : '结课记录已保存到本地档案'}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid gap-3 md:grid-cols-4">
-                  <div className="rounded-2xl border border-white/8 bg-[#1a1a1a] p-4">
-                    <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">总小关</div>
-                    <div className="mt-2 text-2xl font-semibold">{totalStudyCount}</div>
-                  </div>
-                  <div className="rounded-2xl border border-white/8 bg-[#1a1a1a] p-4">
-                    <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">掌握率</div>
-                    <div className="mt-2 text-2xl font-semibold">100%</div>
-                  </div>
-                  <div className="rounded-2xl border border-white/8 bg-[#1a1a1a] p-4">
-                    <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">完成阶段</div>
-                    <div className="mt-2 text-2xl font-semibold">{stageTotalCount}</div>
-                  </div>
-                  <div className="rounded-2xl border border-white/8 bg-[#1a1a1a] p-4">
-                    <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">能力徽章</div>
-                    <div className="mt-2 text-2xl font-semibold">{achievementBadges.length}</div>
-                  </div>
-                </div>
-
-                <div className="grid gap-3 lg:grid-cols-[1.15fr_0.85fr]">
-                  <div className="space-y-3 rounded-2xl border border-white/8 bg-[#1a1a1a] p-4">
-                    <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">这门课你是怎么拿下的</div>
-                    <div className="text-[13px] leading-6 text-foreground/92">{completionNarrative}</div>
-                    {achievementBadges.length > 0 ? (
-                      <div className="flex flex-wrap gap-2">
-                        {achievementBadges.map((badge) => (
-                          <span
-                            key={badge.code}
-                            className={cn(
-                              'rounded-full border px-2.5 py-1 text-[10px] font-medium',
-                              getBadgeToneClass(badge.tone),
-                            )}
-                          >
-                            {badge.label}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div className="space-y-3 rounded-2xl border border-white/8 bg-[#1a1a1a] p-4">
-                    <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">结课里程碑</div>
-                    <div className="space-y-2">
-                      {archiveMilestones.slice(0, 4).map((event) => (
-                        <div key={event.id} className="rounded-xl border border-white/6 bg-white/[0.02] px-3 py-2">
-                          <div className="text-[11px] font-medium text-foreground">{event.title}</div>
-                          <div className="mt-0.5 text-[10px] leading-5 text-muted-foreground">{event.detail}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {courseData?.course.learning_outcomes?.length ? (
-                  <div className="space-y-2 rounded-2xl border border-white/8 bg-[#1a1a1a] p-4">
-                    <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">本门课最终带走什么</div>
-                    <ul className="space-y-2 text-sm text-foreground/90">
-                      {courseData.course.learning_outcomes.slice(0, 3).map((item) => (
-                        <li key={item} className="list-inside list-disc">
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-              </CardContent>
-            </Card>
-          ) : null}
-        </CardHeader>
-
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-5 pt-1.5 pb-4">
-          <Card className="work-surface relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-white/[0.055] bg-[#181818] shadow-none">
-            <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[inherit] p-0">
-              <div className="work-surface h-0 min-h-0 flex-1 overflow-hidden rounded-t-[inherit] bg-[#181818] px-4 py-0">
-                <CoachChatTimeline />
-              </div>
-              <div className="work-surface relative z-10 shrink-0 rounded-b-[inherit] bg-[#181818]">
-                <CoachComposer
-                  progressText={`${effectiveCompletedNodeIds.length}/${totalStudyCount} · 阶段 ${stageCompletedCount}/${Math.max(stageTotalCount, 0)}`}
-                  statusHint={lightweightStatusHint}
-                  statusTone={lightweightStatusTone}
-                  onGoToNext={() => void goToNextNode()}
-                  canGoToNext={canAdvanceToNext && Boolean(nextNodeId)}
-                  nextLabel={isCourseCompleted ? '课程已完成' : '下一节'}
-                />
-              </div>
-            </CardContent>
-          </Card>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-9 rounded-xl border-0 bg-transparent text-foreground/78 hover:bg-white/[0.07] hover:text-foreground"
+            onClick={() => setRoadmapOpen(true)}
+            disabled={!currentStage && !courseVisualMap}
+            aria-label={courseVisualMap ? '全局地图' : '章节地图'}
+            title={courseVisualMap ? '全局地图' : '章节地图'}
+          >
+            <img src={learnChapterMapIcon} alt="" className="size-[18px]" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-9 rounded-xl border-0 bg-transparent text-foreground/78 hover:bg-white/[0.07] hover:text-foreground"
+            onClick={handleSpeechClick}
+            onDoubleClick={handleSpeechDoubleClick}
+            disabled={!lessonSpeechText}
+            aria-label="朗读本节"
+            title="单击播放/暂停，双击重新开始"
+          >
+            {ttsState === 'loading' ? (
+              <LoaderCircle className="size-4 animate-spin" />
+            ) : ttsState === 'playing' ? (
+              <Square className="size-4" />
+            ) : (
+              <img src={learnReadSectionIcon} alt="" className="size-[18px]" />
+            )}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-9 rounded-xl border-0 bg-transparent text-foreground/78 hover:bg-white/[0.07] hover:text-foreground"
+            onClick={() => void warmCurrentStageSpeech()}
+            disabled={stageWarmState === 'warming' || currentStageStudyNodeIds.length === 0}
+            aria-label="预热本章语音"
+            title="预热本章语音"
+          >
+            {stageWarmState === 'warming' ? (
+              <LoaderCircle className="size-4 animate-spin" />
+            ) : stageWarmState === 'ready' ? (
+              <Sparkles className="size-4" />
+            ) : (
+              <img src={warmStageIcon} alt="" className="size-[18px]" />
+            )}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-9 rounded-xl border-0 bg-transparent text-foreground/78 hover:bg-white/[0.07] hover:text-foreground"
+            onClick={() => void syncObsidian('current')}
+            disabled={obsidianSyncing}
+            aria-label="打开笔记"
+            title="打开笔记"
+          >
+            {obsidianSyncing ? (
+              <LoaderCircle className="size-4 animate-spin" />
+            ) : (
+              <img src={learnOpenNoteIcon} alt="" className="size-[18px]" />
+            )}
+          </Button>
         </div>
-      </Card>
+      </header>
+
+      {currentSession.error ? (
+        <div className="mx-6 mb-2 rounded-xl border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground">
+          {currentSession.error}
+        </div>
+      ) : null}
+
+      {courseVisualMap ? (
+        <CourseVisualMapDialog
+          open={roadmapOpen}
+          onOpenChange={setRoadmapOpen}
+          courseTitle={courseData?.course.title || '课程地图'}
+          chapterCount={courseData?.chapters.length || 0}
+          courseVisualMap={courseVisualMap}
+          coursePackagePath={importedCoursePath}
+        />
+      ) : (
+        <ChapterRoadmapDialog
+          open={roadmapOpen}
+          onOpenChange={setRoadmapOpen}
+          chapter={currentStage}
+          nodeMap={nodeMap}
+          completedNodeIds={effectiveCompletedNodeIds}
+          currentNodeId={currentNodeId}
+          coursePackagePath={importedCoursePath}
+        />
+      )}
+
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-[#171717] px-6 pb-24">
+        <CoachChatTimeline />
+        <CoachComposer
+          progressText=""
+          onGoToNext={() => void goToNextNode()}
+          canGoToNext={canAdvanceToNext && Boolean(nextNodeId)}
+          nextLabel={isCourseCompleted ? '课程已完成' : '下一节'}
+          onAnswerSubmitted={playStandardAnswerIfCached}
+        />
+      </div>
     </section>
   )
 }
