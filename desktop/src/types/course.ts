@@ -1,3 +1,8 @@
+// Learning desk compatibility model.
+// Historical Course/Lesson/quiz/standard-answer field names are kept as an
+// internal study-package adapter for the React/Electron learning runtime. New
+// authoring should describe learning notes, study sections, recall prompts, and
+// review references instead of reviving the old course-making workflow.
 export type LearningStatus = 'teaching' | 'quizzing' | 'completed'
 
 export type CoachMessageRole = 'system' | 'coach' | 'user'
@@ -44,6 +49,7 @@ export type TeacherReadyContent = {
   primary_training_action?: string
   training_focus?: string[]
   teaching_markdown?: string
+  // Compatibility fields rendered as active recall and review reference text.
   quiz_question?: string
   standard_answer?: string
   key_points?: string[]
@@ -176,6 +182,47 @@ export type CourseVisualMap = {
   hotspots?: CourseVisualMapHotspot[]
 }
 
+export type LightLearningMapRoute = {
+  chapter_id: string
+  label: string
+  title: string
+  focus: string
+  risk: string
+  completion_signal: string
+}
+
+export type LightLearningMapNode = {
+  lesson_id: string
+  label: string
+  title: string
+  action: string
+  risk: string
+  signal: string
+  high_density: boolean
+}
+
+export type LightLearningMapEdge = {
+  from: string
+  to: string
+  label: string
+}
+
+export type LightLearningMapChapter = {
+  chapter_id: string
+  label: string
+  title: string
+  focus: string
+  nodes: LightLearningMapNode[]
+  edges: LightLearningMapEdge[]
+}
+
+export type LightLearningMap = {
+  schema_version: 'shijie.light-learning-map.v0.1'
+  course_title: string
+  global_route: LightLearningMapRoute[]
+  chapter_maps: LightLearningMapChapter[]
+}
+
 export type ChapterRoadmapFocusCard = {
   title: string
   bullets: string[]
@@ -226,6 +273,28 @@ export type ChapterRoadmap = {
   open_questions?: ChapterRoadmapOpenQuestion[]
 }
 
+export type PlanDisplayContract = {
+  type?: string
+  title?: string
+  priority?: string
+  why_this_format?: string
+  must_follow_with?: string
+}
+
+export type PlanContract = {
+  density_mode?: 'short_precise' | 'normal' | 'high_density' | 'drill'
+  can_be_short?: boolean
+  must_expand_reason?: string
+  primary_training_action?: string
+  quality_bar?: string[]
+  completion_signals?: string[]
+  required_training_slots?: string[]
+  avoid_training_slots?: string[]
+  required_display_blocks?: PlanDisplayContract[]
+  active_recall_requirements?: string[]
+  standard_answer_requirements?: string[]
+}
+
 export type CourseNode = {
   id: string
   node_type: 'chapter' | 'section' | 'lesson'
@@ -241,6 +310,7 @@ export type CourseNode = {
   assets: AssetRef[]
   gaps: InformationGap[]
   chapter_roadmap?: ChapterRoadmap
+  plan_contract?: PlanContract
 }
 
 export type DependencyEdge = {
@@ -275,11 +345,14 @@ export type CoursePackage = {
     estimated_total_minutes?: number
   }
   course_visual_map?: CourseVisualMap
+  light_learning_map?: LightLearningMap
   chapters: CourseNode[]
   dependency_graph: DependencyEdge[]
   assets: AssetRef[]
   gaps: InformationGap[]
 }
+
+export type StudyPackage = CoursePackage
 
 export type FlatCourseNode = CourseNode & {
   parentId: string | null

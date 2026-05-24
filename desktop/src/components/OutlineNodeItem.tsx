@@ -5,9 +5,12 @@ import { cn } from '@/lib/utils'
 import { useLearningStore } from '@/store'
 
 function getSidebarTitle(title: string) {
-  const [prefix] = title.split(/[：:]/u)
-  const compact = prefix.trim()
-  return compact.length >= 2 ? compact : title
+  const stripped = title
+    .replace(/^第\s*\d+\s*[章节部]\s*[：:、.\-\s]*/u, '')
+    .replace(/^\d+(?:\.\d+)*\s*[、.．:：\-\s]+/u, '')
+    .replace(/^[一二三四五六七八九十百千万]+[、.．:：\-\s]+/u, '')
+    .trim()
+  return stripped || title
 }
 
 export function OutlineNodeItem({

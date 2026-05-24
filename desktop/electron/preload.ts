@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('desktopAPI', {
+  isElectron: true,
   minimize: () => ipcRenderer.invoke('window:minimize'),
   close: () => ipcRenderer.invoke('window:close'),
   toggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
@@ -14,11 +15,10 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   readCoursePackage: (targetPath: string) => ipcRenderer.invoke('course:read', targetPath),
   attachCourseVisualMap: (payload: { targetPath: string; imagePath: string }) => ipcRenderer.invoke('course:attach-visual-map', payload),
   runDistillation: (payload: { video?: string; sourceKind?: 'bilibili' | 'local_media'; mediaPath?: string }) => ipcRenderer.invoke('distill:run', payload),
-  runVideoSummary: (payload: { video?: string; sourceKind?: 'bilibili' | 'local_media'; mediaPath?: string }) => ipcRenderer.invoke('summary:run', payload),
-  listVideoSummaries: () => ipcRenderer.invoke('summary:list'),
-  deleteVideoSummary: (markdownPath: string) => ipcRenderer.invoke('summary:delete', markdownPath),
   listMaterialPackages: () => ipcRenderer.invoke('materials:list'),
   deleteMaterialPackage: (materialPath: string) => ipcRenderer.invoke('materials:delete', materialPath),
+  importKnowledgeBrief: (materialPath: string) => ipcRenderer.invoke('knowledge:importBrief', materialPath),
+  listKnowledgeLibrary: () => ipcRenderer.invoke('knowledge:list'),
   loadLearningLibrary: () => ipcRenderer.invoke('learning:library:load'),
   openLearningRecord: (recordId: string) => ipcRenderer.invoke('learning:library:open', recordId),
   refreshLearningLibraryStructure: () => ipcRenderer.invoke('learning:library:refresh-structure'),
@@ -42,11 +42,7 @@ contextBridge.exposeInMainWorld('desktopAPI', {
       audioTotal?: number
       chunkCompleted?: number
       chunkTotal?: number
-      batchCompleted?: number
-      batchTotal?: number
       resumed?: boolean
-      prefetchReuseChunkRatio?: number
-      prefetchReuseBatchRatio?: number
       outlinePreview?: {
         packageId: string
         title: string
@@ -74,11 +70,7 @@ contextBridge.exposeInMainWorld('desktopAPI', {
         audioTotal?: number
         chunkCompleted?: number
         chunkTotal?: number
-        batchCompleted?: number
-        batchTotal?: number
         resumed?: boolean
-        prefetchReuseChunkRatio?: number
-        prefetchReuseBatchRatio?: number
         outlinePreview?: {
           packageId: string
           title: string

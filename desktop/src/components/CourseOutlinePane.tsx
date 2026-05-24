@@ -15,6 +15,7 @@ import type { WorkspaceView } from '@/components/WorkspacePane'
 type CourseOutlinePaneProps = {
   workspaceView: WorkspaceView
   onSelectView: (view: WorkspaceView) => void
+  onActivateLearningNode: () => void
   sidebarWidth: number
   windowFocused: boolean
 }
@@ -78,7 +79,7 @@ function NavEntry({
   )
 }
 
-export function CourseOutlinePane({ workspaceView, onSelectView, sidebarWidth, windowFocused: _windowFocused }: CourseOutlinePaneProps) {
+export function CourseOutlinePane({ workspaceView, onSelectView, onActivateLearningNode, sidebarWidth, windowFocused: _windowFocused }: CourseOutlinePaneProps) {
   const courseData = useLearningStore((state) => state.courseData)
   const rootNodeIds = useLearningStore((state) => state.rootNodeIds)
   const nodeMap = useLearningStore((state) => state.nodeMap)
@@ -158,7 +159,7 @@ export function CourseOutlinePane({ workspaceView, onSelectView, sidebarWidth, w
           {courseData ? (
             <div className="space-y-0.5">
               {rootNodeIds.map((nodeId) => (
-                <OutlineNodeItem key={nodeId} nodeId={nodeId} onActivateStudyNode={() => onSelectView('learn')} />
+                <OutlineNodeItem key={nodeId} nodeId={nodeId} onActivateStudyNode={onActivateLearningNode} />
               ))}
             </div>
           ) : (

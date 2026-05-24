@@ -1,18 +1,17 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   AudioLines,
   ArchiveRestore,
   Award,
   Cookie,
   Clipboard,
+  Eye,
   FileText,
-  FileUp,
   FileVideo,
   FolderOpen,
   GraduationCap,
   Link2,
   LoaderCircle,
-  Milestone,
   PackageOpen,
   Play,
   RefreshCcw,
@@ -22,6 +21,8 @@ import {
   Trash2,
 } from 'lucide-react'
 import { CoachPane } from '@/components/CoachPane'
+import { KnowledgeBriefDialog } from '@/components/KnowledgeBriefDialog'
+import { PromptPreviewDialog, type PromptPreviewModule } from '@/components/PromptPreviewDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -34,6 +35,7 @@ import {
   DEFAULT_RESOURCE_MODE,
   DEFAULT_TRANSCRIPTION_PROVIDER,
 } from '@/lib/coachPreferences'
+import { buildLearningNotesStudyPackage } from '@/lib/knowledgeBriefCourse'
 import { cn } from '@/lib/utils'
 import { useLearningStore } from '@/store'
 import type { LearningRecordSummary } from '@/types/course'
@@ -44,14 +46,13 @@ import settingsBilibiliIcon from '@/assets/settings-bilibili.svg'
 import settingsObsidianIcon from '@/assets/settings-obsidian.svg'
 import settingsTranscriptionIcon from '@/assets/settings-transcription.svg'
 import settingsTtsIcon from '@/assets/settings-tts.svg'
-import settingsVideoSummaryIcon from '@/assets/settings-video-summary.svg'
 import videoIcon from '@/assets/video-icon.svg'
 import mimoPreviewBaihua from '@/assets/mimo-voice-previews/baihua.wav'
 import mimoPreviewBingtang from '@/assets/mimo-voice-previews/bingtang.wav'
 import mimoPreviewMoli from '@/assets/mimo-voice-previews/moli.wav'
 import mimoPreviewSuda from '@/assets/mimo-voice-previews/suda.wav'
 
-export type WorkspaceView = 'learn' | 'workbench' | 'archive' | 'settings'
+export type WorkspaceView = 'learn' | 'workbench' | 'knowledge' | 'archive' | 'settings'
 
 type RuntimeSettingsFallback = Awaited<ReturnType<typeof window.desktopAPI.loadSettings>> | null
 
@@ -59,7 +60,10 @@ type WorkspacePaneProps = {
   view: WorkspaceView
   runtimeSettings: RuntimeSettingsFallback
   onRuntimeSettingsSaved: (next: Awaited<ReturnType<typeof window.desktopAPI.loadSettings>>) => void
+  showLearningHome: boolean
   onRequestLearn: () => void
+  onRequestWorkbench: () => void
+  onRequestArchive: () => void
   windowFocused: boolean
 }
 
@@ -67,19 +71,25 @@ type LibrarySortMode = 'recent' | 'progress' | 'title'
 type ArchiveShelfFilter = 'all' | 'recent' | 'coding' | 'medical' | 'highlighted'
 type MaterialSourceMode = 'bilibili' | 'local_media'
 type MaterialInventory = Awaited<ReturnType<typeof window.desktopAPI.listMaterialPackages>>
-type VideoSummaryResult = Awaited<ReturnType<typeof window.desktopAPI.runVideoSummary>>
-type VideoSummaryInventory = Awaited<ReturnType<typeof window.desktopAPI.listVideoSummaries>>
+type MaterialInventoryRecord = MaterialInventory['records'][number]
+type KnowledgeInventory = Awaited<ReturnType<typeof window.desktopAPI.listKnowledgeLibrary>>
+type KnowledgeInventoryRecord = KnowledgeInventory['records'][number]
+type MarkdownDocumentKind = 'brief' | 'chapter_map'
+type PromptPreviewSource = {
+  path: string
+  title: string
+  sourceId?: string
+  updatedAt?: number
+  workflowStageLabel?: string
+}
 
 const DISTILL_STAGE_ORDER = [
   { id: 'metadata', label: '解析视频' },
+  { id: 'metadata_ready', label: '信息就绪' },
   { id: 'subtitle', label: '字幕准备' },
   { id: 'audio', label: '音频补全' },
-  { id: 'chunking', label: '文本切片' },
-  { id: 'chunk_distilling', label: '整理分片' },
-  { id: 'batch_reducing', label: '批次归并' },
-  { id: 'synthesizing', label: '写入材料' },
-  { id: 'cache', label: '缓存直出' },
-  { id: 'injecting', label: '写入完成' },
+  { id: 'chunking', label: '材料切片' },
+  { id: 'material_ready', label: '材料就绪' },
   { id: 'complete', label: '完成' },
 ] as const
 
@@ -90,6 +100,182 @@ const MIMO_TTS_PRESET_VOICES = [
   { id: '白桦', previewUrl: mimoPreviewBaihua },
 ] as const
 
+function joinMaterialPath(root: string, ...parts: string[]) {
+  return [root.replace(/[\\/]+$/, ''), ...parts].filter(Boolean).join('\\')
+}
+
+function buildPromptPreviewModules(materialPath: string): PromptPreviewModule[] {
+  const authoring = (...parts: string[]) => joinMaterialPath(materialPath, 'authoring', ...parts)
+  const schemas = (...parts: string[]) => joinMaterialPath(materialPath, 'schemas', ...parts)
+  const draft = (...parts: string[]) => joinMaterialPath(materialPath, 'content_draft', ...parts)
+
+  return [
+    {
+      id: 'summary-workflow',
+      title: '学习笔记工作流',
+      summary: '主生产窗口使用的提示词、作者手册和计划 schema。',
+      files: [
+        {
+          id: 'content-authoring',
+          label: '学习笔记手册',
+          path: authoring('content-synthesis-authoring.md'),
+          description: '约束学习笔记的内容边界、重组方式和质量线。',
+        },
+        {
+          id: 'codex-goal',
+          label: 'Codex Goal v8',
+          path: authoring('codex-goal-content-synthesis-v8.md'),
+          description: '规定 Codex 如何先搭知识树，再做覆盖映射、分支材料包、分章深写和复查。',
+        },
+        {
+          id: 'synthesis-plan-schema',
+          label: '笔记计划 Schema',
+          path: schemas('content_synthesis_plan.schema.json'),
+          description: 'synthesis_plan.json 必须符合的结构合同。',
+        },
+      ],
+    },
+    {
+      id: 'summary-artifacts',
+      title: '学习笔记产物',
+      summary: 'Codex 生成的计划、学习笔记、章节思维导图和审计报告。',
+      files: [
+        {
+          id: 'synthesis-plan',
+          label: '笔记计划',
+          path: draft('synthesis_plan.json'),
+          description: 'Codex 的工作计划，不是最终正文。',
+        },
+        {
+          id: 'knowledge-tree',
+          label: '知识树',
+          path: draft('work', 'knowledge_tree.json'),
+          description: '主干、分支、子节点和跨章连接的结构锚点。',
+        },
+        {
+          id: 'tree-outline',
+          label: '树状大纲',
+          path: draft('work', 'tree_outline.md'),
+          description: '面向人读的章节树和跨节点关系说明。',
+        },
+        {
+          id: 'structure-review',
+          label: '结构复查',
+          path: draft('work', 'structure_review.md'),
+          description: '检查上层过粗、下层过碎、导图提纲化等结构问题。',
+        },
+        {
+          id: 'editorial-contract',
+          label: '知识树合同',
+          path: draft('work', 'editorial_contract.md'),
+          description: '约定章节深度、具体情境密度和补全边界。',
+        },
+        {
+          id: 'block-digest',
+          label: '逐块消化',
+          path: draft('work', 'block_digest', 'block_001.md'),
+          description: '逐 block 盘点考点、例子、术语、噪声和处理建议；这里预览第一块。',
+        },
+        {
+          id: 'topic-inventory',
+          label: '考点清单',
+          path: draft('work', 'topic_inventory.json'),
+          description: '把全部 block digest 合成可处理的 topic pool。',
+        },
+        {
+          id: 'evidence-ledger',
+          label: '证据账本',
+          path: draft('work', 'evidence_ledger.jsonl'),
+          description: '保留可教学的原材料细节、例子、边界和表达重心。',
+        },
+        {
+          id: 'coverage-matrix',
+          label: '覆盖矩阵',
+          path: draft('work', 'coverage_matrix.json'),
+          description: '说明每个高价值 topic 的状态和下一步去向；覆盖不等于正文完成。',
+        },
+        {
+          id: 'block-reread-ledger',
+          label: '回读账本',
+          path: draft('work', 'block_reread_ledger.jsonl'),
+          description: '记录每章实际回读了哪些 blocks、提取了什么素材。',
+        },
+        {
+          id: 'section-dossier',
+          label: '章节材料包',
+          path: draft('work', 'section_dossiers', 'section_001.md'),
+          description: '深写前的章节素材包；这里预览第一章。',
+        },
+        {
+          id: 'thinness-review',
+          label: '薄度复查',
+          path: draft('work', 'thinness_review.md'),
+          description: '判断章节是否只是提纲、是否需要回到 dossier 或 draft 加厚。',
+        },
+        {
+          id: 'specificity-review',
+          label: '具体性复查',
+          path: draft('work', 'specificity_review.md'),
+          description: '检查正文是否过度抽象、偏薄或失去原材料味道。',
+        },
+        {
+          id: 'editorial-review',
+          label: '编辑复查',
+          path: draft('work', 'editorial_review.md'),
+          description: '初稿后的二次增厚和风险复查记录。',
+        },
+        {
+          id: 'concept-graph',
+          label: '概念关系图',
+          path: draft('work', 'concept_graph.json'),
+          description: '章节思维导图的概念节点、依赖关系和易混关系。',
+        },
+        {
+          id: 'knowledge-brief',
+          label: '学习笔记',
+          path: draft('learning_notes.md'),
+          description: '进入学习台的主产物。',
+        },
+        {
+          id: 'chapter-map',
+          label: '章节思维导图',
+          path: draft('chapter_mindmap.md'),
+          description: '帮助用户快速看懂知识树主线、分支和回看入口。',
+        },
+        {
+          id: 'readonly-audit',
+          label: '只读审计',
+          path: draft('review_exports', 'latest-readonly-audit.md'),
+          description: '第二个窗口写入的审计报告。',
+        },
+      ],
+    },
+    {
+      id: 'readonly-audit',
+      title: '只读审计',
+      summary: '第二个 Codex 窗口只检查，不修改，降低黑箱失败风险。',
+      files: [
+        {
+          id: 'audit-start',
+          label: '只读审计入口',
+          path: authoring('03_readonly_synthesis_audit.md'),
+          description: '实际复制到第二个只读 Codex 窗口的审计提示词。',
+        },
+        {
+          id: 'audit-guide',
+          label: '只读审计指南',
+          path: authoring('readonly-synthesis-audit.md'),
+          description: '学习笔记只读审计的检查重点。',
+        },
+      ],
+    },
+  ]
+}
+
+function identityMarkdownContent(content: string) {
+  return content
+}
+
 function resolveDistillStagePosition(stage?: string) {
   const index = DISTILL_STAGE_ORDER.findIndex((item) => item.id === stage)
   return index >= 0 ? index : 0
@@ -97,24 +283,12 @@ function resolveDistillStagePosition(stage?: string) {
 
 function formatCacheHint(cacheHint?: string | null) {
   switch (cacheHint) {
-    case 'course_package':
-      return '课程包缓存'
-    case 'final_course_package':
-      return '最终课包缓存'
     case 'subtitle_bundle':
       return '字幕缓存'
     case 'audio_page_cache':
       return '分P音频缓存'
     case 'audio_transcript_cache':
       return '整段转写缓存'
-    case 'chunk_shard':
-      return '分片缓存'
-    case 'batch_shard':
-      return '批次缓存'
-    case 'chunk_prefetch':
-      return '后台预热'
-    case 'local_fast_synth':
-      return '本地快速合成'
     case 'material_package':
       return '原材料包'
     default:
@@ -142,11 +316,6 @@ function buildInitialDraft(runtimeSettings: RuntimeSettingsFallback) {
     mimo_tts_model: runtimeSettings?.mimo_tts_model || 'mimo-v2.5-tts',
     mimo_tts_voice_id: runtimeSettings?.mimo_tts_voice_id || '茉莉',
     mimo_tts_style_prompt: runtimeSettings?.mimo_tts_style_prompt || '自然 清晰 语速适中',
-    video_summary_provider: runtimeSettings?.video_summary_provider || 'mimo',
-    video_summary_api_key: runtimeSettings?.video_summary_api_key || '',
-    video_summary_base_url: runtimeSettings?.video_summary_base_url || 'https://token-plan-cn.xiaomimimo.com/v1/chat/completions',
-    video_summary_model: runtimeSettings?.video_summary_model || (runtimeSettings?.video_summary_provider === 'mimo' ? 'mimo-v2.5-pro' : 'MiniMax-M2'),
-    video_summary_output_dir: runtimeSettings?.video_summary_output_dir || '',
     transcription_provider: runtimeSettings?.transcription_provider || DEFAULT_TRANSCRIPTION_PROVIDER,
     local_transcription_root: runtimeSettings?.local_transcription_root || '',
     local_transcription_python: runtimeSettings?.local_transcription_python || '',
@@ -181,20 +350,6 @@ function formatCompactNumber(value: number) {
   return String(Math.round(value))
 }
 
-function getParentPath(targetPath: string) {
-  return targetPath.replace(/[\\/][^\\/]*$/u, '')
-}
-
-function getVideoSummaryProviderLabel(provider: string) {
-  return provider === 'mimo' ? 'MiMo' : provider === 'minimax' ? 'MiniMax' : '本地'
-}
-
-function getVideoSummaryProviderClass(provider: string) {
-  if (provider === 'mimo') return 'border-violet-300/20 bg-violet-400/[0.10] text-violet-100'
-  if (provider === 'minimax') return 'border-sky-300/20 bg-sky-400/[0.10] text-sky-100'
-  return 'border-white/7 bg-white/[0.02] text-muted-foreground'
-}
-
 function readCourseVisualMapFromText(text: string) {
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>
@@ -210,6 +365,13 @@ function buildRecordSearchText(record: LearningRecordSummary) {
   return [record.title, record.sourceTitle, record.sourceId, record.packageId, record.currentNodeTitle ?? '']
     .join(' ')
     .toLowerCase()
+}
+
+function stripKnowledgeBriefMetadata(content: string) {
+  return content
+    .replace(/^<!--\s*shijie:learning-notes[\s\S]*?-->\s*/u, '')
+    .replace(/^<!--\s*shijie:knowledge-brief[\s\S]*?-->\s*/u, '')
+    .trim()
 }
 
 function inferRecordDomain(record: LearningRecordSummary) {
@@ -298,6 +460,9 @@ function getMilestoneShortLabel(kind: LearningRecordSummary['recentMilestones'][
   }
 }
 
+const WORKSPACE_CONTENT_PADDING_X = 'px-16'
+const WORKSPACE_CONTENT_MAX_WIDTH = 'max-w-[1120px]'
+
 function WorkspaceShell({
   eyebrow,
   title,
@@ -316,15 +481,17 @@ function WorkspaceShell({
   return (
     <section className="flex min-h-0 flex-1">
       <Card className={cn('work-surface relative flex min-h-0 w-full flex-col overflow-hidden rounded-l-[18px] rounded-r-none border border-r-0 border-white/[0.065] bg-[#101010] shadow-none transition-colors duration-200', !windowFocused && 'bg-[#101010]')}>
-        <div className="relative mx-auto flex w-full max-w-5xl items-start justify-between gap-4 px-16 pb-7 pt-14">
-          <div className="space-y-2">
-            {eyebrow ? <div className="sr-only">{eyebrow}</div> : null}
-            <h2 className="text-[26px] font-semibold tracking-tight text-foreground">{title}</h2>
-            {description ? <p className="max-w-3xl text-[13px] leading-6 text-muted-foreground">{description}</p> : null}
+        <div className={cn('relative mx-auto flex h-full w-full flex-col', WORKSPACE_CONTENT_MAX_WIDTH)}>
+          <div className={cn('relative flex w-full items-start justify-between gap-4 pb-7 pt-14', WORKSPACE_CONTENT_PADDING_X)}>
+            <div className="space-y-2">
+              {eyebrow ? <div className="sr-only">{eyebrow}</div> : null}
+              <h2 className="text-[26px] font-semibold tracking-tight text-foreground">{title}</h2>
+              {description ? <p className="max-w-3xl text-[13px] leading-6 text-muted-foreground">{description}</p> : null}
+            </div>
+            {actions ? <div className="shrink-0">{actions}</div> : null}
           </div>
-          {actions ? <div className="shrink-0">{actions}</div> : null}
+          <div className={cn('subtle-scrollbar relative min-h-0 flex-1 overflow-y-auto pb-12', WORKSPACE_CONTENT_PADDING_X)}>{children}</div>
         </div>
-        <div className="subtle-scrollbar relative min-h-0 flex-1 overflow-y-auto px-16 pb-12">{children}</div>
       </Card>
     </section>
   )
@@ -596,7 +763,10 @@ export function WorkspacePane({
   view,
   runtimeSettings,
   onRuntimeSettingsSaved,
+  showLearningHome,
   onRequestLearn,
+  onRequestWorkbench,
+  onRequestArchive,
   windowFocused,
 }: WorkspacePaneProps) {
   const [settingsDraft, setSettingsDraft] = useState(() => buildInitialDraft(runtimeSettings))
@@ -611,12 +781,27 @@ export function WorkspacePane({
   const [libraryStructureRefreshing, setLibraryStructureRefreshing] = useState(false)
   const [materialSourceMode, setMaterialSourceMode] = useState<MaterialSourceMode>('bilibili')
   const [materialInventory, setMaterialInventory] = useState<MaterialInventory | null>(null)
-  const [summarySourceMode, setSummarySourceMode] = useState<MaterialSourceMode>('bilibili')
-  const [summaryInput, setSummaryInput] = useState('')
-  const [summaryRunning, setSummaryRunning] = useState(false)
-  const [summaryResult, setSummaryResult] = useState<VideoSummaryResult | null>(null)
-  const [summaryInventory, setSummaryInventory] = useState<VideoSummaryInventory | null>(null)
-  const [summaryError, setSummaryError] = useState('')
+  const [knowledgeInventory, setKnowledgeInventory] = useState<KnowledgeInventory | null>(null)
+  const [knowledgeQuery, setKnowledgeQuery] = useState('')
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false)
+  const [knowledgeError, setKnowledgeError] = useState('')
+  const [promptPreviewOpen, setPromptPreviewOpen] = useState(false)
+  const [promptPreviewModuleId, setPromptPreviewModuleId] = useState<string | null>(null)
+  const [promptPreviewFileId, setPromptPreviewFileId] = useState<string | null>(null)
+  const [promptPreviewContent, setPromptPreviewContent] = useState('')
+  const [promptPreviewLoading, setPromptPreviewLoading] = useState(false)
+  const [promptPreviewError, setPromptPreviewError] = useState('')
+  const promptPreviewCacheRef = useRef<Record<string, string>>({})
+  const [knowledgeBriefOpen, setKnowledgeBriefOpen] = useState(false)
+  const [knowledgeBriefTitle, setKnowledgeBriefTitle] = useState('')
+  const [knowledgeBriefPath, setKnowledgeBriefPath] = useState('')
+  const [knowledgeBriefContent, setKnowledgeBriefContent] = useState('')
+  const [knowledgeBriefLoading, setKnowledgeBriefLoading] = useState(false)
+  const [knowledgeBriefError, setKnowledgeBriefError] = useState('')
+  const [knowledgeBriefKind, setKnowledgeBriefKind] = useState<MarkdownDocumentKind>('brief')
+  const [settingsStatus, setSettingsStatus] = useState<SettingsStatus | null>(null)
+  const [settingsStatusLoading, setSettingsStatusLoading] = useState(false)
+  const [settingsStatusError, setSettingsStatusError] = useState('')
 
   const courseData = useLearningStore((state) => state.courseData)
   const videoInput = useLearningStore((state) => state.videoInput)
@@ -638,6 +823,20 @@ export function WorkspacePane({
   const restoreLearningRecord = useLearningStore((state) => state.restoreLearningRecord)
   const setRuntimeSettings = useLearningStore((state) => state.setRuntimeSettings)
   const pushToast = useLearningStore((state) => state.pushToast)
+
+  const refreshSettingsStatus = useCallback(async () => {
+    setSettingsStatusLoading(true)
+    setSettingsStatusError('')
+    try {
+      const result = await window.desktopAPI.loadSettingsStatus()
+      setSettingsStatus(result)
+    } catch (error) {
+      setSettingsStatusError(error instanceof Error ? error.message : '无法读取账号状态。')
+      setSettingsStatus(null)
+    } finally {
+      setSettingsStatusLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     const nextDraft = buildInitialDraft(runtimeSettings)
@@ -670,6 +869,7 @@ export function WorkspacePane({
           setRuntimeSettings(next)
           onRuntimeSettingsSaved(next)
           setSettingsError('')
+          void refreshSettingsStatus()
         })
         .catch((error) => {
           setSettingsError(error instanceof Error ? error.message : '自动保存设置失败')
@@ -682,7 +882,7 @@ export function WorkspacePane({
         settingsSaveTimerRef.current = null
       }
     }
-  }, [onRuntimeSettingsSaved, setRuntimeSettings, settingsDraft, view])
+  }, [onRuntimeSettingsSaved, refreshSettingsStatus, setRuntimeSettings, settingsDraft, view])
 
   useEffect(() => {
     return () => {
@@ -694,7 +894,7 @@ export function WorkspacePane({
   }, [])
 
   useEffect(() => {
-    if (view !== 'workbench') return
+    if (view !== 'workbench' && view !== 'settings') return
     let alive = true
     window.desktopAPI.listMaterialPackages()
       .then((result) => {
@@ -709,19 +909,32 @@ export function WorkspacePane({
   }, [runtimeSettings?.output_dir, view, lastMaterialResult?.materialPath])
 
   useEffect(() => {
-    if (view !== 'workbench') return
+    if (view !== 'settings') return
+    void refreshSettingsStatus()
+  }, [refreshSettingsStatus, view])
+
+  useEffect(() => {
+    if (view !== 'knowledge') return
     let alive = true
-    window.desktopAPI.listVideoSummaries()
+    setKnowledgeLoading(true)
+    setKnowledgeError('')
+    window.desktopAPI.listKnowledgeLibrary()
       .then((result) => {
-        if (alive) setSummaryInventory(result)
+        if (!alive) return
+        setKnowledgeInventory(result)
       })
-      .catch(() => {
-        if (alive) setSummaryInventory(null)
+      .catch((error) => {
+        if (!alive) return
+        setKnowledgeInventory(null)
+        setKnowledgeError(error instanceof Error ? error.message : '无法读取知识库。')
+      })
+      .finally(() => {
+        if (alive) setKnowledgeLoading(false)
       })
     return () => {
       alive = false
     }
-  }, [runtimeSettings?.output_dir, runtimeSettings?.video_summary_output_dir, summaryResult?.markdownPath, view])
+  }, [runtimeSettings?.output_dir, view])
 
   const filteredLibraryRecords = useMemo(() => {
     const normalizedQuery = libraryQuery.trim().toLowerCase()
@@ -828,7 +1041,7 @@ export function WorkspacePane({
         stageCount: record.stageCompletedCount,
         badgeCount: record.achievementBadges.length,
         domain: inferRecordDomain(record),
-        milestoneTitle: record.recentMilestones[0]?.title ?? '课程已经完整归档',
+        milestoneTitle: record.recentMilestones[0]?.title ?? '学习档案已经完整归档',
       }))
   }, [archivedLibraryRecords])
   const archiveActivityPeak = useMemo(
@@ -843,6 +1056,23 @@ export function WorkspacePane({
     () => activeLibraryRecords.filter((record) => record.id !== featuredActiveRecord?.id),
     [activeLibraryRecords, featuredActiveRecord?.id],
   )
+  const filteredKnowledgeRecords = useMemo(() => {
+    const normalizedQuery = knowledgeQuery.trim().toLowerCase()
+    const records = knowledgeInventory?.records ?? []
+    const filtered = normalizedQuery
+      ? records.filter((record) => record.searchText.includes(normalizedQuery))
+      : records
+
+    return [...filtered].sort((left, right) => right.updatedAt - left.updatedAt)
+  }, [knowledgeInventory?.records, knowledgeQuery])
+  const knowledgeTotalTextLength = useMemo(
+    () => (knowledgeInventory?.records ?? []).reduce((sum, record) => sum + record.textLength, 0),
+    [knowledgeInventory?.records],
+  )
+  const knowledgeRootDir = useMemo(
+    () => knowledgeInventory?.rootDir || (runtimeSettings?.output_dir ? `${runtimeSettings.output_dir}\\knowledge` : '请先在设置中配置输出目录'),
+    [knowledgeInventory?.rootDir, runtimeSettings?.output_dir],
+  )
   const materialRootDir = useMemo(
     () => materialInventory?.rootDir || (runtimeSettings?.output_dir ? `${runtimeSettings.output_dir}\\materials` : '请先在设置中配置输出目录'),
     [materialInventory?.rootDir, runtimeSettings?.output_dir],
@@ -851,35 +1081,95 @@ export function WorkspacePane({
     () => materialInventory?.coursePackageRootDir || (runtimeSettings?.output_dir ? `${runtimeSettings.output_dir}\\courses` : '请先在设置中配置输出目录'),
     [materialInventory?.coursePackageRootDir, runtimeSettings?.output_dir],
   )
-  const codexPromptText = useMemo(() => {
-    if (!lastMaterialResult?.materialPath) return ''
-    const title = lastMaterialResult.title || '这门课程'
-    return [
-      '请担任“视界专注”的课程总设计师。',
-      '',
-      `本次课程名称是《${title}》。请把本对话视为《${title}》的课程设计工作区；如果系统自动生成对话标题，请优先围绕这个课程名命名。`,
-      '',
-      '我已经上传 `gpt_course_design_workspace.zip`。请读取压缩包内容，不要尝试读取我电脑上的本地路径。',
-      '',
-      '请先执行压缩包中的：',
-      '- `gpt_designer/START_GPT_DESIGNER.md`',
-      '- `gpt_designer/chatgpt-course-designer-v1.md`',
-      '- `schemas/course_blueprint.schema.json`',
-      '',
-      '你的目标不是生成最终课程正文，而是完整理解视频/字幕/转写材料，设计一份可交给 Codex 执行的 course_blueprint.json。',
-      '请先填写 `source_genre`、`learning_intent` 和 `course_design_mode`，判断这门课应是知识地图、概念训练、语言/语法训练、操作训练、工具工作流、案例推理、考试训练、观点理解还是混合课。',
-      '请先建立 `topic_inventory` 候选主题池，再决定章节和 lesson；长材料、跨主题材料、访谈/播客/圆桌/纪录片不要只列最终进入课程的主题。',
-      '整门课还要提供一个顶层 `course_visual_map`：它是整门课的全局学习地图提示词，不是章节图集合。`status` 先用 `planned`，必须提供中文 `alt` 和高质量 `prompt`，用于后续生成一张 16:9 的整课视觉地图。它要强调章节主线、能力成长和关键转折，少文字、强结构，不要画软件按钮、进度条或信息面板。',
-      '每章都要设计 `chapter_roadmap`，它用于软件顶部的章节地图 fallback，不是正文：请用短节点、箭头关系和 `map_label/action_tag/risk_tag/output_tag` 串起本章小节，并加入 `visual_asset`。`visual_asset.status` 先用 `planned`，必须提供中文 `alt` 和可用于生成章节学习路线图图片的 `prompt`；图片 prompt 不是封面图，也不是大段文字思维导图。',
-      '每节课尽量填写 `primary_training_action` 和 `training_policy`，说明本节训练识别、解析、改错、产出、操作、配置、排错、诊断、选择、论证还是反思；`must_include` 只放 2-3 个核心训练槽位，不要所有 lesson 复用同一套结构。',
-      '蓝图中必须包含 `design_review`：请列出蓝图强项、生成风险、高密度 lesson、被否定的备选结构、需要核验的事实，以及当前/未来软件最需要的展示块。',
-      '最终请生成一个可下载文件 `course_blueprint.json`，内容是符合 `schemas/course_blueprint.schema.json` 的 JSON 对象。不要把完整 JSON 长文本直接贴在对话正文里；如果当前环境不能生成文件，再分段输出 JSON。',
-    ].join('\n')
-  }, [lastMaterialResult?.materialPath, lastMaterialResult?.title])
-  const expectedFinalCoursePath = useMemo(
-    () => lastMaterialResult?.materialPath ? `${lastMaterialResult.materialPath}\\course_draft\\final.course-package.json` : '',
+  const sortedMaterialRecords = useMemo<MaterialInventoryRecord[]>(() => {
+    return [...(materialInventory?.records ?? [])].sort((left, right) => right.updatedAt - left.updatedAt)
+  }, [materialInventory?.records])
+  const promptPreviewSource = useMemo<PromptPreviewSource | null>(() => {
+    if (lastMaterialResult?.materialPath) {
+      return {
+        path: lastMaterialResult.materialPath,
+        title: lastMaterialResult.title || '最新原材料包',
+        sourceId: lastMaterialResult.bvid,
+        workflowStageLabel: '刚生成',
+      }
+    }
+
+    const fallbackRecord = sortedMaterialRecords[0]
+    if (!fallbackRecord) return null
+
+    return {
+      path: fallbackRecord.path,
+      title: fallbackRecord.title,
+      sourceId: fallbackRecord.sourceId,
+      updatedAt: fallbackRecord.updatedAt,
+      workflowStageLabel: fallbackRecord.workflowStageLabel,
+    }
+  }, [
+    lastMaterialResult?.bvid,
+    lastMaterialResult?.materialPath,
+    lastMaterialResult?.title,
+    sortedMaterialRecords,
+  ])
+  const promptPreviewModules = useMemo(
+    () => (promptPreviewSource ? buildPromptPreviewModules(promptPreviewSource.path) : []),
+    [promptPreviewSource],
+  )
+  const selectedPromptPreviewModule = useMemo(() => {
+    if (!promptPreviewModules.length) return null
+    return promptPreviewModules.find((module) => module.id === promptPreviewModuleId) ?? promptPreviewModules[0]
+  }, [promptPreviewModuleId, promptPreviewModules])
+  const selectedPromptPreviewFile = useMemo(() => {
+    if (!selectedPromptPreviewModule) return null
+    return selectedPromptPreviewModule.files.find((file) => file.id === promptPreviewFileId)
+      ?? selectedPromptPreviewModule.files[0]
+      ?? null
+  }, [promptPreviewFileId, selectedPromptPreviewModule])
+  const expectedKnowledgeBriefPath = useMemo(
+    () => lastMaterialResult?.materialPath ? `${lastMaterialResult.materialPath}\\content_draft\\learning_notes.md` : '',
     [lastMaterialResult?.materialPath],
   )
+  const knowledgeBriefDialogTitle = knowledgeBriefKind === 'chapter_map' ? '章节思维导图' : '学习笔记'
+  const knowledgeBriefOutlineLabel = knowledgeBriefKind === 'chapter_map' ? '思维导图目录' : '目录'
+  const knowledgeBriefSearchPlaceholder = knowledgeBriefKind === 'chapter_map' ? '搜索思维导图中的关键词' : '搜索正文中的关键词'
+  const knowledgeBriefHeadingIdPrefix = knowledgeBriefKind === 'chapter_map' ? 'chapter-map' : 'knowledge-brief'
+  const knowledgeBriefContentTransform = knowledgeBriefKind === 'chapter_map' ? identityMarkdownContent : undefined
+  const runtimeModeLabel = window.desktopAPI.isElectron ? '原生桌面端' : '浏览器预览'
+
+  useEffect(() => {
+    if (!promptPreviewOpen || !selectedPromptPreviewFile) return
+
+    const targetPath = selectedPromptPreviewFile.path
+    const cached = promptPreviewCacheRef.current[targetPath]
+    if (cached !== undefined) {
+      setPromptPreviewContent(cached)
+      setPromptPreviewError('')
+      setPromptPreviewLoading(false)
+      return
+    }
+
+    let alive = true
+    setPromptPreviewContent('')
+    setPromptPreviewError('')
+    setPromptPreviewLoading(true)
+
+    window.desktopAPI.readTextFile(targetPath)
+      .then((text) => {
+        if (!alive) return
+        promptPreviewCacheRef.current[targetPath] = text
+        setPromptPreviewContent(text)
+      })
+      .catch((error) => {
+        if (!alive) return
+        setPromptPreviewError(error instanceof Error ? error.message : '读取提示词文件失败')
+      })
+      .finally(() => {
+        if (alive) setPromptPreviewLoading(false)
+      })
+
+    return () => {
+      alive = false
+    }
+  }, [promptPreviewOpen, selectedPromptPreviewFile])
 
   const currentDistillStageIndex = useMemo(
     () => resolveDistillStagePosition(distillProgressSnapshot?.stage),
@@ -914,19 +1204,19 @@ export function WorkspacePane({
 
       if (result.recordUpdates || result.packageUpdates) {
         pushToast(
-          '旧课结构已刷新',
-          `已更新 ${result.recordUpdates} 份学习档案，触达 ${result.packageUpdates} 个课包文件。`,
+          '学习档案结构已刷新',
+          `已更新 ${result.recordUpdates} 份学习档案，触达 ${result.packageUpdates} 个学习包文件。`,
           'success',
         )
       } else {
         pushToast(
           '结构已是最新',
-          result.scannedPackages > 0 ? `已检查 ${result.scannedPackages} 个现成课包，没有发现需要升级的旧结构。` : '当前学习档案和课包已经是新的主线结构。',
+          result.scannedPackages > 0 ? `已检查 ${result.scannedPackages} 个现成学习包，没有发现需要升级的旧结构。` : '当前学习档案和学习包已经是新的主线结构。',
           'info',
         )
       }
     } catch (error) {
-      pushToast('刷新失败', error instanceof Error ? error.message : '批量刷新旧课结构失败。', 'error')
+      pushToast('刷新失败', error instanceof Error ? error.message : '批量刷新学习档案结构失败。', 'error')
     } finally {
       setLibraryStructureRefreshing(false)
     }
@@ -944,59 +1234,15 @@ export function WorkspacePane({
     }
   }
 
-  const handleRunVideoSummary = async () => {
-    const input = (summaryInput || videoInput).trim()
-    if (!input) {
-      setSummaryError(summarySourceMode === 'local_media' ? '请先选择本地音视频文件。' : '请先填写 B 站视频链接或 BV 号。')
-      return
-    }
-    setSummaryRunning(true)
-    setSummaryError('')
-    setSummaryResult(null)
-    try {
-      const result = await window.desktopAPI.runVideoSummary({
-        video: input,
-        sourceKind: summarySourceMode,
-        mediaPath: summarySourceMode === 'local_media' ? input : undefined,
-      })
-      setSummaryResult(result)
-      setSummaryInput(input)
-      try {
-        setSummaryInventory(await window.desktopAPI.listVideoSummaries())
-      } catch {
-        // The newly generated result is already visible above the record list.
-      }
-      pushToast('视频总结已生成', result.title, 'success')
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      setSummaryError(message)
-      pushToast('视频总结失败', message, 'error')
-    } finally {
-      setSummaryRunning(false)
-    }
-  }
-
   const handleDeleteMaterialPackage = async (record: MaterialInventory['records'][number]) => {
-    const shouldDelete = globalThis.confirm(`确定删除《${record.title}》的原材料包和关联课包吗？`)
+    const shouldDelete = globalThis.confirm(`确定删除《${record.title}》的原材料包和关联学习包吗？`)
     if (!shouldDelete) return
     try {
       await window.desktopAPI.deleteMaterialPackage(record.path)
       setMaterialInventory(await window.desktopAPI.listMaterialPackages())
-      pushToast('制作记录已删除', record.title, 'success')
+      pushToast('整理记录已删除', record.title, 'success')
     } catch (error) {
-      pushToast('删除失败', error instanceof Error ? error.message : '无法删除这条制作记录。', 'error')
-    }
-  }
-
-  const handleDeleteVideoSummary = async (record: VideoSummaryInventory['records'][number]) => {
-    const shouldDelete = globalThis.confirm(`确定删除《${record.title}》的视频总结和临时材料吗？`)
-    if (!shouldDelete) return
-    try {
-      await window.desktopAPI.deleteVideoSummary(record.path)
-      setSummaryInventory(await window.desktopAPI.listVideoSummaries())
-      pushToast('视频总结已删除', record.title, 'success')
-    } catch (error) {
-      pushToast('删除失败', error instanceof Error ? error.message : '无法删除这条视频总结。', 'error')
+      pushToast('删除失败', error instanceof Error ? error.message : '无法删除这条整理记录。', 'error')
     }
   }
 
@@ -1008,42 +1254,144 @@ export function WorkspacePane({
     pushToast('已选择本地文件', result.name, 'success')
   }
 
-  const handlePickSummaryMedia = async () => {
-    const result = await window.desktopAPI.pickMediaFile()
-    if (!result) return
-    setSummarySourceMode('local_media')
-    setSummaryInput(result.path)
-    pushToast('已选择本地文件', result.name, 'success')
-  }
-
-  const handlePickVideoSummaryOutputDir = async () => {
-    const targetPath = await window.desktopAPI.pickDirectory()
-    if (!targetPath) return
-    setSettingsDraft((current) => ({ ...current, video_summary_output_dir: targetPath }))
-  }
-
-  const handleCopyCodexPrompt = async () => {
-    if (!codexPromptText) return
+  const handleRefreshPromptPreviewSource = async () => {
     try {
-      await navigator.clipboard.writeText(codexPromptText)
-      pushToast('GPT 设计提示已复制', '新开 ChatGPT 对话后上传工作包并粘贴即可。', 'success')
-    } catch {
-      pushToast('复制失败', '可以从原材料包里的 01_copy_to_chatgpt.md 手动复制。', 'error')
+      promptPreviewCacheRef.current = {}
+      const result = await window.desktopAPI.listMaterialPackages()
+      setMaterialInventory(result)
+      pushToast('配置预览已刷新', '已重新扫描 output/materials 下的原材料包。', 'success')
+    } catch (error) {
+      pushToast('刷新失败', error instanceof Error ? error.message : '无法重新读取材料包列表。', 'error')
     }
   }
 
-  const handleImportGeneratedCourse = async () => {
-    if (!expectedFinalCoursePath) return
+  const handleOpenPromptPreview = (moduleId: string) => {
+    const targetModule = promptPreviewModules.find((module) => module.id === moduleId)
+    const firstFile = targetModule?.files[0]
+    if (!targetModule || !firstFile) {
+      pushToast('暂无可预览配置', '请先生成新的 canonical 原材料包。', 'info')
+      return
+    }
+    setPromptPreviewModuleId(targetModule.id)
+    setPromptPreviewFileId(firstFile.id)
+    setPromptPreviewOpen(true)
+  }
+
+  const handleCopyPromptPreviewFile = async () => {
+    if (!promptPreviewContent || !selectedPromptPreviewFile) return
     try {
-      const result = await window.desktopAPI.readCoursePackage(expectedFinalCoursePath)
-      await loadCourseFromText(result.text, result.path)
+      await navigator.clipboard.writeText(promptPreviewContent)
+      pushToast('配置文件已复制', selectedPromptPreviewFile.label, 'success')
+    } catch {
+      pushToast('复制失败', '可以在弹窗中手动选中文本复制。', 'error')
+    }
+  }
+
+  const handleRevealPromptPreviewFile = () => {
+    if (!selectedPromptPreviewFile) return
+    void window.desktopAPI.showItem(selectedPromptPreviewFile.path)
+  }
+
+  const handleOpenMarkdownDocument = async (title: string, targetPath: string, kind: MarkdownDocumentKind = 'brief') => {
+    if (!targetPath) return
+    setKnowledgeBriefOpen(true)
+    setKnowledgeBriefTitle(title)
+    setKnowledgeBriefPath(targetPath)
+    setKnowledgeBriefKind(kind)
+    setKnowledgeBriefContent('')
+    setKnowledgeBriefError('')
+    setKnowledgeBriefLoading(true)
+    try {
+      const content = await window.desktopAPI.readTextFile(targetPath)
+      setKnowledgeBriefContent(kind === 'brief' ? stripKnowledgeBriefMetadata(content) : content)
+    } catch (error) {
+      setKnowledgeBriefError(error instanceof Error ? error.message : '无法读取 Markdown 文档。')
+    } finally {
+      setKnowledgeBriefLoading(false)
+    }
+  }
+
+  const handleOpenKnowledgeBrief = async (record: MaterialInventoryRecord) => {
+    await handleOpenMarkdownDocument(record.title, record.knowledgeBriefPath, 'brief')
+  }
+
+  const handleOpenKnowledgeRecord = async (record: KnowledgeInventoryRecord) => {
+    await handleOpenMarkdownDocument(record.title, record.libraryPath, 'brief')
+  }
+
+  const handleCopyMarkdownDocument = async () => {
+    if (!knowledgeBriefContent) return
+    try {
+      await navigator.clipboard.writeText(knowledgeBriefContent)
+      pushToast(knowledgeBriefKind === 'chapter_map' ? '章节思维导图已复制' : '学习笔记已复制', knowledgeBriefTitle, 'success')
+    } catch {
+      pushToast('复制失败', '可以在阅读窗口中手动选中文本复制。', 'error')
+    }
+  }
+
+  const handleRevealKnowledgeBrief = () => {
+    if (!knowledgeBriefPath) return
+    void window.desktopAPI.showItem(knowledgeBriefPath)
+  }
+
+  const handleOpenKnowledgeBriefInLearning = async (record: MaterialInventoryRecord) => {
+    try {
+      const [briefContent, chapterMapContent] = await Promise.all([
+        window.desktopAPI.readTextFile(record.knowledgeBriefPath),
+        record.chapterMapExists
+          ? window.desktopAPI.readTextFile(record.chapterMapPath).catch(() => '')
+          : Promise.resolve(''),
+      ])
+      const course = buildLearningNotesStudyPackage({
+        title: record.title,
+        sourceId: record.sourceId,
+        materialPath: record.path,
+        sourcePath: record.knowledgeBriefPath,
+        briefContent,
+        chapterMapContent,
+      })
+
+      await loadCourseFromText(JSON.stringify(course, null, 2), record.knowledgeBriefPath)
       await refreshLibrary()
-      pushToast('课包已导入', '已经载入 Codex 输出的 final.course-package.json。', 'success')
+      setMaterialInventory(await window.desktopAPI.listMaterialPackages())
+      pushToast('已进入学习台', record.title, 'success')
       onRequestLearn()
     } catch (error) {
+      pushToast('进入学习失败', error instanceof Error ? error.message : '无法把学习笔记载入学习台。', 'error')
+    }
+  }
+
+  const handleCopyCodexSynthesisPrompt = async (record: MaterialInventoryRecord) => {
+    try {
+      const text = await window.desktopAPI.readTextFile(record.codexGoalPromptPath)
+      await navigator.clipboard.writeText(text)
+      pushToast('学习笔记提示已复制', record.title, 'success')
+    } catch {
+      pushToast('复制失败', '请打开 authoring/02_start_codex_synthesis.md 手动复制。', 'error')
+    }
+  }
+
+  const handleRefreshKnowledgeLibrary = async () => {
+    setKnowledgeLoading(true)
+    setKnowledgeError('')
+    try {
+      setKnowledgeInventory(await window.desktopAPI.listKnowledgeLibrary())
+    } catch (error) {
+      setKnowledgeError(error instanceof Error ? error.message : '无法刷新知识库。')
+    } finally {
+      setKnowledgeLoading(false)
+    }
+  }
+
+  const handleLocateGeneratedKnowledgeBrief = async () => {
+    if (!expectedKnowledgeBriefPath) return
+    try {
+      await window.desktopAPI.showItem(expectedKnowledgeBriefPath)
+      pushToast('学习笔记已定位', '生成后可以在整理记录中开始学习。', 'success')
+    } catch (error) {
       pushToast(
-        '还没有找到最终课包',
-        error instanceof Error ? error.message : '请先让 Codex 完成 course_draft/final.course-package.json。',
+        '还没有找到学习笔记',
+        error instanceof Error ? error.message : '请先让 Codex 完成 content_draft/learning_notes.md。',
         'error',
       )
     }
@@ -1055,13 +1403,13 @@ export function WorkspacePane({
       const courseVisualMap = readCourseVisualMapFromText(result.text)
       const prompt = String(courseVisualMap?.prompt ?? '').trim()
       if (!prompt) {
-        pushToast('还没有地图提示词', '这份课包里暂时没有 `course_visual_map.prompt`。', 'error')
+        pushToast('还没有地图提示词', '这份学习包里暂时没有 `course_visual_map.prompt`。', 'error')
         return
       }
       await navigator.clipboard.writeText(prompt)
       pushToast('地图提示词已复制', `《${title}》现在可以去生成全局学习地图。`, 'success')
     } catch (error) {
-      pushToast('复制失败', error instanceof Error ? error.message : '无法读取这份课包。', 'error')
+      pushToast('复制失败', error instanceof Error ? error.message : '无法读取这份学习包。', 'error')
     }
   }
 
@@ -1126,7 +1474,14 @@ export function WorkspacePane({
   }
 
   if (view === 'learn') {
-    return <CoachPane />
+    return (
+      <CoachPane
+        showHome={showLearningHome}
+        onStartLearning={onRequestLearn}
+        onOpenWorkbench={onRequestWorkbench}
+        onOpenArchive={onRequestArchive}
+      />
+    )
   }
 
   if (view === 'workbench') {
@@ -1136,12 +1491,12 @@ export function WorkspacePane({
         title="工作台"
         windowFocused={windowFocused}
       >
-        <div className="mx-auto grid min-h-0 w-full max-w-5xl grid-cols-1 gap-8">
+        <div className="grid min-h-0 w-full grid-cols-1 gap-8">
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-4">
               <h3 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-foreground">
                 <img src={courseIcon} alt="" className="size-4 opacity-90" />
-                课程制作
+                学习笔记
               </h3>
               <div className="flex min-w-[132px] items-center gap-2">
                 <Progress
@@ -1222,7 +1577,7 @@ export function WorkspacePane({
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2 text-[12px] font-semibold text-foreground">
                     <ArchiveRestore size={14} />
-                    制作记录
+                    整理记录
                     <Button
                       variant="ghost"
                       size="icon"
@@ -1239,7 +1594,7 @@ export function WorkspacePane({
                       className="size-6 rounded-md text-foreground/68 hover:bg-white/[0.07] hover:text-foreground"
                       onClick={() => runtimeSettings?.output_dir ? void window.desktopAPI.openPath(coursePackageRootDir) : undefined}
                       title={coursePackageRootDir}
-                      aria-label="打开课包目录"
+                      aria-label="打开导入目录"
                     >
                       <PackageOpen size={12} />
                     </Button>
@@ -1254,8 +1609,8 @@ export function WorkspacePane({
                           pushToast('刷新失败', '无法读取原材料目录。', 'error')
                         }
                       }}
-                      aria-label="刷新制作记录"
-                      title="刷新制作记录"
+                      aria-label="刷新整理记录"
+                      title="刷新整理记录"
                     >
                       <RefreshCcw size={12} />
                     </Button>
@@ -1266,21 +1621,77 @@ export function WorkspacePane({
                   {materialInventory?.records.length ? (
                     materialInventory.records.map((record) => {
                       const statusLabel = record.workflowStageLabel || (
-                        record.importReadyCourseExists
-                          ? '可导入'
-                          : record.courseBlueprintExists
-                            ? '有蓝图'
-                            : record.gptWorkspaceZipExists
-                              ? '待设计'
-                              : '旧材料'
+                        record.knowledgeImported
+                          ? '学习笔记已可学习'
+                          : record.knowledgeBriefExists && record.chapterMapExists
+                            ? '笔记与思维导图已就绪'
+                            : record.chapterMapExists
+                              ? '章节思维导图已就绪'
+                              : record.knowledgeBriefExists
+                                ? '学习笔记可阅读'
+                                : record.codexCoursePlanExists
+                                  ? '笔记计划已就绪'
+                                  : '待 Codex 整理'
                       )
-                      const statusClass = record.workflowStage === 'course_ready' || record.importReadyCourseExists
-                        ? 'border-emerald-400/18 bg-emerald-400/[0.08] text-emerald-100'
-                        : record.workflowStage === 'blueprint_ready' || record.courseBlueprintExists
-                          ? 'border-sky-400/18 bg-sky-400/[0.08] text-sky-100'
-                          : record.workflowStage === 'material_ready'
-                            ? 'border-violet-400/18 bg-violet-400/[0.08] text-violet-100'
-                            : ''
+                      const statusClass = (() => {
+                        if (record.workflowStage === 'knowledge_ready' || record.knowledgeImported) {
+                          return 'border-emerald-400/18 bg-emerald-400/[0.08] text-emerald-100'
+                        }
+                        if (record.workflowStage === 'summary_ready' || record.workflowStage === 'brief_ready' || record.knowledgeBriefExists) {
+                          return 'border-emerald-400/18 bg-emerald-400/[0.08] text-emerald-100'
+                        }
+                        if (record.workflowStage === 'map_ready' || record.chapterMapExists) {
+                          return 'border-sky-400/18 bg-sky-400/[0.08] text-sky-100'
+                        }
+                        if (record.workflowStage === 'codex_plan_ready' || record.codexCoursePlanExists) {
+                          return 'border-sky-400/18 bg-sky-400/[0.08] text-sky-100'
+                        }
+                        if (
+                          record.workflowStage === 'knowledge_tree_ready' ||
+                          record.workflowStage === 'coverage_ready' ||
+                          record.workflowStage === 'dossier_ready' ||
+                          record.workflowStage === 'partial_learning_notes'
+                        ) {
+                          return 'border-sky-400/18 bg-sky-400/[0.08] text-sky-100'
+                        }
+                        if (
+                          record.workflowStage === 'needs_restructure' ||
+                          record.workflowStage === 'needs_deepening' ||
+                          record.workflowStage === 'dossier_incomplete'
+                        ) {
+                          return 'border-amber-400/18 bg-amber-400/[0.08] text-amber-100'
+                        }
+                        if (record.workflowStage === 'material_ready') {
+                          return 'border-violet-400/18 bg-violet-400/[0.08] text-violet-100'
+                        }
+                        return ''
+                      })()
+                      const canCopySummaryPrompt = Boolean(record.codexGoalPromptPath)
+                      const canOpenBrief =
+                        record.knowledgeImported ||
+                        record.workflowStage === 'learning_notes_ready' ||
+                        record.workflowStage === 'knowledge_ready' ||
+                        record.workflowStage === 'summary_ready'
+                      const productionButtonLabel = (() => {
+                        switch (record.workflowStage) {
+                          case 'knowledge_tree_ready':
+                            return '映射材料'
+                          case 'coverage_ready':
+                            return '生成章节材料'
+                          case 'needs_restructure':
+                            return '修知识树'
+                          case 'dossier_ready':
+                            return '深写章节'
+                          case 'partial_learning_notes':
+                            return '继续深写'
+                          case 'needs_deepening':
+                            return '继续加厚'
+                          case 'dossier_incomplete':
+                            return '补章节材料'
+                          default:
+                            return record.codexCoursePlanExists ? '继续整理' : '开始整理'
+                        }
+                      })()
                       return (
                         <div key={record.path} className="rounded-[16px] border border-white/6 bg-white/[0.018] p-3">
                           <div className="flex items-start justify-between gap-3">
@@ -1301,98 +1712,34 @@ export function WorkspacePane({
                                 size="icon"
                                 className="size-7 rounded-lg text-foreground/58 hover:bg-destructive/10 hover:text-destructive"
                                 onClick={() => void handleDeleteMaterialPackage(record)}
-                                aria-label="删除制作记录"
-                                title="删除制作记录"
+                                aria-label="删除整理记录"
+                                title="删除整理记录"
                               >
                                 <Trash2 size={13} />
                               </Button>
                             </div>
                           </div>
-                          <div className="mt-3 grid grid-cols-6 gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="rounded-xl px-2"
-                              disabled={!record.gptWorkspaceZipExists}
-                              onClick={async () => {
-                                try {
-                                  const text = await window.desktopAPI.readTextFile(record.gptDesignerCopyPromptPath)
-                                  await navigator.clipboard.writeText(text)
-                                  await window.desktopAPI.showItem(record.gptWorkspaceZipPath)
-                                  pushToast('GPT 工作包已定位', '已复制提示词，把选中的 zip 上传到 ChatGPT 后粘贴即可。', 'success')
-                                } catch {
-                                  pushToast('复制失败', '请打开 gpt_designer/01_copy_to_chatgpt.md 手动复制。', 'error')
-                                }
-                              }}
-                              title="复制 GPT 提示并定位上传 zip"
-                            >
-                              <Clipboard size={13} />
-                              GPT
-                            </Button>
-                            <Button variant="outline" size="sm" className="rounded-xl px-2" onClick={() => void window.desktopAPI.openPath(record.path)}>
-                              <FolderOpen size={13} />
-                              目录
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="rounded-xl px-2"
-                              disabled={!record.courseBlueprintExists}
-                              onClick={async () => {
-                                try {
-                                  const text = await window.desktopAPI.readTextFile(record.codexBlueprintPromptPath)
-                                  await navigator.clipboard.writeText(text)
-                                  pushToast('Codex 制课提示已复制', record.title, 'success')
-                                } catch {
-                                  pushToast('复制失败', '请打开 gpt_designer/02_copy_to_codex_after_blueprint.md 手动复制。', 'error')
-                                }
-                              }}
-                            >
-                              <Clipboard size={13} />
-                              Codex
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="rounded-xl px-2"
-                              disabled={!record.importReadyCourseExists}
-                              onClick={() => void handleCopyCourseVisualMapPrompt(record.importReadyCoursePath, record.title)}
-                              title="复制全局学习地图提示词"
-                            >
-                              <Milestone size={13} />
-                              地图
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="rounded-xl px-2"
-                              disabled={!record.importReadyCourseExists}
-                              onClick={() => void handleAttachCourseVisualMap(record.importReadyCoursePath, record.title)}
-                              title="导入全局学习地图图片"
-                            >
-                              <FileUp size={13} />
-                              导图
-                            </Button>
-                            <Button
-                              size="sm"
-                              className="rounded-xl px-2"
-                              variant={record.importReadyCourseExists ? 'default' : 'outline'}
-                              disabled={!record.importReadyCourseExists}
-                              onClick={async () => {
-                                try {
-                                  const result = await window.desktopAPI.readCoursePackage(record.importReadyCoursePath)
-                                  await loadCourseFromText(result.text, result.path)
-                                  await refreshLibrary()
-                                  pushToast('课包已导入', record.title, 'success')
-                                  onRequestLearn()
-                                } catch (error) {
-                                  pushToast('导入失败', error instanceof Error ? error.message : '无法导入最终课包。', 'error')
-                                }
-                              }}
-                            >
-                              <FileUp size={13} />
-                              导入
-                            </Button>
+                          <div className="mt-3 grid gap-2">
+                            {canOpenBrief ? (
+                              <Button
+                                size="sm"
+                                className="justify-center rounded-xl px-3"
+                                onClick={() => void handleOpenKnowledgeBriefInLearning(record)}
+                              >
+                                <GraduationCap size={13} />
+                                开始学习
+                              </Button>
+                            ) : canCopySummaryPrompt ? (
+                              <Button size="sm" className="justify-center rounded-xl px-3" onClick={() => void handleCopyCodexSynthesisPrompt(record)}>
+                                <Clipboard size={13} />
+                                {productionButtonLabel}
+                              </Button>
+                            ) : (
+                              <Button size="sm" variant="outline" className="justify-center rounded-xl px-3" disabled>
+                                <LoaderCircle size={13} />
+                                等待材料
+                              </Button>
+                            )}
                           </div>
                         </div>
                       )
@@ -1414,140 +1761,191 @@ export function WorkspacePane({
           </Card>
           </section>
 
-          <section className="space-y-3">
-            <div className="flex items-center justify-between gap-4">
-              <h3 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-foreground">
-                <img src={videoIcon} alt="" className="size-4 opacity-90" />
-                视频总结
-              </h3>
-              <div className="flex min-w-[132px] items-center gap-2">
-                <Progress
-                  value={summaryRunning ? 48 : summaryResult ? 100 : 0}
-                  className="h-1.5 flex-1 bg-white/[0.08]"
-                />
-                <span className="w-8 text-right text-[11px] font-semibold tabular-nums text-[#dbe4ef]">
-                  {summaryRunning ? 48 : summaryResult ? 100 : 0}%
-                </span>
+        </div>
+      </WorkspaceShell>
+    )
+  }
+
+  if (view === 'knowledge') {
+    return (
+      <WorkspaceShell
+        eyebrow="Knowledge"
+        title="知识库"
+        description="这里收纳已经确认可用的学习笔记。它们同时存在于本地文件夹和透明索引中，方便你直接阅读、搜索和定位源材料。"
+        windowFocused={windowFocused}
+        actions={
+          <Button
+            type="button"
+            variant="outline"
+            className="rounded-xl"
+            disabled={!runtimeSettings?.output_dir}
+            onClick={() => runtimeSettings?.output_dir ? void window.desktopAPI.openPath(knowledgeRootDir) : undefined}
+          >
+            <FolderOpen size={14} />
+            打开知识库目录
+          </Button>
+        }
+      >
+        <div className="grid w-full gap-5">
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded-[16px] border border-white/7 bg-white/[0.025] p-4">
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                <FileText size={13} />
+                学习笔记
               </div>
+              <div className="mt-2 text-[24px] font-semibold text-foreground">{knowledgeInventory?.records.length ?? 0}</div>
             </div>
-          <Card className="overflow-hidden rounded-[10px] border-white/[0.09] bg-[#1f1f1f] shadow-none">
-            <CardContent className="space-y-4 p-5">
-              <div className="grid gap-2 md:grid-cols-[1fr_auto]">
-                <div className="grid gap-1.5">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="flex items-center gap-1.5 text-[12px] font-semibold text-foreground/86">
-                      {summarySourceMode === 'local_media' ? <FileVideo size={13} /> : <Link2 size={13} />}
-                      视频来源
-                      <Button
-                        type="button"
-                        size="icon"
-                        variant="ghost"
-                        className="ml-1 size-6 rounded-md text-foreground/68 hover:bg-white/[0.07] hover:text-foreground"
-                        onClick={() => void handlePickSummaryMedia()}
-                        disabled={summaryRunning}
-                        aria-label="选择本地文件"
-                        title="选择本地文件"
-                      >
-                        <FolderOpen size={12} />
-                      </Button>
-                    </span>
-                  </div>
+            <div className="rounded-[16px] border border-white/7 bg-white/[0.025] p-4">
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                <Search size={13} />
+                正文字数
+              </div>
+              <div className="mt-2 text-[24px] font-semibold text-foreground">{formatCompactNumber(knowledgeTotalTextLength)}</div>
+            </div>
+            <div className="rounded-[16px] border border-white/7 bg-white/[0.025] p-4">
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                <FolderOpen size={13} />
+                索引
+              </div>
+              <button
+                type="button"
+                className="mt-2 block max-w-full truncate text-left text-[12px] leading-6 text-muted-foreground hover:text-foreground"
+                disabled={!knowledgeInventory?.libraryPath}
+                onClick={() => knowledgeInventory?.libraryPath ? void window.desktopAPI.showItem(knowledgeInventory.libraryPath) : undefined}
+              >
+                {knowledgeInventory?.libraryPath || 'knowledge_library.json'}
+              </button>
+            </div>
+          </div>
+
+          <Card className="rounded-[10px] border-white/[0.09] bg-[#1f1f1f] shadow-none">
+            <CardContent className="grid gap-4 p-4">
+              <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+                <Field label="搜索学习笔记" icon={<Search size={14} />}>
                   <Input
-                    value={summaryInput}
-                    onChange={(event) => {
-                      setSummaryInput(event.target.value)
-                      setSummarySourceMode('bilibili')
-                    }}
-                    placeholder={summarySourceMode === 'local_media' ? '选择或粘贴本地音视频文件路径' : '例如 BV17ykEBWEjv 或 https://www.bilibili.com/video/...'}
-                    disabled={summaryRunning}
+                    value={knowledgeQuery}
+                    onChange={(event) => setKnowledgeQuery(event.target.value)}
+                    placeholder="搜索标题、来源、正文关键词"
                   />
-                </div>
-                <div className="grid content-end">
+                </Field>
+                <div className="flex items-end gap-2">
                   <Button
-                    size="icon"
-                    className={cn(
-                      'size-9 rounded-lg border-0 bg-transparent shadow-none',
-                      summaryRunning
-                        ? 'text-sky-100 hover:bg-sky-400/[0.08]'
-                        : 'text-foreground/82 hover:bg-white/[0.06] hover:text-foreground',
-                    )}
-                    onClick={() => {
-                      if (summaryRunning) return
-                      void handleRunVideoSummary()
-                    }}
-                    disabled={!(summaryInput || videoInput).trim()}
-                    aria-label={summaryRunning ? '视频总结生成中' : '开始生成视频总结'}
-                    title={summaryRunning ? '视频总结生成中' : '开始生成视频总结'}
+                    type="button"
+                    variant="outline"
+                    className="rounded-xl"
+                    disabled={knowledgeLoading}
+                    onClick={() => void handleRefreshKnowledgeLibrary()}
                   >
-                    {summaryRunning ? <LoaderCircle size={16} className="animate-spin" /> : <Play size={16} fill="currentColor" />}
+                    {knowledgeLoading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCcw size={14} />}
+                    刷新
                   </Button>
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-[12px] font-semibold text-foreground">
-                  <ArchiveRestore size={14} />
-                  制作记录
-                </div>
+              <div className="rounded-[12px] border border-white/6 bg-black/10 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+                知识库目录：{knowledgeRootDir}
+              </div>
 
-                <div className="subtle-scrollbar grid max-h-[240px] gap-2 overflow-y-auto pr-1">
-                  {summaryInventory?.records.length ? (
-                    summaryInventory.records.map((record) => (
-                      <div key={record.path} className="rounded-[16px] border border-white/6 bg-white/[0.018] p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className="truncate text-[12px] font-medium text-foreground">{record.title}</div>
-                            <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
-                              {record.sourceId ? <span>{record.sourceId}</span> : null}
-                              <span>{formatCompactNumber(record.textLength)} 字</span>
-                              <span>{record.keyPointCount} 要点</span>
-                              <span>{formatRelativeTime(record.updatedAt)}</span>
+              {knowledgeError ? (
+                <div className="rounded-[14px] border border-destructive/20 bg-destructive/10 px-4 py-3 text-[12px] leading-6 text-destructive-foreground">
+                  {knowledgeError}
+                </div>
+              ) : null}
+
+              {knowledgeLoading && !knowledgeInventory ? (
+                <div className="flex min-h-[220px] items-center justify-center gap-2 text-[12px] text-muted-foreground">
+                  <LoaderCircle className="size-4 animate-spin" />
+                  正在读取知识库
+                </div>
+              ) : filteredKnowledgeRecords.length ? (
+                <div className="grid gap-3">
+                  {filteredKnowledgeRecords.map((record) => (
+                    <div key={record.id} className="rounded-[18px] border border-white/[0.075] bg-[linear-gradient(180deg,rgba(31,31,31,0.92),rgba(24,24,24,0.96))] p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <div className="flex size-8 shrink-0 items-center justify-center rounded-xl border border-emerald-400/14 bg-emerald-400/[0.07] text-emerald-100">
+                              <FileText size={14} />
                             </div>
-                          </div>
-                          <div className="flex shrink-0 items-center gap-2">
-                            <Badge variant="outline" className={getVideoSummaryProviderClass(record.summaryProvider)}>
-                              {getVideoSummaryProviderLabel(record.summaryProvider)}
-                            </Badge>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="size-7 rounded-lg text-foreground/58 hover:bg-destructive/10 hover:text-destructive"
-                              onClick={() => void handleDeleteVideoSummary(record)}
-                              aria-label="删除视频总结"
-                              title="删除视频总结"
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-[14px] font-semibold text-foreground">{record.title}</div>
+                              <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                                {record.sourceId ? <span>{record.sourceId}</span> : null}
+                                <span>{formatCompactNumber(record.textLength)} 字</span>
+                                <span>{formatRelativeTime(record.updatedAt)}</span>
+                              </div>
+                            </div>
+                            <Badge
+                              variant="outline"
+                              className={record.fileExists
+                                ? 'border-emerald-400/16 bg-emerald-400/[0.08] text-emerald-100'
+                                : 'border-amber-400/18 bg-amber-400/[0.08] text-amber-100'}
                             >
-                              <Trash2 size={13} />
-                            </Button>
+                              {record.fileExists ? '可阅读' : '文件缺失'}
+                            </Badge>
+                          </div>
+
+                          <p className="line-clamp-3 text-[12px] leading-6 text-muted-foreground">
+                            {record.preview || '这篇学习笔记还没有可用预览。'}
+                          </p>
+
+                          <div className="grid gap-1 text-[10px] text-muted-foreground">
+                            <div className="truncate">学习笔记：{record.libraryPath}</div>
+                            <div className="truncate">材料包：{record.materialPath}</div>
                           </div>
                         </div>
-                        <div className="mt-3 grid grid-cols-2 gap-2">
-                          <Button variant="outline" size="sm" className="rounded-xl px-2" onClick={() => void window.desktopAPI.openPath(record.path)}>
-                            <FileText size={13} />
-                            打开 MD
+
+                        <div className="flex shrink-0 flex-col gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="rounded-xl"
+                            disabled={!record.fileExists}
+                            onClick={() => void handleOpenKnowledgeRecord(record)}
+                          >
+                            <Eye size={13} />
+                            阅读
                           </Button>
-                          <Button variant="outline" size="sm" className="rounded-xl px-2" onClick={() => void window.desktopAPI.openPath(getParentPath(record.path))}>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="rounded-xl"
+                            disabled={!record.libraryPath}
+                            onClick={() => void window.desktopAPI.showItem(record.libraryPath)}
+                          >
                             <FolderOpen size={13} />
-                            打开目录
+                            定位
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="rounded-xl"
+                            disabled={!record.materialPath}
+                            onClick={() => void window.desktopAPI.openPath(record.materialPath)}
+                          >
+                            <PackageOpen size={13} />
+                            材料
                           </Button>
                         </div>
                       </div>
-                    ))
-                  ) : (
-                    <div className="rounded-[16px] border border-white/6 bg-white/[0.018] px-4 py-3 text-[12px] leading-6 text-muted-foreground">
-                      还没有生成过视频总结。
                     </div>
-                  )}
+                  ))}
                 </div>
-              </div>
-
-              {summaryError ? (
-                <div className="rounded-[18px] border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground">
-                  {summaryError}
+              ) : (
+                <div className="flex min-h-[240px] flex-col items-center justify-center gap-3 rounded-[18px] border border-white/6 bg-black/10 px-4 py-8 text-center">
+                  <FileText className="size-8 text-muted-foreground/70" />
+                  <div className="text-[13px] font-semibold text-foreground">
+                    {knowledgeQuery.trim() ? '没有匹配的学习笔记' : '知识库还是空的'}
+                  </div>
+                  <div className="max-w-md text-[12px] leading-6 text-muted-foreground">
+                    先在工作台生成学习笔记，点击“开始学习”后，就会进入学习档案。
+                  </div>
                 </div>
-              ) : null}
+              )}
             </CardContent>
           </Card>
-          </section>
         </div>
       </WorkspaceShell>
     )
@@ -1562,11 +1960,11 @@ export function WorkspacePane({
         title="学习档案"
         windowFocused={windowFocused}
       >
-        <div className="mx-auto grid w-full max-w-5xl gap-8">
+        <div className="grid w-full gap-8">
           <section className="space-y-3">
             <h3 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-foreground">
               <img src={archiveCurrentCourseIcon} alt="" className="size-4 opacity-90" />
-              当前课程
+              当前学习
             </h3>
             {featuredActiveRecord ? (
               <div className="rounded-[18px] border border-sky-300/10 bg-[linear-gradient(180deg,rgba(29,38,43,0.68),rgba(24,25,26,0.92))] p-5">
@@ -1613,7 +2011,7 @@ export function WorkspacePane({
               </div>
             ) : (
               <div className="rounded-[18px] border border-white/6 bg-white/[0.015] px-4 py-3 text-[13px] leading-6 text-muted-foreground">
-                还没有正在学习的课程。
+                还没有正在学习的档案。
               </div>
             )}
           </section>
@@ -1621,7 +2019,7 @@ export function WorkspacePane({
           <section className="space-y-3">
             <h3 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-foreground">
               <img src={archiveOtherCoursesIcon} alt="" className="size-4 opacity-90" />
-              其他课程
+              其他学习
             </h3>
             {otherActiveRecords.length ? (
               <div className="grid gap-3">
@@ -1646,7 +2044,7 @@ export function WorkspacePane({
               </div>
             ) : (
               <div className="rounded-[18px] border border-white/6 bg-white/[0.015] px-4 py-3 text-[13px] leading-6 text-muted-foreground">
-                当前没有其他已录入的进行中课程。
+                当前没有其他已录入的进行中学习档案。
               </div>
             )}
           </section>
@@ -1658,13 +2056,154 @@ export function WorkspacePane({
 
 
   return (
-    <WorkspaceShell
-      eyebrow="Settings"
-      title="设置"
-      windowFocused={windowFocused}
-    >
-      <div className="mx-auto grid w-full max-w-5xl gap-7">
-        <SettingsBlock title="TTS 语音朗读" icon={settingsTtsIcon} className="order-3">
+    <>
+      <WorkspaceShell
+        eyebrow="Settings"
+        title="设置"
+        windowFocused={windowFocused}
+      >
+        <div className="grid w-full gap-7">
+          <SettingsBlock title="当前配置" className="order-0">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {[
+              ['运行模式', runtimeModeLabel],
+              ['输出目录', settingsDraft.output_dir || runtimeSettings?.output_dir || '未设置'],
+              ['材料目录', materialRootDir],
+              ['学习包目录', coursePackageRootDir],
+              ['Obsidian Vault', settingsDraft.obsidian_vault_path || '未配置'],
+              ['TTS', settingsDraft.tts_provider === 'mimo' ? 'MiMo' : 'MiniMax'],
+              ['转写引擎', settingsDraft.transcription_provider === 'local_sensevoice' ? '本地 SenseVoice' : settingsDraft.transcription_provider],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-[10px] border border-white/[0.07] bg-white/[0.025] px-3 py-2">
+                <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{label}</div>
+                <div className="mt-1 break-all text-[12px] leading-5 text-foreground/92">{value}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-[11px] leading-5 text-muted-foreground">
+            <span>{settingsStatusLoading ? '正在读取 B 站状态' : settingsStatus?.bilibili.message || 'B 站状态尚未刷新'}</span>
+            {settingsStatus?.bilibili ? (
+              <Badge
+                variant="outline"
+                className={cn(
+                  'h-5 border-white/0 bg-black/18 px-2 text-[10px]',
+                  settingsStatus.bilibili.valid
+                    ? 'text-emerald-100'
+                    : settingsStatus.bilibili.configured
+                      ? 'text-amber-100'
+                      : 'text-foreground/70',
+                )}
+              >
+                {settingsStatus.bilibili.valid ? '已验证' : settingsStatus.bilibili.configured ? '待验证' : '未配置'}
+              </Badge>
+            ) : null}
+            {settingsStatus?.bilibili.accountName ? <span>账号：{settingsStatus.bilibili.accountName}</span> : null}
+            {settingsStatus?.bilibili.accountId ? <span>ID：{settingsStatus.bilibili.accountId}</span> : null}
+            <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={() => void refreshSettingsStatus()} disabled={settingsStatusLoading}>
+              <RefreshCcw size={12} />
+              刷新账号状态
+            </Button>
+          </div>
+
+          {settingsStatusError ? (
+            <div className="rounded-[10px] border border-amber-400/18 bg-amber-400/[0.08] px-3 py-2 text-[12px] leading-5 text-amber-100">
+              {settingsStatusError}
+            </div>
+          ) : null}
+          </SettingsBlock>
+
+          <SettingsBlock title="配置预览" className="order-2">
+          <div className="grid gap-4">
+            <div className="flex flex-col gap-3 rounded-[10px] border border-white/[0.07] bg-white/[0.025] p-3 md:flex-row md:items-center md:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2 text-[13px] font-semibold text-foreground">
+                  <FileText size={14} />
+                  当前配置源
+                  {promptPreviewSource ? (
+                    <Badge variant="outline" className="border-emerald-400/18 bg-emerald-400/[0.08] text-emerald-100">
+                      新主线
+                    </Badge>
+                  ) : null}
+                </div>
+                <div className="mt-1 truncate text-[12px] leading-5 text-muted-foreground">
+                  {promptPreviewSource ? `${promptPreviewSource.title} · ${promptPreviewSource.path}` : `材料目录：${materialRootDir}`}
+                </div>
+                {promptPreviewSource ? (
+                  <div className="mt-1 flex flex-wrap gap-2 text-[11px] leading-5 text-muted-foreground/80">
+                    {promptPreviewSource.sourceId ? <span>{promptPreviewSource.sourceId}</span> : null}
+                    {promptPreviewSource.workflowStageLabel ? <span>{promptPreviewSource.workflowStageLabel}</span> : null}
+                    {promptPreviewSource.updatedAt ? <span>{formatRelativeTime(promptPreviewSource.updatedAt)}</span> : null}
+                  </div>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rounded-xl"
+                  onClick={() => void handleRefreshPromptPreviewSource()}
+                >
+                  <RefreshCcw size={13} />
+                  刷新
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rounded-xl"
+                  disabled={!promptPreviewSource}
+                  onClick={() => promptPreviewSource ? void window.desktopAPI.openPath(promptPreviewSource.path) : undefined}
+                >
+                  <FolderOpen size={13} />
+                  打开目录
+                </Button>
+              </div>
+            </div>
+
+            {promptPreviewModules.length ? (
+              <div className="grid gap-3 md:grid-cols-3">
+                {promptPreviewModules.map((module) => (
+                  <div key={module.id} className="grid gap-3 rounded-[10px] border border-white/[0.07] bg-black/10 p-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="truncate text-[13px] font-semibold text-foreground">{module.title}</div>
+                        <Badge variant="outline" className="border-white/[0.08] bg-white/[0.035] text-muted-foreground">
+                          {module.files.length} 个文件
+                        </Badge>
+                      </div>
+                      <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-muted-foreground">{module.summary}</p>
+                    </div>
+                    <div className="grid gap-1.5">
+                      {module.files.slice(0, 3).map((file) => (
+                        <div key={file.id} className="truncate rounded-lg bg-white/[0.035] px-2 py-1 text-[10px] font-mono text-muted-foreground/80">
+                          {file.path.replace(promptPreviewSource?.path ?? '', '').replace(/^[\\/]+/, '')}
+                        </div>
+                      ))}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="mt-auto rounded-xl"
+                      onClick={() => handleOpenPromptPreview(module.id)}
+                    >
+                      <Eye size={13} />
+                      浏览
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-[10px] border border-white/[0.07] bg-black/10 px-3 py-3 text-[12px] leading-6 text-muted-foreground">
+                生成新的材料包后，这里会按总结工作流、总结产物、只读审计三个模块显示可浏览配置。
+              </div>
+            )}
+          </div>
+          </SettingsBlock>
+
+          <SettingsBlock title="TTS 语音朗读" icon={settingsTtsIcon} className="order-3">
           <div className="grid gap-3 md:grid-cols-2">
             <div className="grid gap-2 md:col-span-2">
               <div className="grid gap-2 md:grid-cols-2">
@@ -1684,7 +2223,7 @@ export function WorkspacePane({
                   onClick={() => setSettingsDraft((current) => ({ ...current, tts_provider: 'minimax' }))}
                 >
                   <AudioLines size={14} />
-                  MiniMax Speech 2.8
+                  备用云端朗读
                 </Button>
               </div>
             </div>
@@ -1750,7 +2289,7 @@ export function WorkspacePane({
               </>
             ) : (
               <>
-                <Field label="MiniMax API Key" icon={<Server size={14} />} className="md:col-span-2">
+                <Field label="备用服务 API Key" icon={<Server size={14} />} className="md:col-span-2">
                   <Input
                     type="password"
                     value={settingsDraft.minimax_api_key}
@@ -1814,9 +2353,9 @@ export function WorkspacePane({
               </>
             )}
           </div>
-        </SettingsBlock>
+          </SettingsBlock>
 
-        <SettingsBlock title="Obsidian 同步" icon={settingsObsidianIcon} className="order-5">
+          <SettingsBlock title="Obsidian 同步" icon={settingsObsidianIcon} className="order-5">
           <div className="grid gap-3">
             <Field label="Vault 路径" icon={<FolderOpen size={14} />}>
               <div className="flex gap-2">
@@ -1847,9 +2386,9 @@ export function WorkspacePane({
               {settingsDraft.obsidian_auto_sync ? '保存进度时同步：已预留' : '保存进度时同步：关闭'}
             </Button>
           </div>
-        </SettingsBlock>
+          </SettingsBlock>
 
-        <SettingsBlock title="音频转写引擎" icon={settingsTranscriptionIcon} className="order-1">
+          <SettingsBlock title="音频转写引擎" icon={settingsTranscriptionIcon} className="order-1">
           <div className="grid gap-4">
             <div className="grid gap-2">
               <Button
@@ -1864,7 +2403,7 @@ export function WorkspacePane({
 
             <div className="grid gap-2 md:grid-cols-3">
               {[
-                { id: 'fast', title: '快速制作' },
+                { id: 'fast', title: '快速整理' },
                 { id: 'balanced', title: '均衡模式' },
                 { id: 'background', title: '后台慢速' },
               ].map((mode) => (
@@ -1913,94 +2452,51 @@ export function WorkspacePane({
                 </Field>
               </div>
           </div>
-        </SettingsBlock>
+          </SettingsBlock>
 
-        <SettingsBlock title="B 站凭据" icon={settingsBilibiliIcon} className="order-4">
+          <SettingsBlock title="B 站凭据" icon={settingsBilibiliIcon} className="order-4">
           <Field label="SESSDATA" icon={<Cookie size={14} />}>
             <Input type="password" value={settingsDraft.sessdata} onChange={(event) => setSettingsDraft((current) => ({ ...current, sessdata: event.target.value }))} />
           </Field>
-        </SettingsBlock>
+          </SettingsBlock>
 
-        <SettingsBlock title="视频总结" icon={settingsVideoSummaryIcon} className="order-2">
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="grid gap-2 md:col-span-2 md:grid-cols-2">
-              <Button
-                type="button"
-                variant={settingsDraft.video_summary_provider === 'mimo' ? 'default' : 'outline'}
-                className="justify-start rounded-xl"
-                onClick={() => setSettingsDraft((current) => ({
-                  ...current,
-                  video_summary_provider: 'mimo',
-                  video_summary_base_url: !current.video_summary_base_url || current.video_summary_base_url.includes('minimaxi.com')
-                    ? 'https://token-plan-cn.xiaomimimo.com/v1/chat/completions'
-                    : current.video_summary_base_url,
-                  video_summary_model: !current.video_summary_model || current.video_summary_model === 'MiniMax-M2'
-                    ? 'mimo-v2.5-pro'
-                    : current.video_summary_model,
-                }))}
-              >
-                <Sparkles size={14} />
-                MiMo
-              </Button>
-              <Button
-                type="button"
-                variant={settingsDraft.video_summary_provider !== 'mimo' ? 'default' : 'outline'}
-                className="justify-start rounded-xl"
-                onClick={() => setSettingsDraft((current) => ({
-                  ...current,
-                  video_summary_provider: 'minimax',
-                  video_summary_base_url: current.video_summary_base_url.includes('xiaomimimo.com') ? 'https://api.minimaxi.com/v1' : current.video_summary_base_url,
-                  video_summary_model: current.video_summary_model.startsWith('mimo-') ? 'MiniMax-M2' : current.video_summary_model,
-                }))}
-              >
-                <Sparkles size={14} />
-                MiniMax
-              </Button>
+          {settingsError ? (
+            <div className="order-last rounded-[10px] border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground">
+              {settingsError}
             </div>
-
-            <Field label="模型" icon={<Sparkles size={14} />}>
-              <Input
-                value={settingsDraft.video_summary_model}
-                onChange={(event) => setSettingsDraft((current) => ({ ...current, video_summary_model: event.target.value }))}
-                placeholder={settingsDraft.video_summary_provider === 'mimo' ? 'mimo-v2.5-pro' : 'MiniMax-M2'}
-              />
-            </Field>
-            <Field label="接口地址" icon={<Server size={14} />}>
-              <Input
-                value={settingsDraft.video_summary_base_url}
-                onChange={(event) => setSettingsDraft((current) => ({ ...current, video_summary_base_url: event.target.value }))}
-                placeholder={settingsDraft.video_summary_provider === 'mimo' ? 'https://token-plan-cn.xiaomimimo.com/v1/chat/completions' : 'https://api.minimaxi.com/v1'}
-              />
-            </Field>
-            <Field label="API Key" icon={<Server size={14} />} className="md:col-span-2">
-              <Input
-                type="password"
-                value={settingsDraft.video_summary_api_key}
-                onChange={(event) => setSettingsDraft((current) => ({ ...current, video_summary_api_key: event.target.value }))}
-                placeholder={settingsDraft.video_summary_provider === 'mimo' ? '用于视频总结的 MiMo Key，支持 tp-' : '用于视频总结的 MiniMax Key'}
-              />
-            </Field>
-            <Field label="保存位置" icon={<FolderOpen size={14} />} className="md:col-span-2">
-              <div className="flex gap-2">
-                <Input
-                  value={settingsDraft.video_summary_output_dir}
-                  onChange={(event) => setSettingsDraft((current) => ({ ...current, video_summary_output_dir: event.target.value }))}
-                  placeholder={runtimeSettings?.output_dir ? `${runtimeSettings.output_dir}\\workbench\\summaries` : '视频总结 Markdown 输出目录'}
-                />
-                <Button type="button" variant="outline" className="shrink-0 rounded-xl" onClick={() => void handlePickVideoSummaryOutputDir()}>
-                  选择
-                </Button>
-              </div>
-            </Field>
-          </div>
-        </SettingsBlock>
-
-        {settingsError ? (
-          <div className="order-last rounded-[10px] border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive-foreground">
-            {settingsError}
-          </div>
-        ) : null}
-      </div>
-    </WorkspaceShell>
+          ) : null}
+        </div>
+      </WorkspaceShell>
+      <PromptPreviewDialog
+        open={promptPreviewOpen}
+        onOpenChange={setPromptPreviewOpen}
+        module={selectedPromptPreviewModule}
+        selectedFileId={promptPreviewFileId}
+        content={promptPreviewContent}
+        loading={promptPreviewLoading}
+        error={promptPreviewError}
+        sourceTitle={promptPreviewSource?.title ?? '未选择材料包'}
+        sourcePath={promptPreviewSource?.path ?? materialRootDir}
+        onSelectFile={setPromptPreviewFileId}
+        onCopyCurrent={() => void handleCopyPromptPreviewFile()}
+        onRevealCurrent={handleRevealPromptPreviewFile}
+      />
+      <KnowledgeBriefDialog
+        open={knowledgeBriefOpen}
+        onOpenChange={setKnowledgeBriefOpen}
+        title={knowledgeBriefTitle || '未命名学习笔记'}
+        path={knowledgeBriefPath}
+        content={knowledgeBriefContent}
+        loading={knowledgeBriefLoading}
+        error={knowledgeBriefError}
+        dialogTitle={knowledgeBriefDialogTitle}
+        outlineLabel={knowledgeBriefOutlineLabel}
+        searchPlaceholder={knowledgeBriefSearchPlaceholder}
+        contentTransform={knowledgeBriefContentTransform}
+        headingIdPrefix={knowledgeBriefHeadingIdPrefix}
+        onCopy={() => void handleCopyMarkdownDocument()}
+        onReveal={handleRevealKnowledgeBrief}
+      />
+    </>
   )
 }

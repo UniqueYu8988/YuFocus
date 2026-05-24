@@ -139,11 +139,6 @@ type RuntimeSettings = {
   mimo_tts_model: string
   mimo_tts_voice_id: string
   mimo_tts_style_prompt: string
-  video_summary_provider: string
-  video_summary_api_key: string
-  video_summary_base_url: string
-  video_summary_model: string
-  video_summary_output_dir: string
   transcription_provider: string
   local_transcription_root: string
   local_transcription_python: string
@@ -201,28 +196,66 @@ type MaterialPackageSummary = {
   updatedAt: number
   handoffPath: string
   handoffExists: boolean
+  runStatePath: string
+  runStateExists: boolean
   handoffStatusPath: string
   handoffStatusExists: boolean
   workflowStage: string
   workflowStageLabel: string
   nextActionLabel: string
-  startHerePath: string
-  codexPromptPath: string
-  gptDesignerDir: string
-  gptDesignerStartPath: string
-  gptDesignerPromptPath: string
-  gptDesignerCopyPromptPath: string
-  gptWorkspaceZipPath: string
-  gptWorkspaceZipExists: boolean
-  courseBlueprintPath: string
-  courseBlueprintExists: boolean
-  codexBlueprintPromptPath: string
+  authoringDir: string
+  gptMaterialPromptPath: string
+  gptMaterialWorkspaceZipPath: string
+  gptMaterialWorkspaceZipExists: boolean
+  codexCoursePlanPath: string
+  codexCoursePlanExists: boolean
+  synthesisPlanPath: string
+  synthesisPlanExists: boolean
+  knowledgeBriefPath: string
+  knowledgeBriefExists: boolean
+  chapterMapPath: string
+  chapterMapExists: boolean
+  knowledgeRecordPath: string
+  knowledgeImported: boolean
+  codexGoalPromptPath: string
+  readonlyAuditPromptPath: string
   finalCoursePath: string
   finalCourseExists: boolean
   publishedCoursePath: string
   publishedCourseExists: boolean
   importReadyCoursePath: string
   importReadyCourseExists: boolean
+}
+
+type KnowledgeRecord = {
+  id: string
+  title: string
+  sourceTitle: string
+  sourceId: string
+  sourceUrl: string
+  materialPath: string
+  knowledgeBriefPath: string
+  libraryPath: string
+  textLength: number
+  importedAt: number
+  updatedAt: number
+}
+
+type KnowledgeLibraryFile = {
+  schema_version: 'shijie.knowledge-library.v0.1'
+  records: KnowledgeRecord[]
+}
+
+type KnowledgeLibrarySummary = KnowledgeRecord & {
+  fileExists: boolean
+  preview: string
+  searchText: string
+}
+
+type KnowledgeLibraryPayload = {
+  rootDir: string
+  libraryPath: string
+  records: KnowledgeLibrarySummary[]
 }
 
 type CourseVisualMapAttachmentPayload = {
@@ -255,11 +288,7 @@ type DistillProgressPayload = {
   audioTotal?: number
   chunkCompleted?: number
   chunkTotal?: number
-  batchCompleted?: number
-  batchTotal?: number
   resumed?: boolean
-  prefetchReuseChunkRatio?: number
-  prefetchReuseBatchRatio?: number
 }
 
 type DistillPayload = {
@@ -268,38 +297,9 @@ type DistillPayload = {
   mediaPath?: string
 }
 
-type VideoSummaryPayload = {
-  video?: string
-  sourceKind?: 'bilibili' | 'local_media'
-  mediaPath?: string
-}
-
-type VideoSummaryResult = {
-  title: string
-  sourceId: string
-  materialPath: string
-  markdownPath: string
-  keyPointCount: number
-  blockCount: number
-  textLength: number
-  summaryProvider?: string
-  stageTimings?: Record<string, unknown>
-}
-
-type VideoSummaryRecord = {
-  name: string
-  path: string
-  title: string
-  sourceId: string
-  keyPointCount: number
-  blockCount: number
-  textLength: number
-  updatedAt: number
-  summaryProvider: string
-}
-
 type DeleteResult = {
   deletedPaths: string[]
+  skippedPaths?: string[]
 }
 
 type ObsidianExportPayload = {
@@ -514,12 +514,6 @@ function sanitizeTtsProvider(value: unknown) {
   return 'mimo'
 }
 
-function sanitizeVideoSummaryProvider(value: unknown) {
-  const normalized = String(value ?? '').trim().toLowerCase()
-  if (normalized === 'mimo') return normalized
-  return 'minimax'
-}
-
 const MIMO_TTS_PRESET_VOICES = ['茉莉', '冰糖', '苏打', '白桦'] as const
 
 function sanitizeMimoTtsVoiceId(value: unknown, fallback = '茉莉') {
@@ -602,11 +596,6 @@ function defaultSettings(): RuntimeSettings {
     mimo_tts_model: 'mimo-v2.5-tts',
     mimo_tts_voice_id: '茉莉',
     mimo_tts_style_prompt: '自然 清晰 语速适中',
-    video_summary_provider: 'mimo',
-    video_summary_api_key: '',
-    video_summary_base_url: 'https://token-plan-cn.xiaomimimo.com/v1/chat/completions',
-    video_summary_model: 'mimo-v2.5-pro',
-    video_summary_output_dir: '',
     transcription_provider: 'local_sensevoice',
     local_transcription_root: guessedLocalRoot,
     local_transcription_python: '',
@@ -666,12 +655,6 @@ function normalizeSettings(raw: Partial<RuntimeSettings> | null | undefined): Ru
     mimo_tts_model: defaults.mimo_tts_model,
     mimo_tts_voice_id: sanitizeMimoTtsVoiceId(raw?.mimo_tts_voice_id ?? defaults.mimo_tts_voice_id, defaults.mimo_tts_voice_id),
     mimo_tts_style_prompt: defaults.mimo_tts_style_prompt,
-    video_summary_provider: sanitizeVideoSummaryProvider(raw?.video_summary_provider ?? defaults.video_summary_provider),
-    video_summary_api_key: sanitizeSecret(raw?.video_summary_api_key ?? defaults.video_summary_api_key),
-    video_summary_base_url: sanitizeBaseUrl(raw?.video_summary_base_url ?? defaults.video_summary_base_url, defaults.video_summary_base_url),
-    video_summary_model:
-      sanitizeSecret(raw?.video_summary_model ?? defaults.video_summary_model) || defaults.video_summary_model,
-    video_summary_output_dir: sanitizeOptionalPath(raw?.video_summary_output_dir ?? defaults.video_summary_output_dir),
     transcription_provider: sanitizeTranscriptionProvider(raw?.transcription_provider || defaults.transcription_provider),
     local_transcription_root: sanitizeOptionalPath(raw?.local_transcription_root || defaults.local_transcription_root),
     local_transcription_python: sanitizeOptionalPath(raw?.local_transcription_python || defaults.local_transcription_python),
@@ -743,6 +726,284 @@ function resolveCoursePackageOutputDir(settings: RuntimeSettings) {
   return path.join(settings.output_dir, 'courses')
 }
 
+function resolveKnowledgeOutputDir(settings: RuntimeSettings) {
+  return path.join(settings.output_dir, 'knowledge')
+}
+
+function resolveKnowledgeLibraryPath(settings: RuntimeSettings) {
+  return path.join(resolveKnowledgeOutputDir(settings), 'knowledge_library.json')
+}
+
+function isUsableCodexCoursePlan(planPath: string) {
+  if (!fs.existsSync(planPath)) return false
+  try {
+    const payload = JSON.parse(fs.readFileSync(planPath, 'utf-8')) as Record<string, unknown>
+    if (payload.status === 'pending_codex_goal') return false
+    return (
+      payload.schema_version === 'shijie.codex-course-plan.v0.1' &&
+      typeof payload.plan_id === 'string' &&
+      Array.isArray(payload.chapters) &&
+      payload.chapters.length > 0
+    )
+  } catch {
+    return false
+  }
+}
+
+function isUsableSynthesisPlan(planPath: string) {
+  if (!fs.existsSync(planPath)) return false
+  try {
+    const payload = JSON.parse(fs.readFileSync(planPath, 'utf-8')) as Record<string, unknown>
+    if (payload.status === 'pending_codex_synthesis') return false
+    return (
+      payload.schema_version === 'shijie.content-synthesis-plan.v0.1' &&
+      typeof payload.plan_id === 'string' &&
+      Array.isArray(payload.sections) &&
+      payload.sections.length > 0
+    )
+  } catch {
+    return false
+  }
+}
+
+function isUsableKnowledgeBrief(briefPath: string) {
+  return isUsableMarkdownDocument(briefPath)
+}
+
+function isUsableMarkdownDocument(documentPath: string) {
+  if (!fs.existsSync(documentPath)) return false
+  try {
+    const content = fs.readFileSync(documentPath, 'utf-8').trim()
+    if (content.length < 240) return false
+    if (content.includes('状态：待 Codex Goal')) return false
+    return /[\p{L}\p{N}]/u.test(content)
+  } catch {
+    return false
+  }
+}
+
+function createKnowledgeRecordId(materialPath: string, sourceId: string) {
+  const identity = `${sourceId || ''}\n${path.resolve(materialPath)}`
+  return `knowledge-${crypto.createHash('sha1').update(identity).digest('hex').slice(0, 12)}`
+}
+
+function normalizeKnowledgeRecord(raw: Partial<KnowledgeRecord> | null | undefined): KnowledgeRecord | null {
+  const materialPath = String(raw?.materialPath ?? '').trim()
+  const knowledgeBriefPath = String(raw?.knowledgeBriefPath ?? '').trim()
+  const libraryPath = String(raw?.libraryPath ?? '').trim()
+  if (!materialPath || !knowledgeBriefPath || !libraryPath) return null
+
+  const sourceId = sanitizeDisplayText(raw?.sourceId ?? '')
+  const id = sanitizeDisplayText(raw?.id ?? createKnowledgeRecordId(materialPath, sourceId))
+  const title = sanitizeDisplayText(raw?.title ?? raw?.sourceTitle ?? '未命名学习笔记', '未命名学习笔记')
+  const now = Date.now()
+
+  return {
+    id,
+    title,
+    sourceTitle: sanitizeDisplayText(raw?.sourceTitle ?? title, title),
+    sourceId,
+    sourceUrl: sanitizeDisplayText(raw?.sourceUrl ?? ''),
+    materialPath: path.resolve(materialPath),
+    knowledgeBriefPath: path.resolve(knowledgeBriefPath),
+    libraryPath: path.resolve(libraryPath),
+    textLength: Math.max(0, Number(raw?.textLength ?? 0) || 0),
+    importedAt: Number(raw?.importedAt ?? now),
+    updatedAt: Number(raw?.updatedAt ?? now),
+  }
+}
+
+function loadKnowledgeLibraryFile(settings: RuntimeSettings): KnowledgeLibraryFile {
+  const libraryPath = resolveKnowledgeLibraryPath(settings)
+  try {
+    if (!fs.existsSync(libraryPath)) {
+      return {
+        schema_version: 'shijie.knowledge-library.v0.1',
+        records: [],
+      }
+    }
+
+    const raw = JSON.parse(fs.readFileSync(libraryPath, 'utf-8')) as Partial<KnowledgeLibraryFile>
+    const records = Array.isArray(raw.records)
+      ? raw.records
+          .map((record) => normalizeKnowledgeRecord(record))
+          .filter((record): record is KnowledgeRecord => Boolean(record))
+      : []
+
+    return {
+      schema_version: 'shijie.knowledge-library.v0.1',
+      records,
+    }
+  } catch {
+    return {
+      schema_version: 'shijie.knowledge-library.v0.1',
+      records: [],
+    }
+  }
+}
+
+function saveKnowledgeLibraryFile(settings: RuntimeSettings, library: KnowledgeLibraryFile) {
+  const knowledgeDir = resolveKnowledgeOutputDir(settings)
+  fs.mkdirSync(knowledgeDir, { recursive: true })
+  const libraryPath = resolveKnowledgeLibraryPath(settings)
+  const normalized: KnowledgeLibraryFile = {
+    schema_version: 'shijie.knowledge-library.v0.1',
+    records: library.records
+      .map((record) => normalizeKnowledgeRecord(record))
+      .filter((record): record is KnowledgeRecord => Boolean(record))
+      .sort((left, right) => right.updatedAt - left.updatedAt),
+  }
+  fs.writeFileSync(libraryPath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf-8')
+  return normalized
+}
+
+function stripKnowledgeBriefMetadata(content: string) {
+  return String(content ?? '')
+    .replace(/^<!--\s*shijie:learning-notes[\s\S]*?-->\s*/u, '')
+    .replace(/^<!--\s*shijie:knowledge-brief[\s\S]*?-->\s*/u, '')
+    .trim()
+}
+
+function buildKnowledgePreview(content: string) {
+  const normalized = stripKnowledgeBriefMetadata(content)
+    .replace(/```[\s\S]*?```/gu, ' ')
+    .replace(/[#>*_`~\[\]()-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return normalized.length > 220 ? `${normalized.slice(0, 220)}...` : normalized
+}
+
+function listKnowledgeLibrary(settings: RuntimeSettings): KnowledgeLibraryPayload {
+  const rootDir = resolveKnowledgeOutputDir(settings)
+  const libraryPath = resolveKnowledgeLibraryPath(settings)
+  fs.mkdirSync(rootDir, { recursive: true })
+  const library = saveKnowledgeLibraryFile(settings, loadKnowledgeLibraryFile(settings))
+
+  const records = library.records.map<KnowledgeLibrarySummary>((record) => {
+    const fileExists = Boolean(record.libraryPath && fs.existsSync(record.libraryPath))
+    let content = ''
+    try {
+      content = fileExists ? fs.readFileSync(record.libraryPath, 'utf-8') : ''
+    } catch {
+      content = ''
+    }
+    const body = stripKnowledgeBriefMetadata(content)
+    return {
+      ...record,
+      fileExists,
+      preview: buildKnowledgePreview(content),
+      searchText: [
+        record.title,
+        record.sourceTitle,
+        record.sourceId,
+        record.sourceUrl,
+        body.slice(0, 80_000),
+      ].join(' ').toLowerCase(),
+    }
+  })
+
+  return {
+    rootDir,
+    libraryPath,
+    records,
+  }
+}
+
+function findKnowledgeRecordForMaterial(library: KnowledgeLibraryFile, materialPath: string, sourceId: string) {
+  const resolvedMaterialPath = path.resolve(materialPath)
+  const normalizedSourceId = sanitizeDisplayText(sourceId)
+  return library.records.find((record) => {
+    const materialMatches = path.resolve(record.materialPath) === resolvedMaterialPath
+    const sourceMatches = Boolean(normalizedSourceId && record.sourceId && record.sourceId === normalizedSourceId)
+    const targetExists = Boolean(record.libraryPath && fs.existsSync(record.libraryPath))
+    return targetExists && (materialMatches || sourceMatches)
+  }) ?? null
+}
+
+function readMaterialManifest(materialPath: string) {
+  const manifestPath = path.join(materialPath, 'manifest.json')
+  try {
+    if (!fs.existsSync(manifestPath)) return {}
+    return JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as Record<string, unknown>
+  } catch {
+    return {}
+  }
+}
+
+function importKnowledgeBriefFromMaterial(settings: RuntimeSettings, materialPath: string): KnowledgeRecord {
+  const materialRoot = resolveMaterialOutputDir(settings)
+  const resolvedMaterialPath = assertPathInside(materialPath, materialRoot, '材料包')
+  if (!fs.existsSync(resolvedMaterialPath) || !fs.statSync(resolvedMaterialPath).isDirectory()) {
+    throw new Error(`材料包不存在：${resolvedMaterialPath}`)
+  }
+
+  const learningNotesPath = path.join(resolvedMaterialPath, 'content_draft', 'learning_notes.md')
+  const knowledgeBriefPath = learningNotesPath
+  if (!isUsableKnowledgeBrief(knowledgeBriefPath)) {
+    throw new Error('还没有可学习的学习笔记。请先生成有效的 content_draft/learning_notes.md。')
+  }
+
+  const manifest = readMaterialManifest(resolvedMaterialPath)
+  const source = manifest.source && typeof manifest.source === 'object' ? manifest.source as Record<string, unknown> : {}
+  const title = sanitizeDisplayText(source.title ?? path.basename(resolvedMaterialPath).replace(/\.course_material$/u, ''), '未命名学习笔记')
+  const sourceId = sanitizeDisplayText(source.source_id ?? '')
+  const sourceUrl = sanitizeDisplayText(source.url ?? '')
+  const knowledgeDir = resolveKnowledgeOutputDir(settings)
+  fs.mkdirSync(knowledgeDir, { recursive: true })
+
+  const id = createKnowledgeRecordId(resolvedMaterialPath, sourceId)
+  const library = loadKnowledgeLibraryFile(settings)
+  const existing = library.records.find((record) => record.id === id) ?? null
+  const libraryPath = existing?.libraryPath && path.resolve(path.dirname(existing.libraryPath)) === path.resolve(knowledgeDir)
+    ? existing.libraryPath
+    : path.join(knowledgeDir, `${sanitizeFileNameSegment(title, id)}.knowledge.md`)
+  const content = fs.readFileSync(knowledgeBriefPath, 'utf-8').trim()
+  const importedAt = existing?.importedAt ?? Date.now()
+  const updatedAt = Date.now()
+  const frontMatter = [
+    '<!-- shijie:learning-notes',
+    'schema_version: shijie.learning-notes.v0.1',
+    `title: ${title}`,
+    `source_id: ${sourceId}`,
+    `material_path: ${resolvedMaterialPath}`,
+    `source_notes_path: ${knowledgeBriefPath}`,
+    `imported_at: ${new Date(importedAt).toISOString()}`,
+    `updated_at: ${new Date(updatedAt).toISOString()}`,
+    '-->',
+    '',
+  ].join('\n')
+
+  fs.writeFileSync(libraryPath, `${frontMatter}${content}\n`, 'utf-8')
+
+  const nextRecord = normalizeKnowledgeRecord({
+    id,
+    title,
+    sourceTitle: title,
+    sourceId,
+    sourceUrl,
+    materialPath: resolvedMaterialPath,
+    knowledgeBriefPath,
+    libraryPath,
+    textLength: content.length,
+    importedAt,
+    updatedAt,
+  })
+
+  if (!nextRecord) {
+    throw new Error('学习笔记入库失败：无法生成有效的知识记录。')
+  }
+
+  saveKnowledgeLibraryFile(settings, {
+    schema_version: 'shijie.knowledge-library.v0.1',
+    records: [
+      nextRecord,
+      ...library.records.filter((record) => record.id !== id),
+    ],
+  })
+
+  return nextRecord
+}
+
 function listMaterialPackages(settings: RuntimeSettings) {
   const rootDir = resolveMaterialOutputDir(settings)
   const coursePackageRootDir = resolveCoursePackageOutputDir(settings)
@@ -750,6 +1011,7 @@ function listMaterialPackages(settings: RuntimeSettings) {
   fs.mkdirSync(coursePackageRootDir, { recursive: true })
   const publishedBySourceId = new Map<string, string>()
   const publishedByTitle = new Map<string, string>()
+  const knowledgeLibrary = loadKnowledgeLibraryFile(settings)
 
   for (const entry of fs.readdirSync(coursePackageRootDir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith('.course-package.json')) continue
@@ -785,52 +1047,113 @@ function listMaterialPackages(settings: RuntimeSettings) {
     const title = sanitizeDisplayText(source.title ?? entry.name.replace(/\.course_material$/u, ''), entry.name)
     const sourceId = sanitizeDisplayText(source.source_id ?? '')
     const handoffPath = path.join(materialPath, 'HANDOFF.md')
+    const runStatePath = path.join(materialPath, 'run_state.json')
     const handoffStatusPath = path.join(materialPath, 'handoff_status.json')
-    let handoffStatus: Record<string, unknown> = {}
+    let runState: Record<string, unknown> = {}
     try {
-      if (fs.existsSync(handoffStatusPath)) {
-        handoffStatus = JSON.parse(fs.readFileSync(handoffStatusPath, 'utf-8')) as Record<string, unknown>
+      if (fs.existsSync(runStatePath)) {
+        runState = JSON.parse(fs.readFileSync(runStatePath, 'utf-8')) as Record<string, unknown>
+      } else if (fs.existsSync(handoffStatusPath)) {
+        runState = JSON.parse(fs.readFileSync(handoffStatusPath, 'utf-8')) as Record<string, unknown>
       }
     } catch {
-      handoffStatus = {}
+      runState = {}
     }
-    const gptDesignerDir = path.join(materialPath, 'gpt_designer')
-    const gptWorkspaceZipPath = path.join(gptDesignerDir, 'gpt_course_design_workspace.zip')
-    const courseBlueprintPath = path.join(materialPath, 'course_blueprint.json')
-    const finalCoursePath = path.join(materialPath, 'course_draft', 'final.course-package.json')
-    const publishedCoursePath =
-      (sourceId ? publishedBySourceId.get(sourceId) : '') ||
-      publishedByTitle.get(title) ||
-      path.join(coursePackageRootDir, `${sanitizeFileNameSegment(title, entry.name)}.course-package.json`)
-    const finalCourseExists = fs.existsSync(finalCoursePath)
-    const publishedCourseExists = fs.existsSync(publishedCoursePath)
-    const importReadyCoursePath = publishedCourseExists ? publishedCoursePath : finalCoursePath
-    const gptWorkspaceZipExists = fs.existsSync(gptWorkspaceZipPath)
-    const courseBlueprintExists = fs.existsSync(courseBlueprintPath)
-    const importReadyCourseExists = finalCourseExists || publishedCourseExists
-    const workflowStage = importReadyCourseExists
-      ? 'course_ready'
-      : courseBlueprintExists
-        ? 'blueprint_ready'
-        : gptWorkspaceZipExists
-          ? 'material_ready'
-          : sanitizeDisplayText(handoffStatus.stage ?? 'legacy', 'legacy')
-    const workflowStageLabel =
-      workflowStage === 'course_ready'
-        ? '课包可导入'
-        : workflowStage === 'blueprint_ready'
-          ? '待 Codex 制课'
-          : workflowStage === 'material_ready'
-            ? '待 GPT 设计'
-            : sanitizeDisplayText(handoffStatus.stage_label ?? '旧材料', '旧材料')
-    const nextActionLabel =
-      workflowStage === 'course_ready'
-        ? '导入最终课包'
-        : workflowStage === 'blueprint_ready'
-          ? '复制 Codex 提示，新开制课对话'
-          : workflowStage === 'material_ready'
-            ? '上传 GPT 工作包并生成蓝图'
-            : sanitizeDisplayText(handoffStatus.next_action ?? '查看材料目录', '查看材料目录')
+    const authoringDir = path.join(materialPath, 'authoring')
+    const gptMaterialWorkspaceZipPath = ''
+    const gptMaterialPromptPath = ''
+    const codexSynthesisPromptPath = path.join(authoringDir, '02_start_codex_synthesis.md')
+    const codexGoalPromptPath = codexSynthesisPromptPath
+    const readonlySynthesisAuditPromptPath = path.join(authoringDir, '03_readonly_synthesis_audit.md')
+    const readonlyAuditPromptPath = readonlySynthesisAuditPromptPath
+    const synthesisPlanPath = path.join(materialPath, 'content_draft', 'synthesis_plan.json')
+    const codexCoursePlanPath = synthesisPlanPath
+    const learningNotesPath = path.join(materialPath, 'content_draft', 'learning_notes.md')
+    const knowledgeBriefPath = learningNotesPath
+    const chapterMindmapPath = path.join(materialPath, 'content_draft', 'chapter_mindmap.md')
+    const chapterMapPath = chapterMindmapPath
+    const finalCoursePath = ''
+    const publishedCoursePath = ''
+    const finalCourseExists = false
+    const publishedCourseExists = false
+    const importReadyCoursePath = ''
+    const gptMaterialWorkspaceZipExists = false
+    const synthesisPlanExists = isUsableSynthesisPlan(synthesisPlanPath)
+    const knowledgeBriefExists = isUsableKnowledgeBrief(knowledgeBriefPath)
+    const chapterMapExists = isUsableMarkdownDocument(chapterMapPath)
+    const knowledgeRecord = findKnowledgeRecordForMaterial(knowledgeLibrary, materialPath, sourceId)
+    const knowledgeRecordPath = knowledgeRecord?.libraryPath ?? ''
+    const knowledgeImported = Boolean(knowledgeRecordPath)
+    const codexCoursePlanExists = synthesisPlanExists
+    const importReadyCourseExists = false
+    const readonlyAuditExists =
+      fs.existsSync(path.join(materialPath, 'content_draft', 'review_exports', 'latest-readonly-audit.md'))
+    const authoringExists = fs.existsSync(authoringDir)
+    const canonicalMaterial = authoringExists && fs.existsSync(runStatePath)
+    if (!canonicalMaterial) continue
+    const explicitRunStage = sanitizeDisplayText(runState.stage ?? '')
+    const stagedWorkflowStates = new Set([
+      'knowledge_tree_ready',
+      'coverage_ready',
+      'dossier_ready',
+      'partial_learning_notes',
+      'needs_restructure',
+      'needs_deepening',
+      'dossier_incomplete',
+      'learning_notes_ready',
+    ])
+    const derivedWorkflowStage: string = stagedWorkflowStates.has(explicitRunStage)
+      ? explicitRunStage
+      : knowledgeImported
+        ? 'knowledge_ready'
+        : readonlyAuditExists
+          ? 'audit_ready'
+          : knowledgeBriefExists && chapterMapExists
+            ? 'summary_ready'
+          : chapterMapExists
+            ? 'map_ready'
+          : knowledgeBriefExists
+          ? 'brief_ready'
+        : codexCoursePlanExists
+          ? 'codex_plan_ready'
+          : 'material_ready'
+    const workflowStage = derivedWorkflowStage || explicitRunStage
+    const workflowStageLabels: Record<string, string> = {
+      knowledge_ready: '学习笔记已可学习',
+      learning_notes_ready: '学习笔记可导入',
+      partial_learning_notes: '部分章节已深写',
+      needs_restructure: '需调整结构',
+      needs_deepening: '需要加厚',
+      dossier_incomplete: '章节材料不足',
+      dossier_ready: '章节材料已就绪',
+      coverage_ready: '覆盖层已就绪',
+      knowledge_tree_ready: '知识树已就绪',
+      summary_ready: '笔记与思维导图已就绪',
+      brief_ready: '学习笔记可阅读',
+      map_ready: '章节思维导图已就绪',
+      audit_ready: '审计可查看',
+      codex_plan_ready: synthesisPlanExists ? '笔记计划已就绪' : '待 Codex 整理',
+      material_ready: '待 Codex 整理',
+    }
+    const workflowStageLabel = workflowStageLabels[workflowStage] ?? '待 Codex 整理'
+    const nextActionLabels: Record<string, string> = {
+      knowledge_ready: '进入学习',
+      learning_notes_ready: '开始学习',
+      partial_learning_notes: '继续深写后续章节',
+      needs_restructure: '调整知识树',
+      needs_deepening: '按薄度复查返工',
+      dossier_incomplete: '补章节材料包',
+      dossier_ready: '开始分章深写',
+      coverage_ready: '生成章节材料包',
+      knowledge_tree_ready: '映射材料覆盖',
+      summary_ready: '阅读笔记、思维导图并开始学习',
+      brief_ready: '继续补章节思维导图或审计',
+      map_ready: '继续补学习笔记或审计',
+      audit_ready: '查看审计报告或继续修复',
+      codex_plan_ready: '复制 Codex 学习笔记提示，继续整理',
+      material_ready: '复制 Codex 学习笔记提示，开始整理',
+    }
+    const nextActionLabel = nextActionLabels[workflowStage] ?? '复制 Codex 学习笔记提示，开始整理'
     records.push({
       name: entry.name,
       path: materialPath,
@@ -841,22 +1164,29 @@ function listMaterialPackages(settings: RuntimeSettings) {
       updatedAt: stat.mtimeMs,
       handoffPath,
       handoffExists: fs.existsSync(handoffPath),
+      runStatePath,
+      runStateExists: fs.existsSync(runStatePath),
       handoffStatusPath,
       handoffStatusExists: fs.existsSync(handoffStatusPath),
       workflowStage,
       workflowStageLabel,
       nextActionLabel,
-      startHerePath: path.join(materialPath, 'START_HERE.md'),
-      codexPromptPath: path.join(materialPath, 'codex_tasks', '00_new_window_prompt.md'),
-      gptDesignerDir,
-      gptDesignerStartPath: path.join(gptDesignerDir, 'START_GPT_DESIGNER.md'),
-      gptDesignerPromptPath: path.join(gptDesignerDir, 'chatgpt-course-designer-v1.md'),
-      gptDesignerCopyPromptPath: path.join(gptDesignerDir, '01_copy_to_chatgpt.md'),
-      gptWorkspaceZipPath,
-      gptWorkspaceZipExists,
-      courseBlueprintPath,
-      courseBlueprintExists,
-      codexBlueprintPromptPath: path.join(gptDesignerDir, '02_copy_to_codex_after_blueprint.md'),
+      authoringDir,
+      gptMaterialPromptPath: fs.existsSync(gptMaterialPromptPath) ? gptMaterialPromptPath : '',
+      gptMaterialWorkspaceZipPath: gptMaterialWorkspaceZipPath,
+      gptMaterialWorkspaceZipExists,
+      codexCoursePlanPath,
+      codexCoursePlanExists,
+      synthesisPlanPath,
+      synthesisPlanExists,
+      knowledgeBriefPath,
+      knowledgeBriefExists,
+      chapterMapPath,
+      chapterMapExists,
+      knowledgeRecordPath,
+      knowledgeImported,
+      codexGoalPromptPath: fs.existsSync(codexGoalPromptPath) ? codexGoalPromptPath : '',
+      readonlyAuditPromptPath: fs.existsSync(readonlyAuditPromptPath) ? readonlyAuditPromptPath : '',
       finalCoursePath,
       finalCourseExists,
       publishedCoursePath,
@@ -873,13 +1203,29 @@ function listMaterialPackages(settings: RuntimeSettings) {
   }
 }
 
-function assertPathInside(targetPath: string, allowedRoot: string, label: string) {
+function getComparablePath(targetPath: string) {
+  const resolved = path.resolve(targetPath)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
+function isPathInsideRoot(targetPath: string, allowedRoot: string) {
   const resolvedTarget = path.resolve(targetPath)
   const resolvedRoot = path.resolve(allowedRoot)
-  const comparableTarget = process.platform === 'win32' ? resolvedTarget.toLowerCase() : resolvedTarget
-  const comparableRoot = process.platform === 'win32' ? resolvedRoot.toLowerCase() : resolvedRoot
-  if (comparableTarget !== comparableRoot && !comparableTarget.startsWith(`${comparableRoot}${path.sep}`)) {
+  const comparableTarget = getComparablePath(resolvedTarget)
+  const comparableRoot = getComparablePath(resolvedRoot)
+  return comparableTarget === comparableRoot || comparableTarget.startsWith(`${comparableRoot}${path.sep}`)
+}
+
+function assertPathInside(targetPath: string, allowedRoot: string, label: string, options: { allowRoot?: boolean } = {}) {
+  const resolvedTarget = path.resolve(targetPath)
+  const resolvedRoot = path.resolve(allowedRoot)
+  const comparableTarget = getComparablePath(resolvedTarget)
+  const comparableRoot = getComparablePath(resolvedRoot)
+  if (!isPathInsideRoot(resolvedTarget, resolvedRoot)) {
     throw new Error(`${label} 不在允许的目录内，已取消删除。`)
+  }
+  if (!options.allowRoot && comparableTarget === comparableRoot) {
+    throw new Error(`${label} 指向输出根目录，已取消删除。`)
   }
   return resolvedTarget
 }
@@ -890,149 +1236,82 @@ function deletePathIfExists(targetPath: string, deletedPaths: string[]) {
   deletedPaths.push(targetPath)
 }
 
+function deletePathIfInsideAnyRoot(
+  targetPath: string | undefined,
+  allowedRoots: string[],
+  deletedPaths: string[],
+  skippedPaths: string[],
+) {
+  if (!targetPath) return
+  const resolvedTarget = path.resolve(targetPath)
+  const safeRoot = allowedRoots.find((root) => isPathInsideRoot(resolvedTarget, root))
+  if (!safeRoot || getComparablePath(resolvedTarget) === getComparablePath(safeRoot)) {
+    skippedPaths.push(resolvedTarget)
+    return
+  }
+  deletePathIfExists(resolvedTarget, deletedPaths)
+}
+
 function deleteMaterialPackage(settings: RuntimeSettings, materialPath: string): DeleteResult {
   const rootDir = resolveMaterialOutputDir(settings)
   const coursePackageRootDir = resolveCoursePackageOutputDir(settings)
+  const knowledgeRootDir = resolveKnowledgeOutputDir(settings)
+  const outputRootDir = normalizeOutputRoot(settings.output_dir)
   const safeMaterialPath = assertPathInside(materialPath, rootDir, '原材料包')
   const inventory = listMaterialPackages(settings)
-  const record = inventory.records.find((item) => path.resolve(item.path) === safeMaterialPath)
-  if (!record) {
-    throw new Error('没有找到这条原材料记录，可能已经被删除。')
-  }
-
+  const record = inventory.records.find((item) => getComparablePath(item.path) === getComparablePath(safeMaterialPath))
   const deletedPaths: string[] = []
+  const skippedPaths: string[] = []
   deletePathIfExists(safeMaterialPath, deletedPaths)
 
-  for (const candidate of [record.finalCoursePath, record.publishedCoursePath]) {
-    if (!candidate) continue
-    const safeCoursePath = assertPathInside(candidate, coursePackageRootDir, '课程包')
-    deletePathIfExists(safeCoursePath, deletedPaths)
+  for (const candidate of [record?.finalCoursePath, record?.publishedCoursePath]) {
+    deletePathIfInsideAnyRoot(candidate, [coursePackageRootDir, outputRootDir], deletedPaths, skippedPaths)
   }
 
-  return { deletedPaths }
-}
-
-function resolveVideoSummaryOutputDir(settings: RuntimeSettings) {
-  return settings.video_summary_output_dir || path.join(settings.output_dir, 'workbench', 'summaries')
-}
-
-function readMarkdownFrontmatter(markdown: string) {
-  if (!markdown.startsWith('---')) return {}
-  const endIndex = markdown.indexOf('\n---', 3)
-  if (endIndex < 0) return {}
-  const raw = markdown.slice(3, endIndex).trim()
-  const result: Record<string, string> = {}
-  for (const line of raw.split(/\r?\n/u)) {
-    const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/u)
-    if (!match) continue
-    const key = match[1]
-    let value = match[2].trim()
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      try {
-        value = JSON.parse(value)
-      } catch {
-        value = value.slice(1, -1)
-      }
+  const sourceId = sanitizeDisplayText(record?.sourceId ?? '')
+  const knowledgeLibrary = loadKnowledgeLibraryFile(settings)
+  const nextKnowledgeRecords = knowledgeLibrary.records.filter((item) => {
+    const materialMatches = getComparablePath(item.materialPath) === getComparablePath(safeMaterialPath)
+    const sourceMatches = Boolean(sourceId && item.sourceId === sourceId)
+    if (!materialMatches && !sourceMatches) return true
+    if (item.libraryPath) {
+      deletePathIfInsideAnyRoot(item.libraryPath, [knowledgeRootDir, outputRootDir], deletedPaths, skippedPaths)
     }
-    result[key] = value
-  }
-  return result
-}
-
-function listVideoSummaries(settings: RuntimeSettings) {
-  const rootDir = resolveVideoSummaryOutputDir(settings)
-  fs.mkdirSync(rootDir, { recursive: true })
-  const records: VideoSummaryRecord[] = []
-
-  for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue
-    const markdownPath = path.join(rootDir, entry.name)
-    try {
-      const stat = fs.statSync(markdownPath)
-      const markdown = fs.readFileSync(markdownPath, 'utf-8')
-      const frontmatter = readMarkdownFrontmatter(markdown)
-      const headingMatch = markdown.match(/^#\s+(.+)$/mu)
-      const title = sanitizeDisplayText(frontmatter.title || headingMatch?.[1] || entry.name.replace(/\.md$/iu, ''), entry.name)
-      const sourceId = sanitizeDisplayText(frontmatter.source_id || '')
-      const summaryProvider = sanitizeDisplayText(frontmatter.summary_provider || 'local', 'local')
-      records.push({
-        name: entry.name,
-        path: markdownPath,
-        title,
-        sourceId,
-        keyPointCount: (markdown.match(/^\s*-\s+\*\*/gmu) || []).length,
-        blockCount: (markdown.match(/^####\s+/gmu) || []).length,
-        textLength: markdown.replace(/^---[\s\S]*?\n---/u, '').replace(/\s+/gu, '').length,
-        updatedAt: stat.mtimeMs,
-        summaryProvider,
-      })
-    } catch {
-      // Ignore malformed or locked files.
-    }
+    return false
+  })
+  if (nextKnowledgeRecords.length !== knowledgeLibrary.records.length) {
+    saveKnowledgeLibraryFile(settings, {
+      schema_version: 'shijie.knowledge-library.v0.1',
+      records: nextKnowledgeRecords,
+    })
   }
 
-  return {
-    rootDir,
-    records: records.sort((left, right) => right.updatedAt - left.updatedAt),
-  }
-}
-
-function findVideoSummaryMaterialPath(settings: RuntimeSettings, frontmatter: Record<string, string>, markdownPath: string) {
-  const explicitPath = sanitizeDisplayText(frontmatter.material_path || '')
-  if (explicitPath) return explicitPath
-
-  const summaryMaterialRoot = path.join(settings.output_dir, 'workbench', 'summary_materials')
-  if (!fs.existsSync(summaryMaterialRoot)) return ''
-
-  const sourceId = sanitizeDisplayText(frontmatter.source_id || '')
-  const title = sanitizeDisplayText(frontmatter.title || path.basename(markdownPath).replace(/\.md$/iu, ''))
-
-  for (const entry of fs.readdirSync(summaryMaterialRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.name === 'cache') continue
-    const candidate = path.join(summaryMaterialRoot, entry.name)
-    const manifestPath = path.join(candidate, 'manifest.json')
-    if (!fs.existsSync(manifestPath)) continue
-    try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as Record<string, unknown>
-      const source = (manifest.source || {}) as Record<string, unknown>
-      const candidateSourceId = sanitizeDisplayText(source.source_id || '')
-      const candidateTitle = sanitizeDisplayText(source.title || '')
-      if ((sourceId && candidateSourceId === sourceId) || (title && candidateTitle === title)) {
-        return candidate
-      }
-    } catch {
-      // Ignore malformed material manifests.
-    }
+  const learningLibrary = loadLearningLibraryState()
+  const nextLearningRecords = Object.fromEntries(
+    Object.entries(learningLibrary.records).filter(([, item]) => {
+      const importedPath = sanitizeDisplayText(item.importedCoursePath ?? item.packagePath ?? '')
+      const resolvedImportedPath = importedPath ? path.resolve(importedPath) : ''
+      const comparableImportedPath = resolvedImportedPath ? getComparablePath(resolvedImportedPath) : ''
+      const comparableMaterialPath = getComparablePath(safeMaterialPath)
+      const pathMatches = Boolean(
+        comparableImportedPath &&
+        (comparableImportedPath === comparableMaterialPath || comparableImportedPath.startsWith(`${comparableMaterialPath}${path.sep}`)),
+      )
+      const sourceMatches = Boolean(sourceId && item.sourceId === sourceId)
+      return !pathMatches && !sourceMatches
+    }),
+  )
+  if (Object.keys(nextLearningRecords).length !== Object.keys(learningLibrary.records).length) {
+    const currentStillExists = Boolean(
+      learningLibrary.currentRecordId && nextLearningRecords[learningLibrary.currentRecordId],
+    )
+    saveLearningLibraryState({
+      currentRecordId: currentStillExists ? learningLibrary.currentRecordId : null,
+      records: nextLearningRecords,
+    })
   }
 
-  return ''
-}
-
-function deleteVideoSummary(settings: RuntimeSettings, markdownPath: string): DeleteResult {
-  const rootDir = resolveVideoSummaryOutputDir(settings)
-  const safeMarkdownPath = assertPathInside(markdownPath, rootDir, '视频总结')
-  if (!safeMarkdownPath.toLowerCase().endsWith('.md')) {
-    throw new Error('只能删除视频总结 Markdown 文件。')
-  }
-
-  const deletedPaths: string[] = []
-  let materialPath = ''
-  if (fs.existsSync(safeMarkdownPath)) {
-    const markdown = fs.readFileSync(safeMarkdownPath, 'utf-8')
-    const frontmatter = readMarkdownFrontmatter(markdown)
-    const materialMatch = markdown.match(/原材料包：`([^`]+)`/u)
-    materialPath = findVideoSummaryMaterialPath(settings, frontmatter, safeMarkdownPath) || materialMatch?.[1] || ''
-  }
-
-  deletePathIfExists(safeMarkdownPath, deletedPaths)
-
-  if (materialPath) {
-    const summaryMaterialRoot = path.join(settings.output_dir, 'workbench', 'summary_materials')
-    const safeMaterialPath = assertPathInside(materialPath, summaryMaterialRoot, '视频总结材料')
-    deletePathIfExists(safeMaterialPath, deletedPaths)
-  }
-
-  return { deletedPaths }
+  return skippedPaths.length > 0 ? { deletedPaths, skippedPaths } : { deletedPaths }
 }
 
 function normalizeCourseTextValue(value: unknown) {
@@ -1589,7 +1868,7 @@ function attachCourseVisualMap(payload: CourseVisualMapAttachmentPayload) {
   const targetPath = path.resolve(String(payload?.targetPath || ''))
   const imagePath = path.resolve(String(payload?.imagePath || ''))
   if (!targetPath || !fs.existsSync(targetPath)) {
-    throw new Error('没有找到要更新的课程包。')
+    throw new Error('没有找到要更新的学习包。')
   }
   if (!imagePath || !fs.existsSync(imagePath)) {
     throw new Error('没有找到要导入的地图图片。')
@@ -1600,7 +1879,7 @@ function attachCourseVisualMap(payload: CourseVisualMapAttachmentPayload) {
   try {
     parsed = JSON.parse(rawText) as Record<string, unknown>
   } catch {
-    throw new Error('课程包 JSON 解析失败，无法写入地图图片。')
+    throw new Error('学习包 JSON 解析失败，无法写入地图图片。')
   }
 
   const course = parsed.course && typeof parsed.course === 'object' ? (parsed.course as Record<string, unknown>) : {}
@@ -1614,14 +1893,14 @@ function attachCourseVisualMap(payload: CourseVisualMapAttachmentPayload) {
   fs.mkdirSync(path.dirname(absoluteAssetPath), { recursive: true })
   fs.copyFileSync(imagePath, absoluteAssetPath)
 
-  const title = String(course.title ?? source.title ?? '课程').trim() || '课程'
+  const title = String(course.title ?? source.title ?? '学习笔记').trim() || '学习笔记'
   const nextMap: Record<string, unknown> = {
     ...currentMap,
     kind: 'image',
     status: 'attached',
     uri: relativeAssetPath,
     alt: String(currentMap.alt ?? '').trim() || `${title} 全局学习地图`,
-    prompt: String(currentMap.prompt ?? '').trim() || `请生成《${title}》的 16:9 全局学习地图，展示章节主线、能力成长和关键转折，少文字、强结构，适合作为课程导览图。`,
+    prompt: String(currentMap.prompt ?? '').trim() || `请生成《${title}》的 16:9 全局学习地图，展示章节主线、能力成长和关键转折，少文字、强结构，适合作为学习导览图。`,
   }
 
   const nextPayload = {
@@ -1680,6 +1959,24 @@ function normalizeNodeSession(raw: Partial<PersistedNodeLearningSession> | null 
   }
 }
 
+function readPackageTextWithLightMapUpgrade(courseText: string, packagePath: string | null) {
+  const resolvedPath = packagePath ? path.resolve(packagePath) : ''
+  if (!resolvedPath || !fs.existsSync(resolvedPath)) return courseText
+
+  try {
+    const freshText = fs.readFileSync(resolvedPath, 'utf-8')
+    const currentPayload = JSON.parse(courseText || '{}') as Record<string, unknown>
+    const freshPayload = JSON.parse(freshText) as Record<string, unknown>
+    const currentPackageId = String(currentPayload.package_id ?? '').trim()
+    const freshPackageId = String(freshPayload.package_id ?? '').trim()
+    if (currentPackageId && freshPackageId && currentPackageId !== freshPackageId) return courseText
+    if (!freshPayload.light_learning_map || currentPayload.light_learning_map) return courseText
+    return freshText
+  } catch {
+    return courseText
+  }
+}
+
 function normalizeLearningRecord(raw: Partial<LearningRecord> | null | undefined, existing?: LearningRecord): LearningRecord {
   const recordId = String(raw?.id ?? existing?.id ?? raw?.packageId ?? `record-${Date.now()}`)
   const nodeSessions = Object.entries(raw?.nodeSessions ?? existing?.nodeSessions ?? {}).reduce<Record<string, PersistedNodeLearningSession>>(
@@ -1697,15 +1994,19 @@ function normalizeLearningRecord(raw: Partial<LearningRecord> | null | undefined
     raw?.packagePath === null
       ? null
       : String(raw?.packagePath ?? existing?.packagePath ?? '') || null
-  const normalizedCourseText = normalizeCoursePackageText(
+  const rawCourseText = readPackageTextWithLightMapUpgrade(
     String(raw?.courseText ?? existing?.courseText ?? ''),
+    packagePath ?? importedCoursePath,
+  )
+  const normalizedCourseText = normalizeCoursePackageText(
+    rawCourseText,
     packagePath ?? importedCoursePath,
   )
 
   return {
     id: recordId,
     packageId: String(raw?.packageId ?? existing?.packageId ?? recordId),
-    title: String(raw?.title ?? existing?.title ?? '未命名课程'),
+    title: String(raw?.title ?? existing?.title ?? '未命名学习笔记'),
     sourceTitle: String(raw?.sourceTitle ?? existing?.sourceTitle ?? raw?.title ?? '未命名来源'),
     sourceId: String(raw?.sourceId ?? existing?.sourceId ?? ''),
     sourceUrl: raw?.sourceUrl ?? existing?.sourceUrl ?? '',
@@ -1928,8 +2229,8 @@ function buildAchievementBadges(record: LearningRecord) {
   if (record.progressPercent >= 100 || record.isArchived) {
     badges.push({
       code: 'course_finisher',
-      label: '结课归档',
-      description: '整门课程已经完成，可以永久收录到知识资产里。',
+      label: '学习归档',
+      description: '这份学习档案已经完成，可以永久收录到知识资产里。',
       tone: 'success',
     })
   }
@@ -2205,7 +2506,7 @@ function ensureBackendRuntimeRoot() {
   return runtimeBackendRoot
 }
 
-function resolveBackendScriptPath(scriptName: 'main.py' | 'distiller.py' | 'video_summary.py') {
+function resolveBackendScriptPath(scriptName: 'main.py' | 'distiller.py') {
   const backendRoot = ensureBackendRuntimeRoot()
   const scriptPath = path.join(backendRoot, scriptName)
 
@@ -2324,8 +2625,6 @@ function buildPythonEnv(settings: RuntimeSettings, extraEnv: NodeJS.ProcessEnv =
           ONBOARD_LOCAL_AUDIO_TRANSCRIBE_WORKERS: '1',
           ONBOARD_LOCAL_SENSEVOICE_MAX_CHUNK_SECONDS: '120',
           ONBOARD_AUDIO_MAX_CHUNK_SECONDS: '300',
-          ONBOARD_CHUNK_DISTILL_CONCURRENCY: '1',
-          ONBOARD_BATCH_REDUCE_CONCURRENCY: '1',
         }
       : resourceMode === 'fast'
         ? {
@@ -2337,8 +2636,6 @@ function buildPythonEnv(settings: RuntimeSettings, extraEnv: NodeJS.ProcessEnv =
             ONBOARD_LOCAL_AUDIO_TRANSCRIBE_WORKERS: '1',
             ONBOARD_LOCAL_SENSEVOICE_MAX_CHUNK_SECONDS: '300',
             ONBOARD_AUDIO_MAX_CHUNK_SECONDS: '480',
-            ONBOARD_CHUNK_DISTILL_CONCURRENCY: '4',
-            ONBOARD_BATCH_REDUCE_CONCURRENCY: '3',
           }
         : {
             ONBOARD_RESOURCE_MODE: 'balanced',
@@ -2349,8 +2646,6 @@ function buildPythonEnv(settings: RuntimeSettings, extraEnv: NodeJS.ProcessEnv =
             ONBOARD_LOCAL_AUDIO_TRANSCRIBE_WORKERS: '1',
             ONBOARD_LOCAL_SENSEVOICE_MAX_CHUNK_SECONDS: '240',
             ONBOARD_AUDIO_MAX_CHUNK_SECONDS: '480',
-            ONBOARD_CHUNK_DISTILL_CONCURRENCY: '4',
-            ONBOARD_BATCH_REDUCE_CONCURRENCY: '3',
           }
 
   return {
@@ -2361,10 +2656,6 @@ function buildPythonEnv(settings: RuntimeSettings, extraEnv: NodeJS.ProcessEnv =
     SHIJIE_FOCUS_SETTINGS_PATH: settingsPath,
     SHIJIE_FOCUS_OUTPUT_DIR: settings.output_dir,
     BILIBILI_SESSDATA: settings.sessdata,
-    SHIJIE_VIDEO_SUMMARY_PROVIDER: settings.video_summary_provider,
-    SHIJIE_VIDEO_SUMMARY_API_KEY: settings.video_summary_api_key,
-    SHIJIE_VIDEO_SUMMARY_BASE_URL: settings.video_summary_base_url,
-    SHIJIE_VIDEO_SUMMARY_MODEL: settings.video_summary_model,
     ONBOARD_TRANSCRIPTION_PROVIDER: settings.transcription_provider,
     ONBOARD_LOCAL_TRANSCRIPTION_ROOT: settings.local_transcription_root,
     ONBOARD_LOCAL_TRANSCRIPTION_PYTHON: settings.local_transcription_python,
@@ -2572,7 +2863,7 @@ function ensureObsidianCourseSnippet(vaultPath: string) {
   fs.mkdirSync(snippetsDir, { recursive: true })
   const snippetPath = path.join(snippetsDir, 'shijie-focus-course.css')
   const css = [
-    '/* 视界专注课程档案：启用位置 Obsidian 设置 -> 外观 -> CSS snippets -> shijie-focus-course */',
+    '/* 视界专注学习档案：启用位置 Obsidian 设置 -> 外观 -> CSS snippets -> shijie-focus-course */',
     '.markdown-preview-view.shijie-course-note,',
     '.markdown-preview-view.shijie-course-home,',
     '.markdown-preview-view.shijie-course-board,',
@@ -2686,7 +2977,7 @@ function exportCourseToObsidian(settings: RuntimeSettings, payload: ObsidianExpo
   const normalizeLessonMarkdown = (markdown: string) => markdown.replace(/^##\s+/gm, '### ')
   const renderReadableAnswer = (markdown: string) => {
     const normalized = normalizeMarkdownNewlines(markdown).trim()
-    if (!normalized) return '- 暂无标准答案'
+    if (!normalized) return '- 暂无参考回看'
     return normalized
       .split(/(?<=[。！？；;])/u)
       .map((sentence) => sentence.trim())
@@ -2701,14 +2992,14 @@ function exportCourseToObsidian(settings: RuntimeSettings, payload: ObsidianExpo
   const sourceMeta = getRecord(course.source)
   const chapters = asRecordList(course.chapters)
   const packageId = String(course.package_id ?? 'unknown-package')
-  const courseTitle = asText(courseMeta.title ?? sourceMeta.title ?? packageId, '未命名课程')
+  const courseTitle = asText(courseMeta.title ?? sourceMeta.title ?? packageId, '未命名学习笔记')
   const exportedAt = new Date().toISOString()
   const exportFolder = sanitizeFileNameSegment(settings.obsidian_export_folder || '视界专注', '视界专注')
   const courseFolder = sanitizeFileNameSegment(courseTitle, packageId)
   const exportWikiFolder = sanitizeWikiSegment(exportFolder, '视界专注')
   const courseWikiFolder = sanitizeWikiSegment(courseFolder, packageId)
   const courseWikiRoot = `${exportWikiFolder}/${courseWikiFolder}`
-  const overviewNoteTitle = '课程总览'
+  const overviewNoteTitle = '学习总览'
   const progressNoteTitle = '学习看板'
   const conceptNoteTitle = '关键概念'
   const mistakeNoteTitle = '常见误区'
@@ -2716,7 +3007,7 @@ function exportCourseToObsidian(settings: RuntimeSettings, payload: ObsidianExpo
   const overviewWikiTarget = `${courseWikiRoot}/${overviewNoteTitle}`
   const progressWikiTarget = `${courseWikiRoot}/${progressNoteTitle}`
   const rootDir = path.join(vaultPath, exportFolder, courseFolder)
-  const lessonFolderName = '课程笔记'
+  const lessonFolderName = '学习笔记'
   const lessonDir = path.join(rootDir, lessonFolderName)
   const snippetPath = ensureObsidianCourseSnippet(vaultPath)
   void snippetPath
@@ -2809,7 +3100,7 @@ function exportCourseToObsidian(settings: RuntimeSettings, payload: ObsidianExpo
     const nextMeta = currentIndex >= 0 && currentIndex < lessonOrder.length - 1 ? lessonMetaById.get(lessonOrder[currentIndex + 1]) ?? null : null
     const existingMarkdown = fs.existsSync(meta.filePath) ? fs.readFileSync(meta.filePath, 'utf-8') : ''
     const lessonBody = enhanceTeachingMarkdownForObsidian(
-      normalizeLessonMarkdown(teachingMarkdown || String(node.summary ?? '暂无课程正文。')),
+      normalizeLessonMarkdown(teachingMarkdown || String(node.summary ?? '暂无学习笔记正文。')),
     )
 
     for (const concept of concepts) {
@@ -2846,29 +3137,29 @@ function exportCourseToObsidian(settings: RuntimeSettings, payload: ObsidianExpo
       'cssclasses:',
       renderYamlList(['shijie-course-note'], 2),
       'tags:',
-      renderYamlList(['视界专注', '课程笔记'], 2),
+      renderYamlList(['视界专注', '学习笔记'], 2),
       '---',
       '',
       `# ${meta.title}`,
       '',
-      `> [回到视界专注](${buildAppDeepLink(packageId, nodeId)}) · [[${overviewWikiTarget}|课程总览]] · [[${progressWikiTarget}|学习看板]]`,
+      `> [回到视界专注](${buildAppDeepLink(packageId, nodeId)}) · [[${overviewWikiTarget}|学习总览]] · [[${progressWikiTarget}|学习看板]]`,
       ...(previousMeta ? [`> 上一节：[[${previousMeta.wikiTarget}|${previousMeta.title}]]`] : []),
       ...(nextMeta ? [`> 下一节：[[${nextMeta.wikiTarget}|${nextMeta.title}]]`] : []),
       '',
-      renderObsidianCallout('info', '课程导航', [
+      renderObsidianCallout('info', '学习导航', [
         `- 章节：${meta.rootTitle}`,
         `- 状态：${progressState === 'current' ? '正在学习' : progressState === 'completed' ? '已完成' : '待学习'}`,
         previousMeta ? `- 上一节：[[${previousMeta.wikiTarget}|${previousMeta.title}]]` : '',
         nextMeta ? `- 下一节：[[${nextMeta.wikiTarget}|${nextMeta.title}]]` : '',
       ].filter(Boolean).join('\n')),
       '',
-      '## 课程正文',
+      '## 学习笔记',
       '',
       lessonBody,
       '',
-      renderObsidianCallout('question', '主动回忆', quizQuestion || '用自己的话复述这一节的主线。不要先看标准答案。'),
+      renderObsidianCallout('question', '主动回忆', quizQuestion || '用自己的话复述这一节的主线。先别看参考回看。'),
       '',
-      renderObsidianCallout('success', '标准答案', renderReadableAnswer(standardAnswer), { folded: true }),
+      renderObsidianCallout('success', '参考回看', renderReadableAnswer(standardAnswer), { folded: true }),
       '',
       renderObsidianCalloutList('tip', '关键点', teacherKeyPoints.length ? teacherKeyPoints : objectives),
       '',
@@ -2913,12 +3204,12 @@ function exportCourseToObsidian(settings: RuntimeSettings, payload: ObsidianExpo
       'cssclasses:',
       renderYamlList(['shijie-course-note'], 2),
       'tags:',
-      renderYamlList(['视界专注', '课程索引'], 2),
+      renderYamlList(['视界专注', '学习索引'], 2),
       '---',
       '',
       `# ${title}`,
       '',
-      `> [[${overviewWikiTarget}|课程总览]]`,
+      `> [[${overviewWikiTarget}|学习总览]]`,
       '',
       body || '- 暂无',
       '',
@@ -2977,7 +3268,7 @@ function exportCourseToObsidian(settings: RuntimeSettings, payload: ObsidianExpo
     '---',
     `title: ${escapeYamlString(courseTitle)}`,
     'aliases:',
-    renderYamlList([courseTitle, `${courseTitle} 课程总览`], 2),
+    renderYamlList([courseTitle, `${courseTitle} 学习总览`], 2),
     `package_id: ${escapeYamlString(packageId)}`,
     `source_id: ${escapeYamlString(String(sourceMeta.source_id ?? ''))}`,
     `source_url: ${escapeYamlString(String(sourceMeta.url ?? ''))}`,
@@ -2985,18 +3276,18 @@ function exportCourseToObsidian(settings: RuntimeSettings, payload: ObsidianExpo
     'cssclasses:',
     renderYamlList(['shijie-course-home'], 2),
     'tags:',
-    renderYamlList(['视界专注', '课程总览'], 2),
+    renderYamlList(['视界专注', '学习总览'], 2),
     '---',
     '',
     `# ${courseTitle}`,
     '',
     `> [回到视界专注](${buildAppDeepLink(packageId)}) · [[${progressWikiTarget}|学习看板]]`,
     '',
-    renderObsidianCallout('abstract', '课程定位', String(courseMeta.subtitle ?? '') || '暂无课程简介'),
+    renderObsidianCallout('abstract', '学习定位', String(courseMeta.subtitle ?? '') || '暂无学习简介'),
     '',
-    renderObsidianCallout('goal', '课程目标', String(courseMeta.overall_goal ?? '暂无总目标')),
+    renderObsidianCallout('goal', '学习目标', String(courseMeta.overall_goal ?? '暂无总目标')),
     '',
-    '## 课程索引',
+    '## 学习索引',
     '',
     `- [[${courseWikiRoot}/${conceptNoteTitle}|关键概念]]`,
     `- [[${courseWikiRoot}/${mistakeNoteTitle}|常见误区]]`,
@@ -3004,9 +3295,9 @@ function exportCourseToObsidian(settings: RuntimeSettings, payload: ObsidianExpo
     '',
     renderObsidianCalloutList('tip', '学习结果', asStringList(courseMeta.learning_outcomes)),
     '',
-    '## 课程目录',
+    '## 学习目录',
     '',
-    renderLessonMap() || '- 暂无课程目录',
+    renderLessonMap() || '- 暂无学习目录',
   ]
     .join('\n')
 
@@ -3029,7 +3320,7 @@ function exportCourseToObsidian(settings: RuntimeSettings, payload: ObsidianExpo
     '',
     `# ${courseTitle} 学习看板`,
     '',
-    `> [回到视界专注](${buildAppDeepLink(packageId)}) · [[${overviewWikiTarget}|课程总览]]`,
+    `> [回到视界专注](${buildAppDeepLink(packageId)}) · [[${overviewWikiTarget}|学习总览]]`,
     '',
     renderObsidianCallout('info', '当前状态', [
       `- 当前小节：${currentMeta ? `[[${currentMeta.wikiTarget}|${currentMeta.title}]]` : '暂无'}`,
@@ -3053,7 +3344,7 @@ function exportCourseToObsidian(settings: RuntimeSettings, payload: ObsidianExpo
 
   fs.writeFileSync(progressPath, progressBoardContent, 'utf-8')
 
-  const legacyOverviewPath = path.join(rootDir, '00 课程总览.md')
+  const legacyOverviewPath = path.join(rootDir, '00 学习总览.md')
   const legacyProgressPath = path.join(rootDir, '01 学习看板.md')
   if (fs.existsSync(legacyOverviewPath)) fs.unlinkSync(legacyOverviewPath)
   if (fs.existsSync(legacyProgressPath)) fs.unlinkSync(legacyProgressPath)
@@ -3797,7 +4088,7 @@ function runPythonDistiller(payload: DistillPayload): Promise<DistillResult> {
           try {
             const payload = JSON.parse(match[1])
             emitDistillProgress({
-            message: String(payload?.message ?? '正在整理课程原材料…'),
+            message: String(payload?.message ?? '正在整理学习原材料…'),
               percent: Number(payload?.percent ?? 0),
               outlinePreview: payload?.outlinePreview,
               stage: typeof payload?.stage === 'string' ? payload.stage : undefined,
@@ -3810,15 +4101,7 @@ function runPythonDistiller(payload: DistillPayload): Promise<DistillResult> {
                 : undefined,
               chunkCompleted: Number.isFinite(Number(payload?.chunkCompleted)) ? Number(payload.chunkCompleted) : undefined,
               chunkTotal: Number.isFinite(Number(payload?.chunkTotal)) ? Number(payload.chunkTotal) : undefined,
-              batchCompleted: Number.isFinite(Number(payload?.batchCompleted)) ? Number(payload.batchCompleted) : undefined,
-              batchTotal: Number.isFinite(Number(payload?.batchTotal)) ? Number(payload.batchTotal) : undefined,
               resumed: typeof payload?.resumed === 'boolean' ? payload.resumed : undefined,
-              prefetchReuseChunkRatio: Number.isFinite(Number(payload?.prefetchReuseChunkRatio))
-                ? Number(payload.prefetchReuseChunkRatio)
-                : undefined,
-              prefetchReuseBatchRatio: Number.isFinite(Number(payload?.prefetchReuseBatchRatio))
-                ? Number(payload.prefetchReuseBatchRatio)
-                : undefined,
             })
           } catch {
             // ignore malformed payload
@@ -3882,120 +4165,6 @@ function runPythonDistiller(payload: DistillPayload): Promise<DistillResult> {
           ...parsed,
           text: courseText,
         })
-      } catch (error) {
-        finalizeReject(error instanceof Error ? error : new Error(String(error)))
-      }
-    })
-  })
-}
-
-function runPythonVideoSummary(payload: VideoSummaryPayload): Promise<VideoSummaryResult> {
-  return new Promise((resolve, reject) => {
-    const sourceKind = payload.sourceKind === 'local_media' ? 'local_media' : 'bilibili'
-    const videoInput = sourceKind === 'local_media'
-      ? String(payload?.mediaPath ?? payload?.video ?? '').trim()
-      : String(payload?.video ?? '').trim()
-    if (!videoInput) {
-      reject(new Error(sourceKind === 'local_media' ? '请先选择本地音视频文件。' : '请先填写 B 站视频链接或 BV 号。'))
-      return
-    }
-
-    const runtimeSettings = loadSettings()
-    const pythonCommand = resolvePythonCommand()
-    const summaryEntryPath = resolveBackendScriptPath('video_summary.py')
-    const workbenchOutputDir = path.join(runtimeSettings.output_dir, 'workbench')
-    const summaryOutputDir = runtimeSettings.video_summary_output_dir || path.join(workbenchOutputDir, 'summaries')
-    fs.mkdirSync(workbenchOutputDir, { recursive: true })
-    fs.mkdirSync(summaryOutputDir, { recursive: true })
-
-    const args = [
-      ...pythonCommand.prefixArgs,
-      summaryEntryPath,
-      videoInput,
-      '--output-dir',
-      workbenchOutputDir,
-      '--summary-dir',
-      summaryOutputDir,
-      ...(sourceKind === 'local_media' ? ['--local-media'] : []),
-      '--result-json',
-    ]
-    appendRuntimeLog(`spawn video summary command=${pythonCommand.command} args=${JSON.stringify(args)} cwd=${dataRoot}`)
-
-    const child = spawn(pythonCommand.command, args, {
-      cwd: dataRoot,
-      windowsHide: true,
-      env: buildPythonEnv(runtimeSettings),
-    })
-
-    let stdout = ''
-    let stderr = ''
-    let settled = false
-
-    const finalizeReject = (error: Error) => {
-      if (settled) return
-      settled = true
-      appendRuntimeLog(`video summary rejected: ${error.message}`)
-      reject(error)
-    }
-
-    const finalizeResolve = (result: VideoSummaryResult) => {
-      if (settled) return
-      settled = true
-      appendRuntimeLog(`video summary resolved markdownPath=${result.markdownPath}`)
-      resolve(result)
-    }
-
-    const timeoutHandle = setTimeout(() => {
-      appendRuntimeLog(`video summary timeout after ${DISTILL_PROCESS_TIMEOUT_MS}ms; killing child pid=${child.pid ?? 'unknown'}`)
-      try {
-        child.kill()
-      } catch {
-        // ignore kill failure
-      }
-      finalizeReject(new Error(`视频总结超时（>${Math.floor(DISTILL_PROCESS_TIMEOUT_MS / 1000)} 秒）。`))
-    }, DISTILL_PROCESS_TIMEOUT_MS)
-
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString()
-    })
-
-    child.stderr.on('data', (chunk) => {
-      const text = chunk.toString()
-      stderr += text
-      appendRuntimeLog(`video summary stderr ${text.trim()}`)
-    })
-
-    child.on('error', (error) => {
-      clearTimeout(timeoutHandle)
-      finalizeReject(new Error(`视频总结进程启动失败：${error.message}`))
-    })
-
-    child.on('close', (code, signal) => {
-      clearTimeout(timeoutHandle)
-      appendRuntimeLog(
-        `video summary close code=${String(code)} signal=${String(signal)} stdoutLength=${stdout.length} stderrLength=${stderr.length}`,
-      )
-
-      if (settled) return
-
-      if (code !== 0) {
-        finalizeReject(new Error((stderr || stdout || `Python process exited with code ${code}`).trim()))
-        return
-      }
-
-      const match = stdout.match(/__SHIJIE_VIDEO_SUMMARY_RESULT__=(\{.*\})/s)
-      if (!match) {
-        appendRuntimeLog(`video summary stdout tail=${stdout.slice(-800)}`)
-        finalizeReject(new Error('未能从视频总结进程输出中解析结果。'))
-        return
-      }
-
-      try {
-        const parsed = JSON.parse(match[1]) as VideoSummaryResult
-        if (!parsed.markdownPath || !fs.existsSync(parsed.markdownPath)) {
-          throw new Error('视频总结完成，但没有找到生成的 Markdown 文件。')
-        }
-        finalizeResolve(parsed)
       } catch (error) {
         finalizeReject(error instanceof Error ? error : new Error(String(error)))
       }
@@ -4162,12 +4331,12 @@ ipcMain.handle('dialog:pickImageFile', async () => {
 ipcMain.handle('course:import', async () => {
   const runtimeSettings = loadSettings()
   const result = await dialog.showOpenDialog({
-    title: '选择课程包 JSON',
+    title: '选择学习包 JSON',
     defaultPath: resolveCourseImportDefaultPath(runtimeSettings),
-    buttonLabel: '导入课包',
+    buttonLabel: '导入学习包',
     properties: ['openFile'],
     filters: [
-      { name: 'Course Package JSON (*.json)', extensions: ['json'] },
+      { name: 'Study Package JSON (*.json)', extensions: ['json'] },
       { name: 'All Files', extensions: ['*'] },
     ],
   })
@@ -4186,7 +4355,7 @@ ipcMain.handle('course:import', async () => {
 
 ipcMain.handle('course:read', async (_event, targetPath: string) => {
   if (!targetPath) {
-    throw new Error('未提供课程包路径。')
+    throw new Error('未提供学习包路径。')
   }
   const text = normalizeCoursePackageText(fs.readFileSync(targetPath, 'utf-8'), targetPath).text
   return {
@@ -4203,24 +4372,23 @@ ipcMain.handle('distill:run', async (_event, payload: DistillPayload) => {
   return runPythonDistiller(payload)
 })
 
-ipcMain.handle('summary:run', async (_event, payload: VideoSummaryPayload) => {
-  return runPythonVideoSummary(payload)
-})
-
-ipcMain.handle('summary:list', async () => {
-  return listVideoSummaries(loadSettings())
-})
-
-ipcMain.handle('summary:delete', async (_event, markdownPath: string) => {
-  return deleteVideoSummary(loadSettings(), markdownPath)
-})
-
 ipcMain.handle('materials:list', async () => {
   return listMaterialPackages(loadSettings())
 })
 
 ipcMain.handle('materials:delete', async (_event, materialPath: string) => {
   return deleteMaterialPackage(loadSettings(), materialPath)
+})
+
+ipcMain.handle('knowledge:importBrief', async (_event, materialPath: string) => {
+  if (!materialPath) {
+    throw new Error('未提供材料包路径。')
+  }
+  return importKnowledgeBriefFromMaterial(loadSettings(), materialPath)
+})
+
+ipcMain.handle('knowledge:list', async () => {
+  return listKnowledgeLibrary(loadSettings())
 })
 
 ipcMain.handle('learning:library:load', async () => loadLearningLibraryPayload())

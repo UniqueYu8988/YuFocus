@@ -1,16 +1,6 @@
 import type { CoachTurnResult, FlatCourseNode } from '../types/course'
 
-function cleanList(values: string[] | undefined, limit: number) {
-  return (values ?? []).map((item) => item.trim()).filter(Boolean).slice(0, limit)
-}
-
-function getQuizQuestion(node: FlatCourseNode, activeQuestion?: string | null) {
-  return (
-    activeQuestion?.trim() ||
-    node.teacher_ready_content?.quiz_question?.trim() ||
-    `不用看资料，用自己的话复述“${node.title}”这一关最重要的内容。`
-  )
-}
+const LEARNED_CONFIRMATION_TEXT = '已学习'
 
 function normalizeTeachingMarkdown(markdown: string) {
   const sectionHeadings = [
@@ -38,105 +28,18 @@ function normalizeTeachingMarkdown(markdown: string) {
     .trim()
 }
 
-function formatStandardAnswerMarkdown(answer: string) {
-  const trimmed = answer.trim()
-  if (!trimmed) return ''
-
-  const standardAnswerMatch = trimmed.match(/^标准答案可以这样组织：\s*([\s\S]*?)(?=\s*答题时要体现|$)/u)
-  const structureItems = standardAnswerMatch
-    ? standardAnswerMatch[1]
-        .split(/\s+-\s+/u)
-        .map((item) => item.replace(/^[-*]\s*/u, '').trim())
-        .filter(Boolean)
-    : []
-
-  const levelMatch = trimmed.match(/答题时要体现三个层次：([\s\S]*?)(?=\s*容易丢分的地方是|$)/u)
-  const riskMatch = trimmed.match(/容易丢分的地方是：([\s\S]*?)(?=\s*只要答案里|$)/u)
-  const masteryMatch = trimmed.match(/只要答案里([\s\S]*?)$/u)
-  const riskItems = riskMatch
-    ? riskMatch[1]
-        .split(/[；;。]+/u)
-        .map((item) => item.trim())
-        .filter((item) => item.length > 1)
-    : []
-
-  if (structureItems.length > 0 || levelMatch || riskItems.length > 0 || masteryMatch) {
-    return [
-      structureItems.length > 0
-        ? structureItems.map((item) => `- ${item}`).join('\n')
-        : '',
-      levelMatch ? `**答题层次：** ${levelMatch[1].trim()}` : '',
-      riskItems.length > 0
-        ? ['**容易丢分：**', ...riskItems.map((item) => `- ${item}`)].join('\n')
-        : '',
-      masteryMatch ? `**掌握标准：** 只要答案里${masteryMatch[1].trim()}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n\n')
-  }
-
-  if (/^\s*([-*]|\d+\.)\s+/m.test(trimmed) || trimmed.includes('\n')) return trimmed
-
-  const sentences = trimmed
-    .split(/(?<=[。！？；;])/u)
-    .map((sentence) => sentence.trim())
-    .filter(Boolean)
-
-  if (sentences.length < 2) return trimmed
-  return sentences.map((sentence) => `- ${sentence}`).join('\n')
-}
-
 export function buildCodexTeachingMarkdown(node: FlatCourseNode) {
   const teacher = node.teacher_ready_content
   const markdown = teacher?.teaching_markdown?.trim()
-  const quizQuestion = getQuizQuestion(node)
   if (markdown) {
-    return [normalizeTeachingMarkdown(markdown), '', '## 回忆问题', '', `> ${quizQuestion}`, '', '先写下你的回忆，再对照标准答案。'].join('\n')
+    return normalizeTeachingMarkdown(markdown)
   }
 
   return [
     `## ${node.title}`,
     '',
     node.summary || '这节课还没有写入完整讲解。请先回到 Codex 课程制作窗口，为这一关补充 teacher_ready_content.teaching_markdown。',
-    '',
-    '## 回忆问题',
-    '',
-    `> ${quizQuestion}`,
-    '',
-    '先写下你的回忆，再对照标准答案。',
   ].join('\n')
-}
-
-function buildCodexReviewMarkdown(node: FlatCourseNode, answer: string, nextNode: FlatCourseNode | null) {
-  const teacher = node.teacher_ready_content
-  const standardAnswer = teacher?.standard_answer?.trim() || node.summary || `请回到课程正文，对照“${node.title}”的标准讲解。`
-  const keyPoints = cleanList(teacher?.key_points, 8)
-  const mistakes = cleanList(teacher?.common_mistakes, 6)
-
-  return [
-    '## 你的回忆',
-    '',
-    `> ${answer.trim() || '（空回答）'}`,
-    '',
-    '## 标准答案',
-    '',
-    formatStandardAnswerMarkdown(standardAnswer),
-    '',
-    keyPoints.length > 0
-      ? ['## 关键点', '', ...keyPoints.map((item) => `- ${item}`)].join('\n')
-      : '',
-    mistakes.length > 0
-      ? ['## 常见误区', '', ...mistakes.map((item) => `- ${item}`)].join('\n')
-      : '',
-    '',
-    '## 下一步',
-    '',
-    nextNode
-      ? `对照完标准答案后，直接进入下一关：**${nextNode.title}**。`
-      : '这已经是最后一关。对照完标准答案后，可以回到课程中心复盘整门课。',
-  ]
-    .filter(Boolean)
-    .join('\n')
 }
 
 export function buildFallbackCoachTurn(options: {
@@ -165,7 +68,16 @@ export function buildFallbackCoachTurn(options: {
 
   if (!answer.trim()) {
     return {
-      reply: ['## 回忆问题', '', `> ${getQuizQuestion(node, activeQuestion)}`, '', '先写下你的回忆，再对照标准答案。'].join('\n'),
+      reply: `读完本节后，在下方输入框精确输入“${LEARNED_CONFIRMATION_TEXT}”进入下一关。`,
+      learningStatus: 'quizzing',
+      markCurrentNodeCompleted: false,
+      suggestedNextNodeId: null,
+    }
+  }
+
+  if (answer.trim() !== LEARNED_CONFIRMATION_TEXT) {
+    return {
+      reply: `还没有标记完成。请精确输入“${LEARNED_CONFIRMATION_TEXT}”进入下一关。`,
       learningStatus: 'quizzing',
       markCurrentNodeCompleted: false,
       suggestedNextNodeId: null,
@@ -173,7 +85,9 @@ export function buildFallbackCoachTurn(options: {
   }
 
   return {
-    reply: buildCodexReviewMarkdown(node, answer, nextNode),
+    reply: nextNode
+      ? `已记录。本节已学习完成，可以进入下一关：**${nextNode.title}**。`
+      : '已记录。这已经是最后一关。',
     learningStatus: 'completed',
     markCurrentNodeCompleted: true,
     suggestedNextNodeId: nextNode?.id ?? null,

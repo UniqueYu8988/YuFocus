@@ -1,5 +1,5 @@
 import { LoaderCircle, X } from 'lucide-react'
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { AppChrome } from '@/components/AppChrome'
 import { CourseOutlinePane } from '@/components/CourseOutlinePane'
 import { WorkspacePane, type WorkspaceView } from '@/components/WorkspacePane'
@@ -28,7 +28,8 @@ function loadSidebarWidth() {
 }
 
 function App() {
-  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('workbench')
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('learn')
+  const [showLearningHome, setShowLearningHome] = useState(true)
   const [windowFocused, setWindowFocused] = useState(true)
   const [windowMaximized, setWindowMaximized] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
@@ -56,6 +57,13 @@ function App() {
     void hydrateApp()
   }, [hydrateApp])
 
+  const handleSelectWorkspaceView = useCallback((view: WorkspaceView) => {
+    setWorkspaceView(view)
+    if (view === 'learn') {
+      setShowLearningHome(!(courseData && currentNodeId))
+    }
+  }, [courseData, currentNodeId])
+
   useEffect(() => {
     if (bootState !== 'ready') return
     const coursePath = new URLSearchParams(window.location.search).get('course')
@@ -66,6 +74,7 @@ function App() {
       .readCoursePackage(coursePath)
       .then(async (result) => {
         await loadCourseFromText(result.text, result.path)
+        setShowLearningHome(false)
         setWorkspaceView('learn')
         pushToast('课程包已载入', result.path, 'success')
       })
@@ -92,6 +101,7 @@ function App() {
   useEffect(() => {
     const unsubscribe = window.desktopAPI.onDeepLinkOpen((payload) => {
       void openDeepLinkedNode(payload.packageId, payload.nodeId)
+      setShowLearningHome(false)
       setWorkspaceView('learn')
     })
     return unsubscribe
@@ -108,6 +118,7 @@ function App() {
     }
 
     autoOpenedPackageRef.current = courseData.package_id
+    setShowLearningHome(false)
     setWorkspaceView('learn')
   }, [courseData, currentNodeId])
 
@@ -169,6 +180,7 @@ function App() {
         windowFocused={windowFocused}
         isMaximized={windowMaximized}
         sidebarWidth={sidebarWidth}
+        isElectron={window.desktopAPI.isElectron}
         onMinimize={() => void window.desktopAPI.minimize()}
         onToggleMaximize={() => void window.desktopAPI.toggleMaximize()}
         onClose={() => void window.desktopAPI.close()}
@@ -267,7 +279,16 @@ function App() {
       ) : null}
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <CourseOutlinePane workspaceView={workspaceView} onSelectView={setWorkspaceView} sidebarWidth={sidebarWidth} windowFocused={windowFocused} />
+        <CourseOutlinePane
+          workspaceView={workspaceView}
+          onSelectView={handleSelectWorkspaceView}
+          onActivateLearningNode={() => {
+            setShowLearningHome(false)
+            setWorkspaceView('learn')
+          }}
+          sidebarWidth={sidebarWidth}
+          windowFocused={windowFocused}
+        />
         <div
           className={cn(
             'app-no-drag group relative z-10 w-2 shrink-0 cursor-col-resize',
@@ -292,7 +313,13 @@ function App() {
           onRuntimeSettingsSaved={(next) => {
             setRuntimeSettings(next)
           }}
-          onRequestLearn={() => setWorkspaceView('learn')}
+          showLearningHome={showLearningHome}
+          onRequestLearn={() => {
+            setShowLearningHome(false)
+            setWorkspaceView('learn')
+          }}
+          onRequestWorkbench={() => setWorkspaceView('workbench')}
+          onRequestArchive={() => setWorkspaceView('archive')}
         />
       </div>
     </div>

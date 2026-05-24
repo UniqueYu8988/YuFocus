@@ -39,10 +39,11 @@ export function CoachComposer({
   const learningStatus = currentSession?.learningStatus ?? 'teaching'
   const coachRequestState = currentSession?.requestState ?? 'idle'
   const canAnswer = Boolean(currentNodeId) && currentNodeUnlocked && learningStatus === 'quizzing' && coachRequestState !== 'loading'
+  const canMarkLearned = canAnswer && draft.trim() === '已学习'
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (draft.trim() && canAnswer) {
+    if (canMarkLearned) {
       await submitUserAnswer(draft)
       setDraft('')
       await onAnswerSubmitted?.()
@@ -54,7 +55,7 @@ export function CoachComposer({
   const onKeyDown = async (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== 'Enter' || event.shiftKey) return
     event.preventDefault()
-    if (!draft.trim() || !canAnswer) return
+    if (!canMarkLearned) return
     await submitUserAnswer(draft)
     setDraft('')
     await onAnswerSubmitted?.()
@@ -73,10 +74,10 @@ export function CoachComposer({
             onKeyDown={onKeyDown}
             placeholder={
               canAnswer
-                ? '先写下你的回忆，再对照标准答案…'
+                ? '精确输入“已学习”进入下一关'
                 : currentNodeUnlocked
-                  ? '先阅读这一关，再写下你的回忆。'
-                  : '这一关还未解锁，可以先浏览，按进度学到这里后再答题。'
+                  ? '先阅读这一关。'
+                  : '这一关还未解锁，可以先浏览，按进度学到这里后再继续。'
             }
             disabled={!canAnswer}
             rows={2}
@@ -87,9 +88,9 @@ export function CoachComposer({
             type="submit"
             size="icon"
             className="absolute bottom-0 right-0 size-8 shrink-0 rounded-full bg-white text-black shadow-none hover:bg-white/88"
-            disabled={!(canAnswer && draft.trim()) && !canGoToNext}
-            aria-label={canAnswer && draft.trim() ? '提交回答' : nextLabel}
-            title={canAnswer && draft.trim() ? '提交回答' : nextLabel}
+            disabled={!canMarkLearned && !canGoToNext}
+            aria-label={canMarkLearned ? '标记已学习' : nextLabel}
+            title={canMarkLearned ? '标记已学习' : nextLabel}
           >
             <ArrowUp size={16} strokeWidth={2.4} />
           </Button>

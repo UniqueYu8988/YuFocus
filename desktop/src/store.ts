@@ -186,17 +186,7 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
 
   hydrateApp: async () => {
     await get().loadRuntimeSettings()
-    const library = await get().refreshLibrary()
-
-    if (library.currentRecordId) {
-      try {
-        const record = await window.desktopAPI.openLearningRecord(library.currentRecordId)
-        await get().restoreLearningRecord(record)
-      } finally {
-        set({ bootState: 'ready' })
-      }
-      return
-    }
+    await get().refreshLibrary()
 
     set({
       bootState: 'ready',
@@ -210,7 +200,6 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
       unlockedNodeIds: [],
       completedNodeIds: [],
       nodeSessions: {},
-      activeRecordId: null,
       activeRecordCreatedAt: null,
       milestoneEvents: [],
     })
@@ -444,11 +433,7 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
         audioTotal: 0,
         chunkCompleted: 0,
         chunkTotal: 0,
-        batchCompleted: 0,
-        batchTotal: 0,
         resumed: false,
-        prefetchReuseChunkRatio: 0,
-        prefetchReuseBatchRatio: 0,
       },
     })
 
@@ -471,7 +456,7 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
         }),
         new Promise<never>((_, reject) => {
           globalThis.setTimeout(() => {
-            reject(new Error(`蒸馏流程等待超时（>${Math.floor(DISTILL_UI_TIMEOUT_MS / 1000)} 秒）。`))
+            reject(new Error(`原材料整理等待超时（>${Math.floor(DISTILL_UI_TIMEOUT_MS / 1000)} 秒）。`))
           }, DISTILL_UI_TIMEOUT_MS)
         }),
       ])
@@ -491,7 +476,7 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
         'success',
       )
     } catch (error) {
-      const message = error instanceof Error ? error.message : '课程蒸馏失败'
+      const message = error instanceof Error ? error.message : '原材料整理失败'
       set({
         distillRequestState: 'error',
         distillProgressPercent: 0,
@@ -594,6 +579,32 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
       answer,
       nextNode: nextSequentialNode,
     })
+
+    if (!localTurn.markCurrentNodeCompleted) {
+      set((latestState) => ({
+        nodeSessions: {
+          ...latestState.nodeSessions,
+          [node.id]: {
+            ...latestState.nodeSessions[node.id],
+            messages: [
+              ...pendingMessages,
+              ...makeCoachMessages(localTurn.reply, node.id),
+            ],
+            learningStatus: localTurn.learningStatus,
+            activeQuestion: localTurn.learningStatus === 'quizzing' ? currentQuestion : null,
+            requestState: 'idle',
+            error: null,
+            hydrated: true,
+            lastUserAnswer: answer,
+            lastEvaluation: null,
+            updatedAt: Date.now(),
+          },
+        },
+      }))
+      await get().saveCurrentProgress()
+      return
+    }
+
     const completionPayload = buildCompletionCelebrationPayload({
       courseTitle: state.courseData.course.title,
       node,

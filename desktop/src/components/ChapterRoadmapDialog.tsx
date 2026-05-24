@@ -133,7 +133,7 @@ function buildFallbackRoadmap(chapter: FlatCourseNode, lessons: FlatCourseNode[]
 
   return {
     roadmap_type: 'workflow',
-    title: `${chapter.title}：章节地图`,
+    title: `${chapter.title}：章节思维导图`,
     subtitle: chapter.summary,
     nodes,
     edges: nodes.slice(0, -1).map((node, index) => ({

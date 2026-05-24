@@ -19,20 +19,125 @@ type Section = {
 
 type SectionTone = 'default' | 'quiz' | 'steps' | 'warning' | 'keypoint' | 'reason' | 'example' | 'answer' | 'memory'
 
-function renderInline(text: string) {
+export type MarkdownHeading = {
+  id: string
+  level: number
+  text: string
+  index: number
+}
+
+type RenderInlineOptions = {
+  highlightQuery?: string
+}
+
+type MarkdownRendererProps = {
+  content: string
+  className?: string
+  hideLeadHeading?: boolean
+  shellUntitledSections?: boolean
+  plainFlow?: boolean
+  highlightQuery?: string
+  headingIdPrefix?: string
+}
+
+function slugifyMarkdownHeading(text: string) {
+  const normalized = text
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/gu, '-')
+    .replace(/[^\p{L}\p{N}-]+/gu, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return normalized || 'section'
+}
+
+function buildMarkdownHeadingId(text: string, occurrence: number, prefix: string) {
+  return `${prefix}-${slugifyMarkdownHeading(text)}-${occurrence + 1}`
+}
+
+export function extractMarkdownHeadings(markdown: string, prefix = 'markdown-heading'): MarkdownHeading[] {
+  const lines = normalizeGeneratedMarkdown(markdown).split('\n')
+  const counts = new Map<string, number>()
+  const headings: MarkdownHeading[] = []
+
+  for (const line of lines) {
+    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/)
+    if (!headingMatch) continue
+
+    const text = headingMatch[2].trim()
+    const slug = slugifyMarkdownHeading(text)
+    const occurrence = counts.get(slug) ?? 0
+    counts.set(slug, occurrence + 1)
+    headings.push({
+      id: buildMarkdownHeadingId(text, occurrence, prefix),
+      level: headingMatch[1].length,
+      text,
+      index: headings.length,
+    })
+  }
+
+  return headings
+}
+
+function buildHighlightTerms(query: string) {
+  const terms = query
+    .trim()
+    .split(/\s+/u)
+    .map((term) => term.trim())
+    .filter(Boolean)
+
+  const uniqueTerms = Array.from(new Set(terms))
+  if (!uniqueTerms.length) return null
+  return uniqueTerms.sort((left, right) => right.length - left.length)
+}
+
+function renderHighlightedText(text: string, highlightQuery?: string, keyPrefix = 'text'): ReactNode[] {
+  const terms = highlightQuery ? buildHighlightTerms(highlightQuery) : null
+  if (!terms) return [text]
+
+  const pattern = new RegExp(`(${terms.map(escapeRegExp).join('|')})`, 'ig')
+  const parts: ReactNode[] = []
+  let lastIndex = 0
+
+  text.replace(pattern, (match, _group, offset: number) => {
+    if (offset > lastIndex) {
+      parts.push(text.slice(lastIndex, offset))
+    }
+
+    parts.push(
+      <mark
+        key={`${keyPrefix}-${offset}`}
+        className="rounded-[0.32rem] bg-amber-300/28 px-0.5 py-0 text-[#f8f3dc]"
+      >
+        {match}
+      </mark>,
+    )
+
+    lastIndex = offset + match.length
+    return match
+  })
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex))
+  }
+
+  return parts
+}
+
+function renderInline(text: string, options: RenderInlineOptions = {}) {
   const parts: ReactNode[] = []
   const pattern = /(\*\*[^*]+\*\*|<u>[^<]+<\/u>|`[^`]+`)/g
   let lastIndex = 0
 
   text.replace(pattern, (token, _group, offset: number) => {
     if (offset > lastIndex) {
-      parts.push(text.slice(lastIndex, offset))
+      parts.push(...renderHighlightedText(text.slice(lastIndex, offset), options.highlightQuery, `${offset}-plain`))
     }
 
     if (token.startsWith('**') && token.endsWith('**')) {
       parts.push(
         <strong key={`${offset}-bold`} className="font-bold text-[#f4f7fb]">
-          {token.slice(2, -2)}
+          {renderInline(token.slice(2, -2), options)}
         </strong>,
       )
     } else if (token.startsWith('<u>') && token.endsWith('</u>')) {
@@ -41,7 +146,7 @@ function renderInline(text: string) {
           key={`${offset}-underline`}
           className="underline decoration-sky-300/55 decoration-2 underline-offset-[5px]"
         >
-          {token.slice(3, -4)}
+          {renderInline(token.slice(3, -4), options)}
         </span>,
       )
     } else if (token.startsWith('`') && token.endsWith('`')) {
@@ -50,7 +155,7 @@ function renderInline(text: string) {
           key={`${offset}-code`}
           className="rounded-md border border-white/8 bg-[#202020] px-1.5 py-0.5 font-mono text-[0.9em] text-foreground/88"
         >
-          {token.slice(1, -1)}
+          {renderHighlightedText(token.slice(1, -1), options.highlightQuery, `${offset}-code`)}
         </code>,
       )
     }
@@ -60,7 +165,7 @@ function renderInline(text: string) {
   })
 
   if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex))
+    parts.push(...renderHighlightedText(text.slice(lastIndex), options.highlightQuery, 'tail'))
   }
 
   return parts
@@ -563,6 +668,7 @@ function renderBlock(
   index: number,
   tone: SectionTone,
   shouldBubble: boolean,
+  options: RenderInlineOptions,
 ) {
   const toneClasses = getSectionToneClasses(tone)
   const bubbleClass = shouldBubble
@@ -577,7 +683,7 @@ function renderBlock(
           <ol className="space-y-2 pl-6 text-sm text-foreground/90">
             {orderedItems.map((item, itemIndex) => (
               <li key={`oli-${index}-${itemIndex}`} className="list-decimal leading-7">
-                {renderInline(item)}
+                {renderInline(item, options)}
               </li>
             ))}
           </ol>
@@ -592,7 +698,7 @@ function renderBlock(
           <ul className="w-full space-y-2 pl-5 text-sm text-foreground/90">
             {paragraphItems.map((item, itemIndex) => (
               <li key={`lpi-${index}-${itemIndex}`} className="list-disc leading-7">
-                {renderInline(item)}
+                {renderInline(item, options)}
               </li>
             ))}
           </ul>
@@ -604,7 +710,7 @@ function renderBlock(
     return (
       <div key={`p-shell-${index}`} className={bubbleClass}>
         <p className={cn('w-full text-sm leading-7 text-foreground/90', isLabelParagraph ? 'indent-0' : 'indent-[2em]')}>
-          {renderInline(block.text)}
+          {renderInline(block.text, options)}
         </p>
       </div>
     )
@@ -614,7 +720,7 @@ function renderBlock(
     return (
       <div key={`q-shell-${index}`} className={bubbleClass}>
         <blockquote className="rounded-r-2xl border-l-2 border-white/16 bg-[#1c1c1c] px-4 py-3 text-muted-foreground">
-          <p className="indent-[2em]">{renderInline(block.text)}</p>
+          <p className="indent-[2em]">{renderInline(block.text, options)}</p>
         </blockquote>
       </div>
     )
@@ -627,7 +733,7 @@ function renderBlock(
         <ul className="w-full space-y-2 pl-5 text-sm text-foreground/90">
           {visibleItems.map((item, itemIndex) => (
             <li key={`li-${index}-${itemIndex}`} className="list-disc">
-              {renderInline(item)}
+              {renderInline(item, options)}
             </li>
           ))}
         </ul>
@@ -642,7 +748,7 @@ function renderBlock(
         <ol className="w-full space-y-2 pl-6 text-sm text-foreground/90">
           {visibleItems.map((item, itemIndex) => (
             <li key={`oli-${index}-${itemIndex}`} className="list-decimal leading-7">
-              {renderInline(item)}
+              {renderInline(item, options)}
             </li>
           ))}
         </ol>
@@ -658,7 +764,7 @@ function renderBlock(
             <tr>
               {block.headers.map((header, headerIndex) => (
                 <th key={`th-${index}-${headerIndex}`} className="border-b border-white/8 px-4 py-3 font-medium">
-                  {renderInline(header)}
+                  {renderInline(header, options)}
                 </th>
               ))}
             </tr>
@@ -668,7 +774,7 @@ function renderBlock(
               <tr key={`tr-${index}-${rowIndex}`} className="border-b border-white/6 last:border-0">
                 {row.map((cell, cellIndex) => (
                   <td key={`td-${index}-${rowIndex}-${cellIndex}`} className="px-4 py-3 align-top text-foreground/88">
-                    {renderInline(cell)}
+                    {renderInline(cell, options)}
                   </td>
                 ))}
               </tr>
@@ -686,7 +792,7 @@ function renderBlock(
   return (
     <pre key={`c-${index}`} className="overflow-x-auto rounded-2xl border border-white/8 bg-[#1a1a1a] p-4">
       <code className="font-mono text-[13px] leading-6 text-foreground/88" data-lang={block.lang || undefined}>
-        {block.text}
+        {renderHighlightedText(block.text, options.highlightQuery, `code-${index}`)}
       </code>
     </pre>
   )
@@ -733,6 +839,7 @@ function renderSectionBlocks(
   section: Section,
   tone: SectionTone,
   shouldBubbleBlocks: boolean,
+  options: RenderInlineOptions,
 ) {
   const isFlowSection = isFlowSectionTitle(section.heading?.text)
   return section.blocks.map((block, blockIndex) => {
@@ -744,7 +851,7 @@ function renderSectionBlocks(
       return renderFlowSteps(block.items, blockIndex)
     }
 
-    return renderBlock(block, blockIndex, tone, shouldBubbleBlocks)
+    return renderBlock(block, blockIndex, tone, shouldBubbleBlocks, options)
   })
 }
 
@@ -754,26 +861,30 @@ export function MarkdownRenderer({
   hideLeadHeading = false,
   shellUntitledSections = false,
   plainFlow = false,
-}: {
-  content: string
-  className?: string
-  hideLeadHeading?: boolean
-  shellUntitledSections?: boolean
-  plainFlow?: boolean
-}) {
+  highlightQuery = '',
+  headingIdPrefix = 'markdown-heading',
+}: MarkdownRendererProps) {
   const blocks = parseMarkdown(content)
   const { leadHeading, sections } = buildSections(blocks)
   const titleHeading = hideLeadHeading ? null : leadHeading
   const visibleSections = sections.filter((section) => section.blocks.some(hasMeaningfulBlock))
+  const headingCounts = new Map<string, number>()
+
+  function getNextHeadingId(text: string) {
+    const slug = slugifyMarkdownHeading(text)
+    const occurrence = headingCounts.get(slug) ?? 0
+    headingCounts.set(slug, occurrence + 1)
+    return buildMarkdownHeadingId(text, occurrence, headingIdPrefix)
+  }
 
   return (
     <div className={cn('space-y-3 text-sm leading-7 text-foreground/92', className)}>
       {titleHeading ? (
-        <div className="flex items-center gap-2 px-1 text-[17px] font-semibold tracking-tight text-foreground">
+        <div id={getNextHeadingId(titleHeading.text)} className="flex items-center gap-2 px-1 text-[17px] font-semibold tracking-tight text-foreground">
           <span aria-hidden className="text-[15px] opacity-90">
             {getHeadingEmoji(titleHeading.text, titleHeading.level)}
           </span>
-          <span>{renderInline(titleHeading.text)}</span>
+          <span>{renderInline(titleHeading.text, { highlightQuery })}</span>
         </div>
       ) : null}
 
@@ -788,16 +899,16 @@ export function MarkdownRenderer({
           return (
             <div key={`section-${sectionIndex}`} className="space-y-2.5">
               {sectionHeading ? (
-                <div className="flex items-center gap-2 pt-1 text-[15px] font-semibold tracking-tight text-foreground">
+                <div id={getNextHeadingId(sectionHeading.text)} className="flex items-center gap-2 pt-1 text-[15px] font-semibold tracking-tight text-foreground">
                   {getHeadingEmoji(sectionHeading.text, sectionHeading.level) ? (
                     <span aria-hidden className="text-[14px] opacity-85">
                       {getHeadingEmoji(sectionHeading.text, sectionHeading.level)}
                     </span>
                   ) : null}
-                  <span>{renderInline(sectionHeading.text)}</span>
+                  <span>{renderInline(sectionHeading.text, { highlightQuery })}</span>
                 </div>
               ) : null}
-              {renderSectionBlocks(section, tone, shouldBubbleBlocks)}
+              {renderSectionBlocks(section, tone, shouldBubbleBlocks, { highlightQuery })}
             </div>
           )
         }
@@ -805,7 +916,7 @@ export function MarkdownRenderer({
         if (!showSectionShell) {
           return (
             <div key={`section-${sectionIndex}`} className="space-y-2.5">
-              {renderSectionBlocks(section, tone, shouldBubbleBlocks)}
+              {renderSectionBlocks(section, tone, shouldBubbleBlocks, { highlightQuery })}
             </div>
           )
         }
@@ -819,20 +930,20 @@ export function MarkdownRenderer({
             )}
           >
             {sectionHeading ? (
-              <div className="mb-3 flex flex-wrap items-center gap-2">
+              <div id={getNextHeadingId(sectionHeading.text)} className="mb-3 flex flex-wrap items-center gap-2">
                 <div className="flex items-center gap-2 text-[14px] font-semibold tracking-tight text-foreground">
                   {getHeadingEmoji(sectionHeading.text, sectionHeading.level) ? (
                     <span aria-hidden className="text-[14px] opacity-85">
                       {getHeadingEmoji(sectionHeading.text, sectionHeading.level)}
                     </span>
                   ) : null}
-                  <span>{renderInline(sectionHeading.text)}</span>
+                  <span>{renderInline(sectionHeading.text, { highlightQuery })}</span>
                 </div>
               </div>
             ) : null}
 
             <div className="space-y-2.5">
-              {renderSectionBlocks(section, tone, shouldBubbleBlocks)}
+              {renderSectionBlocks(section, tone, shouldBubbleBlocks, { highlightQuery })}
             </div>
           </div>
         )

@@ -1,28 +1,36 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  FolderSync,
+  Archive,
+  ArrowRight,
+  BookOpenText,
+  FolderOpen,
   LoaderCircle,
   Sparkles,
   Square,
-  Trophy,
 } from 'lucide-react'
-import { ChapterRoadmapDialog } from '@/components/ChapterRoadmapDialog'
-import { CourseVisualMapDialog } from '@/components/CourseVisualMapDialog'
 import learnChapterMapIcon from '@/assets/learn-chapter-map.svg'
 import learnOpenNoteIcon from '@/assets/learn-open-note.svg'
 import learnReadSectionIcon from '@/assets/learn-read-section.svg'
 import warmStageIcon from '@/assets/warm-stage.svg'
 import { CoachChatTimeline } from '@/components/CoachChatTimeline'
 import { CoachComposer } from '@/components/CoachComposer'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { getNextSequentialNodeId } from '@/lib/courseTree'
-import { buildLessonSpeechMarkdown, buildStandardAnswerSpeechMarkdown, formatMiniMaxCharacters } from '@/lib/tts'
+import { buildLessonSpeechMarkdown, formatMiniMaxCharacters } from '@/lib/tts'
 import { useLearningStore } from '@/store'
 
 function stripStagePrefix(title: string) {
   return title.replace(/^(?:学习)?阶段\s*\d+\s*[·\-:：]\s*/u, '').replace(/^阶段\s*\d+\s*/u, '').trim()
+}
+
+function stripGeneratedTitleNumber(title: string) {
+  const stripped = title
+    .replace(/^第\s*\d+\s*[章节部]\s*[：:、.\-\s]*/u, '')
+    .replace(/^\d+(?:\.\d+)*\s*[、.．:：\-\s]+/u, '')
+    .replace(/^[一二三四五六七八九十百千万]+[、.．:：\-\s]+/u, '')
+    .trim()
+  return stripped || title
 }
 
 function collectStageStudyNodeIds(nodeId: string, nodeMap: Record<string, { childIds: string[] }>) {
@@ -42,6 +50,54 @@ function collectStageStudyNodeIds(nodeId: string, nodeMap: Record<string, { chil
   }
 
   return collected
+}
+
+function buildInlineMindmapMessage({
+  fullMap,
+  stage,
+  studyNodeIds,
+  nodeMap,
+}: {
+  fullMap?: string
+  stage: { title: string; summary: string } | null
+  studyNodeIds: string[]
+  nodeMap: Record<string, { title: string; summary: string }>
+}) {
+  if (fullMap?.trim()) {
+    return `## 章节思维导图\n\n${fullMap.trim()}`
+  }
+
+  if (!stage) return ''
+
+  const title = stripGeneratedTitleNumber(stripStagePrefix(stage.title) || stage.title)
+  const studyNodes = studyNodeIds
+    .map((nodeId) => nodeMap[nodeId])
+    .filter((node): node is { title: string; summary: string } => Boolean(node))
+
+  const lines = [`## ${title}：章节思维导图`]
+  if (stage.summary) {
+    lines.push(`**本章主线**：${stage.summary}`)
+  }
+
+  if (studyNodes.length > 0) {
+    lines.push(
+      [
+        '**学习分支**',
+        ...studyNodes.map((node, index) => {
+          const nodeTitle = stripGeneratedTitleNumber(node.title)
+          const summary = node.summary ? `\n   ${node.summary}` : ''
+          return `${index + 1}. **${nodeTitle}**${summary}`
+        }),
+      ].join('\n'),
+    )
+  }
+
+  if (studyNodes.length > 1) {
+    lines.push(`**推荐阅读路径**：${studyNodes.map((node) => stripGeneratedTitleNumber(node.title)).join(' -> ')}`)
+  }
+
+  lines.push('切到其他章节后再点一次地图按钮，会把那一章的结构发送到这里。')
+  return lines.join('\n\n')
 }
 
 function getBadgeToneClass(tone: 'neutral' | 'info' | 'success' | 'accent') {
@@ -68,9 +124,126 @@ function formatCompletionDate(timestamp: number | null) {
   }).format(timestamp)
 }
 
-export function CoachPane() {
+function formatHomeRelativeTime(timestamp: number) {
+  if (!timestamp) return '刚刚'
+  const diff = Date.now() - timestamp
+  const minute = 60_000
+  const hour = 60 * minute
+  const day = 24 * hour
+
+  if (diff < minute) return '刚刚'
+  if (diff < hour) return `${Math.max(1, Math.round(diff / minute))} 分钟前`
+  if (diff < day) return `${Math.max(1, Math.round(diff / hour))} 小时前`
+  if (diff < day * 7) return `${Math.max(1, Math.round(diff / day))} 天前`
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+  }).format(timestamp)
+}
+
+type PetExpression = '' | 'blink' | 'tension' | 'happy'
+
+const HOME_PET_SEQUENCE: { state: PetExpression; duration: number }[] = [
+  { state: '', duration: 3000 },
+  { state: 'blink', duration: 150 },
+  { state: 'tension', duration: 2500 },
+  { state: 'blink', duration: 150 },
+  { state: 'happy', duration: 2500 },
+  { state: 'blink', duration: 150 },
+]
+
+function LearningHomePet() {
+  const [expression, setExpression] = useState<PetExpression>('')
+
+  useEffect(() => {
+    let step = 0
+    let timer: number | null = null
+
+    const nextExpression = () => {
+      const current = HOME_PET_SEQUENCE[step]
+      setExpression(current.state)
+      step = (step + 1) % HOME_PET_SEQUENCE.length
+      timer = window.setTimeout(nextExpression, current.duration)
+    }
+
+    timer = window.setTimeout(nextExpression, HOME_PET_SEQUENCE[0].duration)
+    return () => {
+      if (timer) window.clearTimeout(timer)
+    }
+  }, [])
+
+  return (
+    <div className="relative flex size-[112px] items-center justify-center" aria-hidden="true">
+      <div className="relative h-[90px] w-[92px]">
+        <div
+          className={[
+            'flex h-[78px] w-[86px] items-center justify-evenly rounded-[30px] bg-[#d8d8d8] px-3 transition-colors',
+            expression,
+          ].filter(Boolean).join(' ')}
+        >
+          <span className="yu-home-eye yu-home-eye-left" />
+          <span className="yu-home-eye yu-home-eye-right" />
+        </div>
+      </div>
+      <style>{`
+        .yu-home-eye {
+          width: 14px;
+          height: 25px;
+          border: 0 solid #171717;
+          border-radius: 999px;
+          background: #171717;
+          transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .blink .yu-home-eye {
+          width: 18px;
+          height: 4px;
+          border-radius: 999px;
+          background: #171717;
+          transform: translateY(0);
+        }
+        .tension .yu-home-eye {
+          width: 20px;
+          height: 6px;
+          border-radius: 999px;
+          background: #171717;
+        }
+        .tension .yu-home-eye-left {
+          transform: rotate(35deg);
+        }
+        .tension .yu-home-eye-right {
+          transform: rotate(-35deg);
+        }
+        .happy .yu-home-eye {
+          width: 24px;
+          height: 12px;
+          border: 4px solid #171717;
+          border-bottom: 0;
+          border-radius: 999px 999px 0 0;
+          background: transparent;
+          transform: translateY(-4px);
+        }
+      `}</style>
+    </div>
+  )
+}
+
+type CoachPaneProps = {
+  showHome?: boolean
+  onStartLearning?: () => void
+  onOpenWorkbench?: () => void
+  onOpenArchive?: () => void
+}
+
+export function CoachPane({
+  showHome = false,
+  onStartLearning,
+  onOpenWorkbench,
+  onOpenArchive,
+}: CoachPaneProps) {
   const courseData = useLearningStore((state) => state.courseData)
-  const importedCoursePath = useLearningStore((state) => state.importedCoursePath)
+  const libraryRecords = useLearningStore((state) => state.libraryRecords)
+  const activeRecordId = useLearningStore((state) => state.activeRecordId)
   const currentNodeId = useLearningStore((state) => state.currentNodeId)
   const nodeMap = useLearningStore((state) => state.nodeMap)
   const completedNodeIds = useLearningStore((state) => state.completedNodeIds)
@@ -81,6 +254,8 @@ export function CoachPane() {
   const getCurrentAchievementBadges = useLearningStore((state) => state.getCurrentAchievementBadges)
   const goToNextNode = useLearningStore((state) => state.goToNextNode)
   const getRecentMilestones = useLearningStore((state) => state.getRecentMilestones)
+  const openSavedRecord = useLearningStore((state) => state.openSavedRecord)
+  const appendCoachMessage = useLearningStore((state) => state.appendCoachMessage)
   const pushToast = useLearningStore((state) => state.pushToast)
   const isCurrentNodeUnlocked = useLearningStore((state) =>
     state.currentNodeId ? state.isNodeUnlocked(state.currentNodeId) : false,
@@ -88,7 +263,7 @@ export function CoachPane() {
   const [obsidianSyncing, setObsidianSyncing] = useState(false)
   const [ttsState, setTtsState] = useState<'idle' | 'loading' | 'playing' | 'paused'>('idle')
   const [stageWarmState, setStageWarmState] = useState<'idle' | 'warming' | 'ready'>('idle')
-  const [roadmapOpen, setRoadmapOpen] = useState(false)
+  const [homeOpeningRecordId, setHomeOpeningRecordId] = useState<string | null>(null)
   const speechClickTimerRef = useRef<number | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const speechTokenRef = useRef(0)
@@ -129,7 +304,7 @@ export function CoachPane() {
     () => (currentStage ? collectStageStudyNodeIds(currentStage.id, nodeMap) : []),
     [currentStage, nodeMap],
   )
-  const courseVisualMap = courseData?.course_visual_map
+  const chapterMindmapMarkdown = courseData?.course_visual_map?.prompt ?? ''
   const stageCompletedCount = useMemo(
     () => currentStageStudyNodeIds.filter((nodeId) => effectiveCompletedNodeIds.includes(nodeId)).length,
     [currentStageStudyNodeIds, effectiveCompletedNodeIds],
@@ -146,10 +321,17 @@ export function CoachPane() {
         ? '你是靠一段一段稳稳推进，把整门课完整打通下来的。'
         : '你把这门课完整学完了，而且路径非常干净，说明理解链路已经相当顺。'
   const lessonSpeechText = useMemo(() => (currentNode ? buildLessonSpeechMarkdown(currentNode) : ''), [currentNode])
-  const standardAnswerSpeechText = useMemo(
-    () => (currentNode ? buildStandardAnswerSpeechMarkdown(currentNode) : ''),
-    [currentNode],
-  )
+  const resumeRecord = useMemo(() => {
+    const sortedRecords = [...libraryRecords].sort((left, right) => right.lastOpenedAt - left.lastOpenedAt)
+    return (
+      sortedRecords.find((record) => record.id === activeRecordId) ??
+      sortedRecords.find((record) => !record.isArchived) ??
+      sortedRecords[0] ??
+      null
+    )
+  }, [activeRecordId, libraryRecords])
+  const activeRecordCount = libraryRecords.filter((record) => !record.isArchived).length
+  const archivedRecordCount = libraryRecords.length - activeRecordCount
 
   const stopSpeech = () => {
     speechTokenRef.current += 1
@@ -271,7 +453,7 @@ export function CoachPane() {
       for (const nodeId of targetIds) {
         const node = nodeMap[nodeId]
         if (!node) continue
-        const texts = [buildLessonSpeechMarkdown(node), buildStandardAnswerSpeechMarkdown(node)]
+        const texts = [buildLessonSpeechMarkdown(node)]
           .map((text) => text.trim())
           .filter(Boolean)
         for (const text of texts) {
@@ -283,23 +465,13 @@ export function CoachPane() {
         }
       }
       setStageWarmState('ready')
-      pushToast('章节语音已预热', `已准备 ${targetIds.length} 节内容，包含答后标准答案。`, 'success')
+      pushToast('章节语音已预热', `已准备 ${targetIds.length} 节内容。`, 'success')
       window.setTimeout(() => setStageWarmState('idle'), 2200)
       void warmedTextCount
     } catch (error) {
       setStageWarmState('idle')
       pushToast('章节预热失败', error instanceof Error ? error.message : String(error), 'error')
     }
-  }
-
-  const playStandardAnswerIfCached = async () => {
-    if (!standardAnswerSpeechText || !currentNodeId) return
-    const cacheStatus = await window.desktopAPI.checkSpeechCache({
-      text: standardAnswerSpeechText,
-      nodeId: currentNodeId,
-    })
-    if (!cacheStatus.cached) return
-    await playSpeechText(standardAnswerSpeechText, currentNodeId)
   }
 
   const syncObsidian = async (target: 'current' | 'board' | 'index') => {
@@ -328,60 +500,137 @@ export function CoachPane() {
     }
   }
 
-  if (!currentNode || !currentSession) {
+  const handleResumeFromHome = async () => {
+    if (!resumeRecord) {
+      onOpenWorkbench?.()
+      return
+    }
+
+    if (courseData && currentNode && currentSession && resumeRecord.id === activeRecordId) {
+      onStartLearning?.()
+      return
+    }
+
+    setHomeOpeningRecordId(resumeRecord.id)
+    try {
+      await openSavedRecord(resumeRecord.id)
+      onStartLearning?.()
+    } catch (error) {
+      pushToast('恢复学习失败', error instanceof Error ? error.message : String(error), 'error')
+    } finally {
+      setHomeOpeningRecordId(null)
+    }
+  }
+
+  const sendCurrentStageMindmap = () => {
+    if (!currentNodeId || !currentStage) return
+    const content = buildInlineMindmapMessage({
+      fullMap: chapterMindmapMarkdown,
+      stage: currentStage,
+      studyNodeIds: currentStageStudyNodeIds,
+      nodeMap,
+    })
+    if (!content) return
+
+    appendCoachMessage({
+      id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
+      role: 'coach',
+      content,
+      nodeId: currentNodeId,
+      createdAt: Date.now(),
+    })
+    pushToast('章节思维导图已发送', stripGeneratedTitleNumber(currentStage.title), 'success')
+  }
+
+  if (showHome || !currentNode || !currentSession) {
     return (
       <section className="flex min-h-0 flex-1">
         <Card className="work-surface flex min-h-0 w-full items-center justify-center rounded-l-[24px] rounded-r-none border-0 bg-[#181818] shadow-[-14px_0_34px_rgba(0,0,0,0.12)]">
-          <CardContent className="w-full max-w-4xl space-y-8 p-8">
-            <div className="mx-auto flex max-w-xl flex-col items-center gap-4 text-center">
-              <div className="flex size-16 items-center justify-center rounded-[24px] border border-white/8 bg-white/[0.035] text-foreground/78">
-                <Sparkles size={24} />
-              </div>
+          <CardContent className="w-full max-w-[760px] space-y-6 px-10 py-8">
+            <div className="mx-auto flex max-w-lg flex-col items-center gap-3 text-center">
+              <LearningHomePet />
               <div className="space-y-2">
-                <div className="text-[11px] font-medium uppercase tracking-[0.28em] text-muted-foreground">开始学习</div>
-                <h2 className="text-[32px] font-semibold tracking-tight text-foreground">准备开始一门新课程</h2>
-                <p className="text-[13px] leading-7 text-muted-foreground">
-                  左侧输入 BV 开始提炼，或者从学习档案直接续上。这里会始终保持为唯一主舞台，课程讲解、主动回忆、标准答案对照和推进都会连续发生在这一侧。
-                </p>
-                <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
-                  <Badge variant="outline">BV 到课程树</Badge>
-                  <Badge variant="outline">本地闯关学习</Badge>
-                  <Badge variant="outline">进度自动保存</Badge>
-                </div>
+                <h2 className="text-[30px] font-semibold tracking-tight text-foreground">今天从哪里开始</h2>
+                <p className="text-[13px] leading-6 text-muted-foreground">接着上次学习，或者去工作台制作新的内容。</p>
               </div>
             </div>
 
-            <div className="mx-auto flex max-w-3xl flex-wrap items-center justify-center gap-2.5">
-              {[
-                ['提炼或导入', '从 B 站视频自动蒸馏成知识树，或者导入现成课包。'],
-                ['轻量闯关学习', '每一小关都会经历讲解、主动回忆、标准答案对照和通过四个阶段。'],
-                ['自动保存', '关闭应用也不会丢，回来会恢复到你上次的进度位置。'],
-              ].map(([title, description]) => (
-                <div
-                  key={title}
-                  className="min-w-[220px] rounded-[22px] border border-white/7 bg-white/[0.025] px-4 py-2.5 text-left"
-                >
-                  <div className="text-[11px] font-medium text-foreground">{title}</div>
-                  <div className="mt-0.5 text-[11px] leading-5 text-muted-foreground">{description}</div>
+            {resumeRecord ? (
+              <button
+                type="button"
+                className="group w-full rounded-[22px] border border-white/[0.08] bg-white/[0.03] p-4 text-left transition hover:border-sky-300/18 hover:bg-white/[0.045]"
+                onClick={() => void handleResumeFromHome()}
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0 space-y-1.5">
+                    <div className="truncate text-[15px] font-semibold text-foreground">{resumeRecord.title}</div>
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                      <span>{resumeRecord.progressPercent}%</span>
+                      {resumeRecord.currentNodeTitle ? <span className="truncate">继续：{resumeRecord.currentNodeTitle}</span> : null}
+                      <span>{formatHomeRelativeTime(resumeRecord.lastOpenedAt)}</span>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2 text-[12px] font-semibold text-foreground/86">
+                    {homeOpeningRecordId === resumeRecord.id ? (
+                      <LoaderCircle className="size-4 animate-spin" />
+                    ) : (
+                      <ArrowRight className="size-4 transition group-hover:translate-x-0.5" />
+                    )}
+                    继续
+                  </div>
                 </div>
-              ))}
+              </button>
+            ) : (
+              <div className="rounded-[22px] border border-white/[0.08] bg-white/[0.025] px-4 py-4 text-center text-[13px] text-muted-foreground">
+                还没有学习记录。
+              </div>
+            )}
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Button
+                type="button"
+                className="h-12 rounded-2xl"
+                onClick={() => void handleResumeFromHome()}
+                disabled={Boolean(homeOpeningRecordId)}
+              >
+                {homeOpeningRecordId ? <LoaderCircle className="size-4 animate-spin" /> : <BookOpenText size={16} />}
+                {resumeRecord ? '继续学习' : '开始制作'}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-12 rounded-2xl"
+                onClick={onOpenWorkbench}
+              >
+                <FolderOpen size={16} />
+                工作台
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-12 rounded-2xl"
+                onClick={onOpenArchive}
+              >
+                <Archive size={16} />
+                学习档案
+              </Button>
             </div>
 
-            <div className="mx-auto flex items-center gap-2 text-[11px] text-muted-foreground">
-              <FolderSync className="size-3.5" />
-              提炼、学习、归档会在同一条工作流里自动接力。
+            <div className="flex items-center justify-center gap-3 text-[11px] text-muted-foreground">
+              <span>进行中 {activeRecordCount}</span>
+              <span className="h-1 w-1 rounded-full bg-white/20" />
+              <span>已归档 {archivedRecordCount}</span>
             </div>
           </CardContent>
         </Card>
       </section>
     )
   }
-
   return (
     <section className="work-surface flex min-h-0 flex-1 flex-col overflow-hidden rounded-l-[24px] bg-[#171717]">
       <header className="flex h-[58px] shrink-0 items-center justify-between gap-4 px-6">
         <h1 className="min-w-0 truncate text-[15px] font-semibold tracking-tight text-foreground/92">
-          {currentNode.title}
+          {stripGeneratedTitleNumber(currentNode.title)}
         </h1>
 
         <div className="flex shrink-0 items-center gap-2">
@@ -390,10 +639,10 @@ export function CoachPane() {
             variant="ghost"
             size="icon"
             className="size-9 rounded-xl border-0 bg-transparent text-foreground/78 hover:bg-white/[0.07] hover:text-foreground"
-            onClick={() => setRoadmapOpen(true)}
-            disabled={!currentStage && !courseVisualMap}
-            aria-label={courseVisualMap ? '全局地图' : '章节地图'}
-            title={courseVisualMap ? '全局地图' : '章节地图'}
+            onClick={sendCurrentStageMindmap}
+            disabled={!currentStage && !chapterMindmapMarkdown.trim()}
+            aria-label="发送章节思维导图"
+            title="发送章节思维导图"
           >
             <img src={learnChapterMapIcon} alt="" className="size-[18px]" />
           </Button>
@@ -459,27 +708,6 @@ export function CoachPane() {
         </div>
       ) : null}
 
-      {courseVisualMap ? (
-        <CourseVisualMapDialog
-          open={roadmapOpen}
-          onOpenChange={setRoadmapOpen}
-          courseTitle={courseData?.course.title || '课程地图'}
-          chapterCount={courseData?.chapters.length || 0}
-          courseVisualMap={courseVisualMap}
-          coursePackagePath={importedCoursePath}
-        />
-      ) : (
-        <ChapterRoadmapDialog
-          open={roadmapOpen}
-          onOpenChange={setRoadmapOpen}
-          chapter={currentStage}
-          nodeMap={nodeMap}
-          completedNodeIds={effectiveCompletedNodeIds}
-          currentNodeId={currentNodeId}
-          coursePackagePath={importedCoursePath}
-        />
-      )}
-
       <div className="relative min-h-0 flex-1 overflow-hidden bg-[#171717] px-6 pb-24">
         <CoachChatTimeline />
         <CoachComposer
@@ -487,7 +715,6 @@ export function CoachPane() {
           onGoToNext={() => void goToNextNode()}
           canGoToNext={canAdvanceToNext && Boolean(nextNodeId)}
           nextLabel={isCourseCompleted ? '课程已完成' : '下一节'}
-          onAnswerSubmitted={playStandardAnswerIfCached}
         />
       </div>
     </section>

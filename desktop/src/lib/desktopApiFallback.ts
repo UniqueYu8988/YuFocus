@@ -23,11 +23,6 @@ const defaultRuntimeSettings: RuntimeSettingsShape = {
   mimo_tts_model: 'mimo-v2.5-tts',
   mimo_tts_voice_id: '茉莉',
   mimo_tts_style_prompt: '自然 清晰 语速适中',
-  video_summary_provider: 'mimo',
-  video_summary_api_key: '',
-  video_summary_base_url: 'https://token-plan-cn.xiaomimimo.com/v1/chat/completions',
-  video_summary_model: 'mimo-v2.5-pro',
-  video_summary_output_dir: '',
   transcription_provider: 'local_sensevoice',
   local_transcription_root: '',
   local_transcription_python: '',
@@ -70,6 +65,7 @@ function unsubscribe() {
 
 export function ensureDesktopApiFallback() {
   if (window.desktopAPI) {
+    window.desktopAPI.isElectron ??= false
     window.desktopAPI.pickMediaFile ??= async () => null
     window.desktopAPI.pickImageFile ??= async () => null
     window.desktopAPI.listMaterialPackages ??= async () => ({
@@ -77,20 +73,22 @@ export function ensureDesktopApiFallback() {
       coursePackageRootDir: '',
       records: [],
     })
-    window.desktopAPI.listVideoSummaries ??= async () => ({
-      rootDir: '',
-      records: [],
-    })
-    window.desktopAPI.deleteVideoSummary ??= async () => ({
-      deletedPaths: [],
-    })
     window.desktopAPI.deleteMaterialPackage ??= async () => ({
       deletedPaths: [],
+    })
+    window.desktopAPI.importKnowledgeBrief ??= async () => {
+      throw unavailable('学习笔记入库')
+    }
+    window.desktopAPI.listKnowledgeLibrary ??= async () => ({
+      rootDir: '',
+      libraryPath: '',
+      records: [],
     })
     return
   }
 
   window.desktopAPI = {
+    isElectron: false,
     minimize: async () => undefined,
     close: async () => undefined,
     toggleMaximize: async () => false,
@@ -125,16 +123,6 @@ export function ensureDesktopApiFallback() {
     runDistillation: async () => {
       throw unavailable('原材料整理')
     },
-    runVideoSummary: async () => {
-      throw unavailable('视频总结')
-    },
-    listVideoSummaries: async () => ({
-      rootDir: '',
-      records: [],
-    }),
-    deleteVideoSummary: async () => ({
-      deletedPaths: [],
-    }),
     listMaterialPackages: async () => ({
       rootDir: '',
       coursePackageRootDir: '',
@@ -142,6 +130,14 @@ export function ensureDesktopApiFallback() {
     }),
     deleteMaterialPackage: async () => ({
       deletedPaths: [],
+    }),
+    importKnowledgeBrief: async () => {
+      throw unavailable('学习笔记入库')
+    },
+    listKnowledgeLibrary: async () => ({
+      rootDir: '',
+      libraryPath: '',
+      records: [],
     }),
     loadLearningLibrary: async () => ({
       currentRecordId: null,

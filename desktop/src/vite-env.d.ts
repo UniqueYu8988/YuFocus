@@ -21,11 +21,6 @@ type RuntimeSettings = {
   mimo_tts_model: string
   mimo_tts_voice_id: string
   mimo_tts_style_prompt: string
-  video_summary_provider: string
-  video_summary_api_key: string
-  video_summary_base_url: string
-  video_summary_model: string
-  video_summary_output_dir: string
   transcription_provider: string
   local_transcription_root: string
   local_transcription_python: string
@@ -120,11 +115,7 @@ type DistillProgressPayload = {
   audioTotal?: number
   chunkCompleted?: number
   chunkTotal?: number
-  batchCompleted?: number
-  batchTotal?: number
   resumed?: boolean
-  prefetchReuseChunkRatio?: number
-  prefetchReuseBatchRatio?: number
   outlinePreview?: DistillOutlinePreview
 }
 
@@ -138,22 +129,26 @@ type MaterialPackageSummary = {
   updatedAt: number
   handoffPath: string
   handoffExists: boolean
+  runStatePath: string
+  runStateExists: boolean
   handoffStatusPath: string
   handoffStatusExists: boolean
   workflowStage: string
   workflowStageLabel: string
   nextActionLabel: string
-  startHerePath: string
-  codexPromptPath: string
-  gptDesignerDir: string
-  gptDesignerStartPath: string
-  gptDesignerPromptPath: string
-  gptDesignerCopyPromptPath: string
-  gptWorkspaceZipPath: string
-  gptWorkspaceZipExists: boolean
-  courseBlueprintPath: string
-  courseBlueprintExists: boolean
-  codexBlueprintPromptPath: string
+  authoringDir: string
+  codexCoursePlanPath: string
+  codexCoursePlanExists: boolean
+  synthesisPlanPath: string
+  synthesisPlanExists: boolean
+  knowledgeBriefPath: string
+  knowledgeBriefExists: boolean
+  chapterMapPath: string
+  chapterMapExists: boolean
+  knowledgeRecordPath: string
+  knowledgeImported: boolean
+  codexGoalPromptPath: string
+  readonlyAuditPromptPath: string
   finalCoursePath: string
   finalCourseExists: boolean
   publishedCoursePath: string
@@ -162,32 +157,35 @@ type MaterialPackageSummary = {
   importReadyCourseExists: boolean
 }
 
-type VideoSummaryResult = {
+type KnowledgeImportResult = {
+  id: string
   title: string
+  sourceTitle: string
   sourceId: string
+  sourceUrl: string
   materialPath: string
-  markdownPath: string
-  keyPointCount: number
-  blockCount: number
+  knowledgeBriefPath: string
+  libraryPath: string
   textLength: number
-  summaryProvider?: string
-  stageTimings?: Record<string, unknown>
+  importedAt: number
+  updatedAt: number
 }
 
-type VideoSummaryRecord = {
-  name: string
-  path: string
-  title: string
-  sourceId: string
-  keyPointCount: number
-  blockCount: number
-  textLength: number
-  updatedAt: number
-  summaryProvider: string
+type KnowledgeLibrarySummary = KnowledgeImportResult & {
+  fileExists: boolean
+  preview: string
+  searchText: string
+}
+
+type KnowledgeLibraryPayload = {
+  rootDir: string
+  libraryPath: string
+  records: KnowledgeLibrarySummary[]
 }
 
   interface Window {
     desktopAPI: {
+      isElectron: boolean
       minimize: () => Promise<void>
       close: () => Promise<void>
       toggleMaximize: () => Promise<boolean>
@@ -216,39 +214,19 @@ type VideoSummaryRecord = {
           metadata_seconds?: number
           subtitle_fetch_seconds?: number
           audio_backfill_seconds?: number
-          distill_seconds?: number
           total_seconds?: number
-          cache_total_seconds?: number
-          historical_total_seconds?: number
-          historical_distill_seconds?: number
-          historical_audio_backfill_seconds?: number
-          prefetch_chunk_warm_seconds?: number
-          prefetch_chunk_count?: number
-          prefetch_reuse_chunk_count?: number
-          prefetch_reuse_chunk_total?: number
-          prefetch_reuse_chunk_ratio?: number
-          prefetch_batch_warm_seconds?: number
-          prefetch_batch_count?: number
-          prefetch_reuse_batch_count?: number
-          prefetch_reuse_batch_total?: number
-          prefetch_reuse_batch_ratio?: number
-          cache_hit?: string
           pipeline?: Record<string, unknown>
         }
         text: string
       }>
-      runVideoSummary: (payload: { video?: string; sourceKind?: 'bilibili' | 'local_media'; mediaPath?: string }) => Promise<VideoSummaryResult>
-      listVideoSummaries: () => Promise<{
-        rootDir: string
-        records: VideoSummaryRecord[]
-      }>
-      deleteVideoSummary: (markdownPath: string) => Promise<{ deletedPaths: string[] }>
       listMaterialPackages: () => Promise<{
         rootDir: string
         coursePackageRootDir: string
         records: MaterialPackageSummary[]
       }>
-      deleteMaterialPackage: (materialPath: string) => Promise<{ deletedPaths: string[] }>
+      deleteMaterialPackage: (materialPath: string) => Promise<{ deletedPaths: string[]; skippedPaths?: string[] }>
+      importKnowledgeBrief: (materialPath: string) => Promise<KnowledgeImportResult>
+      listKnowledgeLibrary: () => Promise<KnowledgeLibraryPayload>
       loadLearningLibrary: () => Promise<LearningLibraryPayload>
       openLearningRecord: (recordId: string) => Promise<LearningRecord>
       refreshLearningLibraryStructure: () => Promise<LearningLibraryRefreshResult>

@@ -59,6 +59,6 @@ function splitCoachReplyIntoChunks(reply: string) {
 }
 
 export function makeCoachMessages(content: string, nodeId?: string) {
-  void splitCoachReplyIntoChunks
-  return [makeMessage('coach', content, nodeId)]
+  const chunks = splitCoachReplyIntoChunks(content)
+  return (chunks.length ? chunks : [content]).map((chunk) => makeMessage('coach', chunk, nodeId))
 }
