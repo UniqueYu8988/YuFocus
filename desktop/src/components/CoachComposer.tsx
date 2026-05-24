@@ -74,10 +74,10 @@ export function CoachComposer({
             onKeyDown={onKeyDown}
             placeholder={
               canAnswer
-                ? '精确输入“已学习”进入下一关'
+                ? '精确输入“已学习”进入下一小节'
                 : currentNodeUnlocked
-                  ? '先阅读这一关。'
-                  : '这一关还未解锁，可以先浏览，按进度学到这里后再继续。'
+                  ? '先阅读这一小节。'
+                  : '这一小节还未解锁，可以先浏览，按进度学到这里后再继续。'
             }
             disabled={!canAnswer}
             rows={2}

@@ -36,6 +36,7 @@ import {
   DEFAULT_TRANSCRIPTION_PROVIDER,
 } from '@/lib/coachPreferences'
 import { buildLearningNotesStudyPackage } from '@/lib/knowledgeBriefCourse'
+import { copyTextToClipboard } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
 import { useLearningStore } from '@/store'
 import type { LearningRecordSummary } from '@/types/course'
@@ -819,6 +820,7 @@ export function WorkspacePane({
   const activeRecordId = useLearningStore((state) => state.activeRecordId)
   const openSavedRecord = useLearningStore((state) => state.openSavedRecord)
   const deleteSavedRecord = useLearningStore((state) => state.deleteSavedRecord)
+  const clearActiveCourse = useLearningStore((state) => state.clearActiveCourse)
   const refreshLibrary = useLearningStore((state) => state.refreshLibrary)
   const restoreLearningRecord = useLearningStore((state) => state.restoreLearningRecord)
   const setRuntimeSettings = useLearningStore((state) => state.setRuntimeSettings)
@@ -1049,11 +1051,15 @@ export function WorkspacePane({
     [archiveWeeklyActivity],
   )
   const featuredActiveRecord = useMemo(
-    () => activeLibraryRecords.find((record) => record.id === activeRecordId) ?? activeLibraryRecords[0] ?? null,
-    [activeLibraryRecords, activeRecordId],
+    () => courseData && activeRecordId
+      ? activeLibraryRecords.find((record) => record.id === activeRecordId) ?? null
+      : null,
+    [activeLibraryRecords, activeRecordId, courseData],
   )
   const visibleActiveLibraryRecords = useMemo(
-    () => activeLibraryRecords.filter((record) => record.id !== featuredActiveRecord?.id),
+    () => featuredActiveRecord
+      ? activeLibraryRecords.filter((record) => record.id !== featuredActiveRecord.id)
+      : activeLibraryRecords,
     [activeLibraryRecords, featuredActiveRecord?.id],
   )
   const filteredKnowledgeRecords = useMemo(() => {
@@ -1177,9 +1183,14 @@ export function WorkspacePane({
   )
 
   const handleDeleteRecord = async (recordId: string, title: string) => {
-    const shouldDelete = globalThis.confirm(`确定删除《${title}》的学习记录吗？这会移除本地进度与对话缓存。`)
+    const shouldDelete = globalThis.confirm(`确定删除《${title}》的学习档案吗？这会移除本地进度、对话缓存和关联学习包。`)
     if (!shouldDelete) return
     await deleteSavedRecord(recordId)
+    try {
+      setMaterialInventory(await window.desktopAPI.listMaterialPackages())
+    } catch {
+      // The archive deletion itself has already completed.
+    }
   }
 
   const handleOpenRecord = async (recordId: string) => {
@@ -1235,14 +1246,36 @@ export function WorkspacePane({
   }
 
   const handleDeleteMaterialPackage = async (record: MaterialInventory['records'][number]) => {
-    const shouldDelete = globalThis.confirm(`确定删除《${record.title}》的原材料包和关联学习包吗？`)
+    const willDeleteMaterialPackage =
+      record.workflowStage === 'material_ready' &&
+      !record.synthesisPlanExists &&
+      !record.knowledgeBriefExists &&
+      !record.chapterMapExists &&
+      !record.knowledgeImported &&
+      !record.finalCourseExists &&
+      !record.publishedCourseExists &&
+      !record.importReadyCourseExists
+    const shouldDelete = globalThis.confirm(
+      willDeleteMaterialPackage
+        ? `确定彻底删除《${record.title}》的原材料包吗？这会移除字幕、转写、blocks 和提示词入口。`
+        : `确定清理《${record.title}》的学习笔记产物吗？字幕、转写和 blocks 会保留，工作台会退回待整理状态。`,
+    )
     if (!shouldDelete) return
     try {
       await window.desktopAPI.deleteMaterialPackage(record.path)
+      const activeSourceId = courseData?.source.source_id ?? ''
+      if (activeSourceId && record.sourceId && activeSourceId === record.sourceId) {
+        clearActiveCourse()
+      }
+      await refreshLibrary()
       setMaterialInventory(await window.desktopAPI.listMaterialPackages())
-      pushToast('整理记录已删除', record.title, 'success')
+      pushToast(
+        willDeleteMaterialPackage ? '原材料包已删除' : '学习产物已清理',
+        willDeleteMaterialPackage ? record.title : '已保留原材料包，可重新复制提示词制作。',
+        'success',
+      )
     } catch (error) {
-      pushToast('删除失败', error instanceof Error ? error.message : '无法删除这条整理记录。', 'error')
+      pushToast('清理失败', error instanceof Error ? error.message : '无法清理这条整理记录。', 'error')
     }
   }
 
@@ -1280,7 +1313,7 @@ export function WorkspacePane({
   const handleCopyPromptPreviewFile = async () => {
     if (!promptPreviewContent || !selectedPromptPreviewFile) return
     try {
-      await navigator.clipboard.writeText(promptPreviewContent)
+      await copyTextToClipboard(promptPreviewContent)
       pushToast('配置文件已复制', selectedPromptPreviewFile.label, 'success')
     } catch {
       pushToast('复制失败', '可以在弹窗中手动选中文本复制。', 'error')
@@ -1322,7 +1355,7 @@ export function WorkspacePane({
   const handleCopyMarkdownDocument = async () => {
     if (!knowledgeBriefContent) return
     try {
-      await navigator.clipboard.writeText(knowledgeBriefContent)
+      await copyTextToClipboard(knowledgeBriefContent)
       pushToast(knowledgeBriefKind === 'chapter_map' ? '章节思维导图已复制' : '学习笔记已复制', knowledgeBriefTitle, 'success')
     } catch {
       pushToast('复制失败', '可以在阅读窗口中手动选中文本复制。', 'error')
@@ -1336,6 +1369,9 @@ export function WorkspacePane({
 
   const handleOpenKnowledgeBriefInLearning = async (record: MaterialInventoryRecord) => {
     try {
+      if (!record.knowledgeImported && !record.pipelineReady) {
+        throw new Error('学习笔记还未通过机器验证，请先查看验证报告并继续加厚。')
+      }
       const [briefContent, chapterMapContent] = await Promise.all([
         window.desktopAPI.readTextFile(record.knowledgeBriefPath),
         record.chapterMapExists
@@ -1351,7 +1387,7 @@ export function WorkspacePane({
         chapterMapContent,
       })
 
-      await loadCourseFromText(JSON.stringify(course, null, 2), record.knowledgeBriefPath)
+      await loadCourseFromText(JSON.stringify(course, null, 2), null)
       await refreshLibrary()
       setMaterialInventory(await window.desktopAPI.listMaterialPackages())
       pushToast('已进入学习台', record.title, 'success')
@@ -1363,11 +1399,19 @@ export function WorkspacePane({
 
   const handleCopyCodexSynthesisPrompt = async (record: MaterialInventoryRecord) => {
     try {
-      const text = await window.desktopAPI.readTextFile(record.codexGoalPromptPath)
-      await navigator.clipboard.writeText(text)
+      if (window.desktopAPI.copyTextFile) {
+        await window.desktopAPI.copyTextFile(record.codexGoalPromptPath)
+      } else {
+        const text = await window.desktopAPI.readTextFile(record.codexGoalPromptPath)
+        await copyTextToClipboard(text)
+      }
       pushToast('学习笔记提示已复制', record.title, 'success')
-    } catch {
-      pushToast('复制失败', '请打开 authoring/02_start_codex_synthesis.md 手动复制。', 'error')
+    } catch (error) {
+      pushToast(
+        '复制失败',
+        error instanceof Error ? error.message : '请打开 authoring/02_start_codex_synthesis.md 手动复制。',
+        'error',
+      )
     }
   }
 
@@ -1406,7 +1450,7 @@ export function WorkspacePane({
         pushToast('还没有地图提示词', '这份学习包里暂时没有 `course_visual_map.prompt`。', 'error')
         return
       }
-      await navigator.clipboard.writeText(prompt)
+      await copyTextToClipboard(prompt)
       pushToast('地图提示词已复制', `《${title}》现在可以去生成全局学习地图。`, 'success')
     } catch (error) {
       pushToast('复制失败', error instanceof Error ? error.message : '无法读取这份学习包。', 'error')
@@ -1637,6 +1681,13 @@ export function WorkspacePane({
                         if (record.workflowStage === 'knowledge_ready' || record.knowledgeImported) {
                           return 'border-emerald-400/18 bg-emerald-400/[0.08] text-emerald-100'
                         }
+                        if (
+                          record.workflowStage === 'needs_restructure' ||
+                          record.workflowStage === 'needs_deepening' ||
+                          record.workflowStage === 'dossier_incomplete'
+                        ) {
+                          return 'border-amber-400/18 bg-amber-400/[0.08] text-amber-100'
+                        }
                         if (record.workflowStage === 'summary_ready' || record.workflowStage === 'brief_ready' || record.knowledgeBriefExists) {
                           return 'border-emerald-400/18 bg-emerald-400/[0.08] text-emerald-100'
                         }
@@ -1654,13 +1705,6 @@ export function WorkspacePane({
                         ) {
                           return 'border-sky-400/18 bg-sky-400/[0.08] text-sky-100'
                         }
-                        if (
-                          record.workflowStage === 'needs_restructure' ||
-                          record.workflowStage === 'needs_deepening' ||
-                          record.workflowStage === 'dossier_incomplete'
-                        ) {
-                          return 'border-amber-400/18 bg-amber-400/[0.08] text-amber-100'
-                        }
                         if (record.workflowStage === 'material_ready') {
                           return 'border-violet-400/18 bg-violet-400/[0.08] text-violet-100'
                         }
@@ -1669,7 +1713,7 @@ export function WorkspacePane({
                       const canCopySummaryPrompt = Boolean(record.codexGoalPromptPath)
                       const canOpenBrief =
                         record.knowledgeImported ||
-                        record.workflowStage === 'learning_notes_ready' ||
+                        (record.workflowStage === 'learning_notes_ready' && record.pipelineReady) ||
                         record.workflowStage === 'knowledge_ready' ||
                         record.workflowStage === 'summary_ready'
                       const productionButtonLabel = (() => {
@@ -1692,6 +1736,15 @@ export function WorkspacePane({
                             return record.codexCoursePlanExists ? '继续整理' : '开始整理'
                         }
                       })()
+                      const willDeleteMaterialPackage =
+                        record.workflowStage === 'material_ready' &&
+                        !record.synthesisPlanExists &&
+                        !record.knowledgeBriefExists &&
+                        !record.chapterMapExists &&
+                        !record.knowledgeImported &&
+                        !record.finalCourseExists &&
+                        !record.publishedCourseExists &&
+                        !record.importReadyCourseExists
                       return (
                         <div key={record.path} className="rounded-[16px] border border-white/6 bg-white/[0.018] p-3">
                           <div className="flex items-start justify-between gap-3">
@@ -1712,8 +1765,8 @@ export function WorkspacePane({
                                 size="icon"
                                 className="size-7 rounded-lg text-foreground/58 hover:bg-destructive/10 hover:text-destructive"
                                 onClick={() => void handleDeleteMaterialPackage(record)}
-                                aria-label="删除整理记录"
-                                title="删除整理记录"
+                                aria-label={willDeleteMaterialPackage ? '删除原材料包' : '清理学习产物'}
+                                title={willDeleteMaterialPackage ? '删除原材料包' : '清理学习产物'}
                               >
                                 <Trash2 size={13} />
                               </Button>
@@ -1952,7 +2005,7 @@ export function WorkspacePane({
   }
 
   if (view === 'archive') {
-    const otherActiveRecords = activeLibraryRecords.filter((record) => record.id !== featuredActiveRecord?.id)
+    const otherActiveRecords = visibleActiveLibraryRecords
 
     return (
       <WorkspaceShell
@@ -2003,6 +2056,16 @@ export function WorkspacePane({
                   <div className="min-w-0 flex-1">
                     <Progress value={featuredActiveRecord.progressPercent} className="h-1.5 bg-white/6" />
                   </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="rounded-xl hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => void handleDeleteRecord(featuredActiveRecord.id, featuredActiveRecord.title)}
+                  >
+                    <Trash2 size={13} />
+                    删除
+                  </Button>
                   <Button size="sm" className="rounded-xl" onClick={onRequestLearn}>
                     <Sparkles size={13} />
                     继续学习

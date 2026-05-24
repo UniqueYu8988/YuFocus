@@ -136,6 +136,13 @@ type MaterialPackageSummary = {
   workflowStage: string
   workflowStageLabel: string
   nextActionLabel: string
+  pipelineReady: boolean
+  auditReady: boolean
+  releaseReady: boolean
+  validationReportPath: string
+  validationReportExists: boolean
+  validationErrorCount: number
+  validationWarningCount: number
   authoringDir: string
   codexCoursePlanPath: string
   codexCoursePlanExists: boolean
@@ -192,11 +199,13 @@ type KnowledgeLibraryPayload = {
       loadSettings: () => Promise<RuntimeSettings>
       saveSettings: (payload: RuntimeSettings) => Promise<RuntimeSettings>
       loadSettingsStatus: () => Promise<SettingsStatus>
+      copyText: (text: string) => Promise<void>
       pickDirectory: () => Promise<string | null>
       pickMediaFile: () => Promise<{ path: string; name: string } | null>
       pickImageFile: () => Promise<{ path: string; name: string } | null>
       importCoursePackage: () => Promise<{ path: string; text: string } | null>
       readCoursePackage: (targetPath: string) => Promise<{ path: string; text: string }>
+      copyTextFile: (targetPath: string) => Promise<{ path: string; length: number }>
       attachCourseVisualMap: (payload: { targetPath: string; imagePath: string }) => Promise<{ path: string; text: string; assetPath: string; syncedRecordCount: number }>
       runDistillation: (payload: { video?: string; sourceKind?: 'bilibili' | 'local_media'; mediaPath?: string }) => Promise<{
         packagePath: string

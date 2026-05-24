@@ -38,7 +38,7 @@ export function buildCodexTeachingMarkdown(node: FlatCourseNode) {
   return [
     `## ${node.title}`,
     '',
-    node.summary || '这节课还没有写入完整讲解。请先回到 Codex 课程制作窗口，为这一关补充 teacher_ready_content.teaching_markdown。',
+    node.summary || '这份学习笔记还没有写入完整讲解。请先回到 Codex 生产窗口，为这一小节补充 teacher_ready_content.teaching_markdown。',
   ].join('\n')
 }
 
@@ -68,7 +68,7 @@ export function buildFallbackCoachTurn(options: {
 
   if (!answer.trim()) {
     return {
-      reply: `读完本节后，在下方输入框精确输入“${LEARNED_CONFIRMATION_TEXT}”进入下一关。`,
+      reply: `读完本节后，在下方输入框精确输入“${LEARNED_CONFIRMATION_TEXT}”进入下一小节。`,
       learningStatus: 'quizzing',
       markCurrentNodeCompleted: false,
       suggestedNextNodeId: null,
@@ -77,7 +77,7 @@ export function buildFallbackCoachTurn(options: {
 
   if (answer.trim() !== LEARNED_CONFIRMATION_TEXT) {
     return {
-      reply: `还没有标记完成。请精确输入“${LEARNED_CONFIRMATION_TEXT}”进入下一关。`,
+      reply: `还没有标记完成。请精确输入“${LEARNED_CONFIRMATION_TEXT}”进入下一小节。`,
       learningStatus: 'quizzing',
       markCurrentNodeCompleted: false,
       suggestedNextNodeId: null,
@@ -86,8 +86,8 @@ export function buildFallbackCoachTurn(options: {
 
   return {
     reply: nextNode
-      ? `已记录。本节已学习完成，可以进入下一关：**${nextNode.title}**。`
-      : '已记录。这已经是最后一关。',
+      ? `已记录。本节已学习完成，可以进入下一小节：**${nextNode.title}**。`
+      : '已记录。这已经是最后一小节。',
     learningStatus: 'completed',
     markCurrentNodeCompleted: true,
     suggestedNextNodeId: nextNode?.id ?? null,

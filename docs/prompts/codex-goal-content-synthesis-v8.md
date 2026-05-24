@@ -4,6 +4,8 @@
 
 v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。** 不要把 `coverage_matrix` 当成结构设计器，也不要把材料写成几篇长文章。最终 `learning_notes.md` 必须像学习台可导入的章节笔记，而不是总结文章。
 
+学习台不适合承载很多可点击层级。正文只规划用户真正需要打开阅读的层级：短材料可以直接写成 `# 标题 + 若干 ## 学习小节`；中长材料使用 `# 标题 + ## 大章节 + ### 完整小节`。更细的知识点留在同一小节内，用加粗短标题、列表、表格、机制卡、案例卡或误区边界自然排版。
+
 ## 状态语义
 
 `material_ready`：软件已生成原材料包，等待 Codex。
@@ -16,7 +18,7 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 
 `partial_learning_notes`：部分知识树分支已深写，仍需继续下一批分支。
 
-`learning_notes_ready`：全部高价值分支通过结构复查、薄度复查和具体性复查，可导入学习。
+`learning_notes_ready`：Codex 已生成最终学习笔记、章节思维导图、概念图和复查文件。它只是生产侧完成，不等于已经通过软件 validator。
 
 `needs_restructure`：知识树层级不合理，例如上层过粗、下层过碎、横向关系缺失、正文会天然变成长文章。
 
@@ -35,15 +37,15 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 - `indexes/teaching_map.json`
 - `blocks/*.json`（按阶段逐步回读，不要一次吞完整 raw_transcript）
 
-根据当前 stage 选择本轮任务：
+根据当前 stage 选择本轮任务。阶段完成只是下一轮继续的检查点，不代表整个 Goal 完成：
 
-- `material_ready`：执行阶段 1，做到 `knowledge_tree_ready` 后正常停止。
-- `knowledge_tree_ready`：执行阶段 2，做到 `coverage_ready` 后正常停止。
-- `coverage_ready`：执行阶段 3，做到 `dossier_ready` 后正常停止。
-- `dossier_ready` 或 `partial_learning_notes`：执行阶段 4，每轮只深写 1-2 个知识树分支。
-- `needs_restructure`：先修 `knowledge_tree.json`、`tree_outline.md` 和 `synthesis_plan.json`，不要直接补正文。
-- `needs_deepening`：先读取 `thinness_review.md`，只修复被标记偏薄的分支。
-- `learning_notes_ready`：只读检查，不重复生成。
+- `material_ready`：执行阶段 1，推进到 `knowledge_tree_ready`，然后让 Goal 继续下一轮。
+- `knowledge_tree_ready`：执行阶段 2，推进到 `coverage_ready`，然后让 Goal 继续下一轮。
+- `coverage_ready`：执行阶段 3，推进到 `dossier_ready`，然后让 Goal 继续下一轮。
+- `dossier_ready` 或 `partial_learning_notes`：执行阶段 4，每轮只深写 1-2 个知识树分支，仍未写完时继续下一轮。
+- `needs_restructure`：先修 `knowledge_tree.json`、`tree_outline.md` 和 `synthesis_plan.json`，不要直接补正文；修完后继续下一轮。
+- `needs_deepening`：先读取 `thinness_review.md`，只修复被标记偏薄的分支；修完后继续下一轮。
+- `learning_notes_ready`：只读检查，不重复生成；确认核心产物齐备后结束生产 Goal，软件 validator 会另行判断 `pipeline_ready`。
 
 满足任一条件，按长材料处理：
 
@@ -51,6 +53,30 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 - `manifest.block_count` 超过 8。
 - 材料属于考试、医学、法律、金融、安全、教程、操作训练、密集攻略。
 - 单个 block 覆盖多个知识模块。
+
+## 长材料运行边界
+
+长材料的目标不是在一次回复里完成，而是在同一个 Goal 里自动多轮推进，并让每一轮留下可继续、可审计、可返工的真实进展。本 Goal 每一轮最多只推进当前 stage：
+
+- 从 `material_ready` 只推进到 `knowledge_tree_ready`。
+- 从 `knowledge_tree_ready` 只推进到 `coverage_ready`。
+- 从 `coverage_ready` 只推进到 `dossier_ready`。
+- 从 `dossier_ready` 或 `partial_learning_notes` 只深写 1-2 个知识树主分支或一组紧密相关分支。
+
+即使用户希望“直接跑完”，也不要在同一轮回复里把长材料从知识树一路跳到 `learning_notes_ready`。如果当前材料规模明显较大，而本轮无法实地完成回读、dossier、分支深写和复查，就把真实 stage 留在当前阶段的下一站，说明下一轮继续处理什么，并保持 Goal 未完成。
+
+`learning_notes_ready` 不是自我宣布的完成状态。它必须建立在已有的知识树、coverage、dossier、分支 drafts、薄度复查和具体性复查之上；如果这些证据不足，停在 `partial_learning_notes` 或 `needs_deepening`。
+
+不要因为完成了一个阶段就汇报“Goal 已完成”。只有学习笔记、章节思维导图、概念图、复查文件齐备，且 `run_state.stage = learning_notes_ready` 时，才可以把生产 Goal 视为完成。`pipeline_ready` 和最终导入资格由软件 deterministic validator 决定。
+
+## 学习台呈现策略
+
+先判断 `presentation_mode`，再写正文结构：
+
+- `compact_notes`：材料短、主题集中、章节边界不强时使用。推荐 `# 标题 + 4-8 个 ## 学习小节`，不强行拆大章。
+- `chaptered_notes`：材料长、主题多模块、天然有阶段或分支时使用。使用 `##` 作为大章节，`###` 作为可打开的完整小节。
+
+无论哪种模式，学习台的最小打开单位都应该是一段完整可读内容，而不是一个孤立 topic。相邻 topic 如果共享同一个问题、机制、案例或判断链路，应合并成同一小节。单个 topic 的标题通常放进正文内部，不单独升级成新的 `###`。
 
 ## 阶段 1：knowledge_tree_ready
 
@@ -66,6 +92,8 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 - `content_draft/work/knowledge_tree.json`
 - `content_draft/work/structure_review.md`
 - `content_draft/synthesis_plan.json`
+
+`synthesis_plan.json` 使用 `schema_version = shijie.content-synthesis-plan.v0.3`。除知识树外，还要写入 `presentation_policy`，提前决定最终笔记是 `compact_notes` 还是 `chaptered_notes`。
 
 本阶段不写：
 
@@ -129,6 +157,8 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 
 - `stage = knowledge_tree_ready`
 - `next_action = 再次复制 authoring/02_start_codex_synthesis.md，进入 coverage_ready 阶段`
+
+同时在 `content_draft/synthesis_plan.json` 写入 `presentation_policy`，说明本材料采用 `compact_notes` 还是 `chaptered_notes`，以及一个可打开小节应该覆盖什么范围。
 
 ## 阶段 2：coverage_ready
 
@@ -239,17 +269,17 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 - `content_draft/work/self_check.md`
 - 更新 `content_draft/work/coverage_matrix.json`
 
-### Markdown 层级硬边界
+### Markdown 层级与阅读单位
 
 这是导入学习台的结构合同：
 
 - `learning_notes.md` 只能有一个顶层 `# 标题`。
-- 主章节必须使用 `##`。
-- 学习小节必须使用 `###`。
-- 不要用多个 `#` 当章节；那会让学习台看起来“每章只有一节”。
-- 每个 `##` 下面应有若干有意义的 `###` 子节点；如果一个主章节只能写出一个子节点，优先考虑合并到相邻主章节或拆分子节点。
+- 短材料或主题集中的材料可以直接用 `##` 作为可打开学习小节，不必再拆 `###`。
+- 长材料或天然多模块材料使用 `##` 大章节和 `###` 完整小节。
+- 不使用 `####` 及更深标题作为结构节点；细分内容放在同一小节内，用加粗短标题、列表、表格、机制卡、案例卡、误区边界等块状排版。
+- 一个可打开小节要能独立读完一段完整内容：有背景或问题，有解释链路，有必要的例子、边界或回看抓手。
 
-正文不应按“每章自洽长文”一路写完。每个分支开头要说明它在整棵树里的位置；章内按父节点、子节点、兄弟节点、横向关系和易混边界展开。
+正文不应把每个 topic 都变成一个可点击节点。每个分支开头要说明它在整棵树里的位置；章内按父节点、子节点、兄弟节点、横向关系和易混边界展开。若某个 `###` 只能承载一小段观点，应把它并入相邻小节，作为正文内部小标题处理。
 
 `published` 的含义：
 
@@ -258,7 +288,7 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 - 已解释机制、原因、流程或判断逻辑。
 - 已处理题干触发词、变体、例外、应用线索或使用场景。
 - 已处理易混边界和必要跨章关系。
-- 已进入 `learning_notes.md` 的对应 `##` / `###` 层级。
+- 已进入 `learning_notes.md` 的对应可打开学习单位，并在正文内部保留必要关系。
 
 如果只写了部分分支：
 
@@ -296,7 +326,17 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 完成后标记：
 
 - `run_state.stage = learning_notes_ready`
-- `learning_notes_ready.importable = true`
+- `importable = false`
+- `pipeline_ready = false`
+
+不要主观设置 `pipeline_ready = true` 或 `release_ready = true`。软件会在工作台刷新时运行 deterministic validator，只有通过后才设置 `pipeline_ready = true` 并允许进入学习台。
+
+只有在以下条件同时成立时，才可以执行本阶段：
+
+- 当前 stage 已经是 `partial_learning_notes`，并且所有高价值分支在本轮开始前已有对应 drafts。
+- `coverage_matrix.json` 中标记为 `published` 的 topic 都能在 `learning_notes.md` 找到对应学习单位或正文内部展开。
+- `thinness_review.md`、`specificity_review.md` 和 `self_check.md` 不只是文件存在检查，而是指出并确认了结构、薄度和具体性。
+- 对长材料，`learning_notes.md` 的体量和密度要能匹配材料规模；如果正文只有几千字、主要是提纲或泛化总结，应停在 `needs_deepening`。
 
 ## 结构复查
 
@@ -304,8 +344,9 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 
 - 是否先有知识树，再有 topic 覆盖。
 - `learning_notes.md` 是否只有一个 `#` 标题。
-- 主章节是否使用 `##`，学习小节是否使用 `###`。
-- 是否存在“一个主章只有一个小节”的目录退化。
+- 是否按 `presentation_policy` 选择了 `compact_notes` 或 `chaptered_notes`。
+- 可打开小节是否是完整阅读单位，而不是一个 topic 一页。
+- 是否存在为了凑层级而拆出大量短小标题。
 - 上层是否过粗，下层是否过碎。
 - 章节之间是否有必要的跨章连接。
 - `chapter_mindmap.md` 是否是网络图/树，而不是提纲。
@@ -331,4 +372,4 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 - 如果是 `partial_learning_notes`，下一轮处理哪些分支。
 - 如果是 `needs_restructure`，哪些结构问题需要修。
 - 如果是 `needs_deepening`，哪些分支偏薄以及为什么。
-- 是否已经可导入学习台。
+- 生产侧是否已经到 `learning_notes_ready`；若软件 validator 已生成报告，同时说明 `pipeline_ready` 结果。

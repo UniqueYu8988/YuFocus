@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
 import Store from 'electron-store'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -203,6 +203,13 @@ type MaterialPackageSummary = {
   workflowStage: string
   workflowStageLabel: string
   nextActionLabel: string
+  pipelineReady: boolean
+  auditReady: boolean
+  releaseReady: boolean
+  validationReportPath: string
+  validationReportExists: boolean
+  validationErrorCount: number
+  validationWarningCount: number
   authoringDir: string
   gptMaterialPromptPath: string
   gptMaterialWorkspaceZipPath: string
@@ -225,6 +232,36 @@ type MaterialPackageSummary = {
   publishedCourseExists: boolean
   importReadyCoursePath: string
   importReadyCourseExists: boolean
+}
+
+type MaterialValidationIssue = {
+  severity: 'error' | 'warning'
+  code: string
+  message: string
+  path?: string
+}
+
+type MaterialValidationReport = {
+  schema_version: 'shijie.material-validation.v0.1'
+  generated_at: string
+  material_id: string
+  material_path: string
+  stage: string
+  pipeline_ready: boolean
+  audit_ready: boolean
+  release_ready: boolean
+  summary: {
+    error_count: number
+    warning_count: number
+    learning_notes_chars: number
+    learning_notes_plain_chars: number
+    chapter_count: number
+    section_count: number
+    shortest_section_chars: number
+    median_section_chars: number
+    long_material: boolean
+  }
+  issues: MaterialValidationIssue[]
 }
 
 type KnowledgeRecord = {
@@ -755,8 +792,13 @@ function isUsableSynthesisPlan(planPath: string) {
   try {
     const payload = JSON.parse(fs.readFileSync(planPath, 'utf-8')) as Record<string, unknown>
     if (payload.status === 'pending_codex_synthesis') return false
+    const schemaVersion = String(payload.schema_version ?? '')
     return (
-      payload.schema_version === 'shijie.content-synthesis-plan.v0.1' &&
+      [
+        'shijie.content-synthesis-plan.v0.1',
+        'shijie.content-synthesis-plan.v0.2',
+        'shijie.content-synthesis-plan.v0.3',
+      ].includes(schemaVersion) &&
       typeof payload.plan_id === 'string' &&
       Array.isArray(payload.sections) &&
       payload.sections.length > 0
@@ -780,6 +822,340 @@ function isUsableMarkdownDocument(documentPath: string) {
   } catch {
     return false
   }
+}
+
+function isUsableJsonDocument(documentPath: string) {
+  if (!fs.existsSync(documentPath)) return false
+  try {
+    const content = fs.readFileSync(documentPath, 'utf-8').trim()
+    if (!content) return false
+    JSON.parse(content)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function directoryHasMeaningfulEntries(directoryPath: string) {
+  if (!fs.existsSync(directoryPath)) return false
+  try {
+    if (!fs.statSync(directoryPath).isDirectory()) return false
+    return fs.readdirSync(directoryPath, { withFileTypes: true }).some((entry) => {
+      if (entry.name === 'README.md') return false
+      return entry.isFile() || entry.isDirectory()
+    })
+  } catch {
+    return false
+  }
+}
+
+function readJsonDocument(documentPath: string): Record<string, unknown> | null {
+  try {
+    if (!fs.existsSync(documentPath)) return null
+    const parsed = JSON.parse(fs.readFileSync(documentPath, 'utf-8'))
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null
+  } catch {
+    return null
+  }
+}
+
+function writeJsonIfChanged(documentPath: string, payload: unknown) {
+  const nextText = `${JSON.stringify(payload, null, 2)}\n`
+  try {
+    if (fs.existsSync(documentPath) && fs.readFileSync(documentPath, 'utf-8') === nextText) return
+  } catch {
+    // Fall through and rewrite the file.
+  }
+  fs.mkdirSync(path.dirname(documentPath), { recursive: true })
+  fs.writeFileSync(documentPath, nextText, 'utf-8')
+}
+
+function stripMarkdownForValidation(markdown: string) {
+  return markdown
+    .replace(/```[\s\S]*?```/gu, ' ')
+    .replace(/`([^`]+)`/gu, '$1')
+    .replace(/!\[[^\]]*\]\([^)]+\)/gu, ' ')
+    .replace(/\[[^\]]+\]\([^)]+\)/gu, ' ')
+    .replace(/^\s{0,3}#{1,6}\s+/gmu, '')
+    .replace(/[|*_>#-]/gu, ' ')
+    .replace(/\s+/gu, '')
+}
+
+function collectMarkdownHeadings(markdown: string) {
+  return Array.from(markdown.matchAll(/^(#{1,6})\s+(.+?)\s*#*\s*$/gmu)).map((match) => ({
+    level: match[1].length,
+    title: match[2].trim(),
+    index: match.index ?? 0,
+  }))
+}
+
+function collectHeadingBodyLengths(markdown: string, headingLevel: number) {
+  const headingPattern = new RegExp(`^#{${headingLevel}}\\s+(.+?)\\s*#*\\s*$`, 'gmu')
+  const headings = Array.from(markdown.matchAll(headingPattern)).map((match) => ({
+    title: match[1].trim(),
+    index: match.index ?? 0,
+  }))
+  return headings.map((heading, index) => {
+    const end = headings[index + 1]?.index ?? markdown.length
+    const body = markdown.slice(heading.index, end)
+    return {
+      title: heading.title,
+      chars: stripMarkdownForValidation(body).length,
+    }
+  })
+}
+
+function median(values: number[]) {
+  if (!values.length) return 0
+  const sorted = [...values].sort((left, right) => left - right)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2)
+}
+
+function validateMaterialPackageArtifacts(materialPath: string, manifest: Record<string, unknown>, runState: Record<string, unknown>): MaterialValidationReport {
+  const issues: MaterialValidationIssue[] = []
+  const addIssue = (severity: MaterialValidationIssue['severity'], code: string, message: string, relativePath?: string) => {
+    issues.push({ severity, code, message, ...(relativePath ? { path: relativePath } : {}) })
+  }
+
+  const source = manifest.source && typeof manifest.source === 'object' ? manifest.source as Record<string, unknown> : {}
+  const title = sanitizeDisplayText(source.title ?? path.basename(materialPath), '')
+  const materialId = sanitizeDisplayText(manifest.material_id ?? (runState.material && typeof runState.material === 'object' ? (runState.material as Record<string, unknown>).material_id : ''), path.basename(materialPath))
+  const stage = sanitizeDisplayText(runState.stage ?? runState.current_stage ?? '')
+  const rawTranscriptPath = path.join(materialPath, 'raw_transcript.txt')
+  const runStatePath = path.join(materialPath, 'run_state.json')
+  const contentDraftDir = path.join(materialPath, 'content_draft')
+  const reviewExportsDir = path.join(contentDraftDir, 'review_exports')
+  const workDir = path.join(contentDraftDir, 'work')
+  const learningNotesPath = path.join(contentDraftDir, 'learning_notes.md')
+  const chapterMindmapPath = path.join(contentDraftDir, 'chapter_mindmap.md')
+  const validationReportPath = path.join(reviewExportsDir, 'validation_report.json')
+  const coverageMatrixPath = path.join(workDir, 'coverage_matrix.json')
+
+  if (!Object.keys(manifest).length) addIssue('error', 'manifest_missing_or_invalid', 'manifest.json 缺失或不是合法 JSON。', 'manifest.json')
+  if (!fs.existsSync(rawTranscriptPath)) addIssue('error', 'raw_transcript_missing', 'raw_transcript.txt 缺失。', 'raw_transcript.txt')
+  if (!Object.keys(runState).length || !fs.existsSync(runStatePath)) addIssue('error', 'run_state_missing_or_invalid', 'run_state.json 缺失或不是合法 JSON。', 'run_state.json')
+
+  const blockCount = Number(manifest.block_count ?? 0) || 0
+  const rawLength = Number(manifest.raw_transcript_length ?? manifest.text_length ?? 0) || (fs.existsSync(rawTranscriptPath) ? fs.statSync(rawTranscriptPath).size : 0)
+  const longMaterial = rawLength > 100_000 || blockCount > 8 || /考试|医学|医师|执业|基础精讲|教程|训练/u.test(title)
+
+  let learningNotes = ''
+  let learningNotesPlainLength = 0
+  let h2Count = 0
+  let h3Count = 0
+  let shortestSectionChars = 0
+  let medianSectionChars = 0
+
+  if (fs.existsSync(learningNotesPath)) {
+    learningNotes = fs.readFileSync(learningNotesPath, 'utf-8')
+    const trimmed = learningNotes.trim()
+    learningNotesPlainLength = stripMarkdownForValidation(trimmed).length
+    const headings = collectMarkdownHeadings(trimmed)
+    const h1Count = headings.filter((heading) => heading.level === 1).length
+    h2Count = headings.filter((heading) => heading.level === 2).length
+    h3Count = headings.filter((heading) => heading.level === 3).length
+    const h4PlusCount = headings.filter((heading) => heading.level >= 4).length
+    if (h1Count !== 1) addIssue('error', 'learning_notes_h1_invalid', `learning_notes.md 应只有 1 个一级标题，当前为 ${h1Count} 个。`, 'content_draft/learning_notes.md')
+    if (h2Count === 0) addIssue('error', 'learning_notes_no_chapters', 'learning_notes.md 没有二级章节。', 'content_draft/learning_notes.md')
+    if (h4PlusCount > 0) addIssue('warning', 'learning_notes_too_deep', `learning_notes.md 存在 ${h4PlusCount} 个四级或更深标题，学习台可能不适合展示。`, 'content_draft/learning_notes.md')
+
+    const h3Lengths = collectHeadingBodyLengths(trimmed, 3).map((section) => section.chars).filter((chars) => chars > 0)
+    shortestSectionChars = h3Lengths.length ? Math.min(...h3Lengths) : 0
+    medianSectionChars = median(h3Lengths)
+
+    if (/source_refs?|block_\d{3,}|raw offset|raw_offset|debug|字幕证据|制作过程/iu.test(trimmed)) {
+      addIssue('error', 'learning_notes_has_debug_refs', 'learning_notes.md 含有 source_ref、block_id 或后台制作词，学生正文不干净。', 'content_draft/learning_notes.md')
+    }
+    if (/TODO|待补充|此处省略|placeholder|TBD/iu.test(trimmed)) {
+      addIssue('error', 'learning_notes_has_placeholder', 'learning_notes.md 含有 TODO、待补充或占位符。', 'content_draft/learning_notes.md')
+    }
+
+    if (longMaterial) {
+      const minimumPlainLength = Math.max(24_000, Math.min(Math.round(rawLength * 0.08), 60_000))
+      if (learningNotesPlainLength < minimumPlainLength) {
+        addIssue(
+          'error',
+          'learning_notes_too_thin_for_long_material',
+          `长材料正文偏薄：正文约 ${learningNotesPlainLength} 字符，当前材料建议至少达到约 ${minimumPlainLength} 字符的工程 sanity check。`,
+          'content_draft/learning_notes.md',
+        )
+      }
+      if (h3Count >= 8 && medianSectionChars > 0 && medianSectionChars < 650) {
+        addIssue(
+          'error',
+          'learning_units_too_short',
+          `可打开小节偏短：${h3Count} 个三级小节的中位长度约 ${medianSectionChars} 字符，不像完整学习单位。`,
+          'content_draft/learning_notes.md',
+        )
+      }
+    }
+  } else if (stage === 'learning_notes_ready') {
+    addIssue('error', 'learning_notes_missing', 'run_state 已标记 learning_notes_ready，但 learning_notes.md 缺失。', 'content_draft/learning_notes.md')
+  }
+
+  if (fs.existsSync(chapterMindmapPath)) {
+    const mindmap = fs.readFileSync(chapterMindmapPath, 'utf-8').trim()
+    if (mindmap.length < 240) addIssue('error', 'chapter_mindmap_too_short', 'chapter_mindmap.md 过短，不像有效章节思维导图。', 'content_draft/chapter_mindmap.md')
+    if (/source_refs?|block_\d{3,}|raw offset|raw_offset|debug|字幕证据|制作过程/iu.test(mindmap)) {
+      addIssue('error', 'chapter_mindmap_has_debug_refs', 'chapter_mindmap.md 含有 source_ref、block_id 或后台制作词。', 'content_draft/chapter_mindmap.md')
+    }
+    if (/TODO|待补充|此处省略|placeholder|TBD/iu.test(mindmap)) {
+      addIssue('error', 'chapter_mindmap_has_placeholder', 'chapter_mindmap.md 含有 TODO、待补充或占位符。', 'content_draft/chapter_mindmap.md')
+    }
+  } else if (stage === 'learning_notes_ready') {
+    addIssue('error', 'chapter_mindmap_missing', 'run_state 已标记 learning_notes_ready，但 chapter_mindmap.md 缺失。', 'content_draft/chapter_mindmap.md')
+  }
+
+  for (const [relativePath, code, message] of [
+    ['content_draft/work/knowledge_tree.json', 'knowledge_tree_missing', 'knowledge_tree.json 缺失。'],
+    ['content_draft/work/coverage_matrix.json', 'coverage_matrix_missing', 'coverage_matrix.json 缺失。'],
+    ['content_draft/work/block_reread_ledger.jsonl', 'block_reread_ledger_missing', 'block_reread_ledger.jsonl 缺失。'],
+    ['content_draft/work/self_check.md', 'self_check_missing', 'self_check.md 缺失。'],
+  ] as const) {
+    if (stage === 'learning_notes_ready' && !fs.existsSync(path.join(materialPath, relativePath))) {
+      addIssue('error', code, message, relativePath)
+    }
+  }
+
+  const coverageMatrix = readJsonDocument(coverageMatrixPath)
+  if (coverageMatrix && longMaterial) {
+    const branches = Array.isArray(coverageMatrix.branches) ? coverageMatrix.branches as Array<Record<string, unknown>> : []
+    const examReviewBranch = branches.find((branch) => /考试|复盘|题干|易混/u.test(sanitizeDisplayText(branch.title ?? '')))
+    if (examReviewBranch) {
+      const draftStatus = sanitizeDisplayText(examReviewBranch.draft_status ?? '')
+      const coverageStatus = sanitizeDisplayText(examReviewBranch.coverage_status ?? '')
+      if (!/published/i.test(draftStatus) && !/published/i.test(coverageStatus)) {
+        addIssue(
+          'error',
+          'exam_review_branch_not_published',
+          '考试/复盘分支没有进入 learning_notes.md。对医学考试材料，这通常意味着复习价值被压缩到导图或索引层。',
+          'content_draft/work/coverage_matrix.json',
+        )
+      }
+    }
+  }
+
+  const errorCount = issues.filter((issue) => issue.severity === 'error').length
+  const warningCount = issues.filter((issue) => issue.severity === 'warning').length
+  const finalArtifactsExist = fs.existsSync(learningNotesPath) && fs.existsSync(chapterMindmapPath)
+  const pipelineReady = stage === 'learning_notes_ready' && finalArtifactsExist && errorCount === 0
+  const auditReady = runState.audit_ready === true
+  const releaseReady = runState.release_ready === true
+  const summary = {
+    error_count: errorCount,
+    warning_count: warningCount,
+    learning_notes_chars: learningNotes.length,
+    learning_notes_plain_chars: learningNotesPlainLength,
+    chapter_count: h2Count,
+    section_count: h3Count,
+    shortest_section_chars: shortestSectionChars,
+    median_section_chars: medianSectionChars,
+    long_material: longMaterial,
+  }
+  const comparableReportPayload = {
+    stage,
+    pipeline_ready: pipelineReady,
+    audit_ready: auditReady,
+    release_ready: releaseReady,
+    summary,
+    issues,
+  }
+  const previousReport = readJsonDocument(validationReportPath)
+  const previousComparablePayload = previousReport
+    ? {
+        stage: previousReport.stage,
+        pipeline_ready: previousReport.pipeline_ready,
+        audit_ready: previousReport.audit_ready,
+        release_ready: previousReport.release_ready,
+        summary: previousReport.summary,
+        issues: previousReport.issues,
+      }
+    : null
+  const generatedAt = previousReport &&
+    typeof previousReport.generated_at === 'string' &&
+    JSON.stringify(previousComparablePayload) === JSON.stringify(comparableReportPayload)
+    ? previousReport.generated_at
+    : new Date().toISOString()
+
+  const report: MaterialValidationReport = {
+    schema_version: 'shijie.material-validation.v0.1',
+    generated_at: generatedAt,
+    material_id: materialId,
+    material_path: materialPath,
+    stage,
+    pipeline_ready: pipelineReady,
+    audit_ready: auditReady,
+    release_ready: releaseReady,
+    summary,
+    issues,
+  }
+
+  writeJsonIfChanged(validationReportPath, report)
+
+  if (fs.existsSync(runStatePath)) {
+    const nextRunState = {
+      ...runState,
+      pipeline_ready: pipelineReady,
+      audit_ready: auditReady,
+      release_ready: releaseReady,
+      validation_report: 'content_draft/review_exports/validation_report.json',
+      importable: pipelineReady,
+    }
+    writeJsonIfChanged(runStatePath, nextRunState)
+  }
+
+  return report
+}
+
+function deriveMaterialWorkflowStageFromArtifacts(options: {
+  knowledgeImported: boolean
+  readonlyAuditExists: boolean
+  synthesisPlanExists: boolean
+  knowledgeTreeExists: boolean
+  treeOutlineExists: boolean
+  structureReviewExists: boolean
+  coverageMatrixExists: boolean
+  blockRereadLedgerExists: boolean
+  sectionDossiersExists: boolean
+  learningNotesExists: boolean
+  chapterMindmapExists: boolean
+  conceptGraphExists: boolean
+  selfCheckExists: boolean
+}) {
+  const {
+    knowledgeImported,
+    readonlyAuditExists,
+    synthesisPlanExists,
+    knowledgeTreeExists,
+    treeOutlineExists,
+    structureReviewExists,
+    coverageMatrixExists,
+    blockRereadLedgerExists,
+    sectionDossiersExists,
+    learningNotesExists,
+    chapterMindmapExists,
+    conceptGraphExists,
+    selfCheckExists,
+  } = options
+
+  const hasLearningNotesReadyArtifacts =
+    learningNotesExists &&
+    chapterMindmapExists &&
+    conceptGraphExists &&
+    selfCheckExists
+
+  if (hasLearningNotesReadyArtifacts) return 'learning_notes_ready'
+  if (learningNotesExists || chapterMindmapExists || conceptGraphExists || selfCheckExists) {
+    return 'partial_learning_notes'
+  }
+  if (sectionDossiersExists || blockRereadLedgerExists) return 'dossier_ready'
+  if (coverageMatrixExists) return 'coverage_ready'
+  if (knowledgeTreeExists || treeOutlineExists || structureReviewExists) return 'knowledge_tree_ready'
+  if (synthesisPlanExists) return 'codex_plan_ready'
+  if (knowledgeImported) return 'knowledge_ready'
+  if (readonlyAuditExists) return 'audit_ready'
+  return 'material_ready'
 }
 
 function createKnowledgeRecordId(materialPath: string, sourceId: string) {
@@ -944,6 +1320,16 @@ function importKnowledgeBriefFromMaterial(settings: RuntimeSettings, materialPat
   }
 
   const manifest = readMaterialManifest(resolvedMaterialPath)
+  const runState = readJsonDocument(path.join(resolvedMaterialPath, 'run_state.json')) ?? {}
+  const validationReport = validateMaterialPackageArtifacts(resolvedMaterialPath, manifest, runState)
+  if (!validationReport.pipeline_ready) {
+    const firstIssue = validationReport.issues.find((issue) => issue.severity === 'error') ?? validationReport.issues[0]
+    throw new Error(
+      firstIssue
+        ? `学习笔记还未通过机器验证：${firstIssue.message}`
+        : '学习笔记还未通过机器验证，请先查看 content_draft/review_exports/validation_report.json。',
+    )
+  }
   const source = manifest.source && typeof manifest.source === 'object' ? manifest.source as Record<string, unknown> : {}
   const title = sanitizeDisplayText(source.title ?? path.basename(resolvedMaterialPath).replace(/\.course_material$/u, ''), '未命名学习笔记')
   const sourceId = sanitizeDisplayText(source.source_id ?? '')
@@ -1060,6 +1446,9 @@ function listMaterialPackages(settings: RuntimeSettings) {
       runState = {}
     }
     const authoringDir = path.join(materialPath, 'authoring')
+    const contentDraftDir = path.join(materialPath, 'content_draft')
+    const workDir = path.join(contentDraftDir, 'work')
+    const reviewExportsDir = path.join(contentDraftDir, 'review_exports')
     const gptMaterialWorkspaceZipPath = ''
     const gptMaterialPromptPath = ''
     const codexSynthesisPromptPath = path.join(authoringDir, '02_start_codex_synthesis.md')
@@ -1091,39 +1480,71 @@ function listMaterialPackages(settings: RuntimeSettings) {
     const authoringExists = fs.existsSync(authoringDir)
     const canonicalMaterial = authoringExists && fs.existsSync(runStatePath)
     if (!canonicalMaterial) continue
+    const validationReport = validateMaterialPackageArtifacts(materialPath, manifest, runState)
     const explicitRunStage = sanitizeDisplayText(runState.stage ?? '')
-    const stagedWorkflowStates = new Set([
-      'knowledge_tree_ready',
-      'coverage_ready',
-      'dossier_ready',
-      'partial_learning_notes',
-      'needs_restructure',
-      'needs_deepening',
-      'dossier_incomplete',
-      'learning_notes_ready',
-    ])
-    const derivedWorkflowStage: string = stagedWorkflowStates.has(explicitRunStage)
-      ? explicitRunStage
-      : knowledgeImported
-        ? 'knowledge_ready'
-        : readonlyAuditExists
-          ? 'audit_ready'
-          : knowledgeBriefExists && chapterMapExists
-            ? 'summary_ready'
-          : chapterMapExists
-            ? 'map_ready'
-          : knowledgeBriefExists
-          ? 'brief_ready'
-        : codexCoursePlanExists
-          ? 'codex_plan_ready'
-          : 'material_ready'
-    const workflowStage = derivedWorkflowStage || explicitRunStage
+    const knowledgeTreePath = path.join(workDir, 'knowledge_tree.json')
+    const treeOutlinePath = path.join(workDir, 'tree_outline.md')
+    const structureReviewPath = path.join(workDir, 'structure_review.md')
+    const coverageMatrixPath = path.join(workDir, 'coverage_matrix.json')
+    const blockRereadLedgerPath = path.join(workDir, 'block_reread_ledger.jsonl')
+    const sectionDossiersDir = path.join(workDir, 'section_dossiers')
+    const learningNotesReadyArtifacts =
+      isUsableMarkdownDocument(learningNotesPath) &&
+      isUsableMarkdownDocument(chapterMindmapPath) &&
+      isUsableJsonDocument(path.join(workDir, 'concept_graph.json')) &&
+      isUsableMarkdownDocument(path.join(workDir, 'self_check.md'))
+    const hasAnyLearningDraftArtifacts =
+      fs.existsSync(learningNotesPath) ||
+      fs.existsSync(chapterMindmapPath) ||
+      fs.existsSync(path.join(workDir, 'concept_graph.json')) ||
+      fs.existsSync(path.join(workDir, 'self_check.md'))
+    const hasAnyDossierArtifacts =
+      fs.existsSync(blockRereadLedgerPath) ||
+      directoryHasMeaningfulEntries(sectionDossiersDir) ||
+      fs.existsSync(path.join(workDir, 'thinness_review.md'))
+    const hasAnyCoverageArtifacts =
+      fs.existsSync(coverageMatrixPath) ||
+      fs.existsSync(path.join(workDir, 'topic_inventory.json')) ||
+      directoryHasMeaningfulEntries(path.join(workDir, 'block_digest'))
+    const hasAnyTreeArtifacts =
+      fs.existsSync(knowledgeTreePath) ||
+      fs.existsSync(treeOutlinePath) ||
+      fs.existsSync(structureReviewPath)
+    const hasAnyIntermediateOutputs =
+      fs.existsSync(synthesisPlanPath) ||
+      hasAnyTreeArtifacts ||
+      hasAnyCoverageArtifacts ||
+      hasAnyDossierArtifacts ||
+      hasAnyLearningDraftArtifacts ||
+      directoryHasMeaningfulEntries(reviewExportsDir)
+    const derivedWorkflowStage = deriveMaterialWorkflowStageFromArtifacts({
+      knowledgeImported,
+      readonlyAuditExists,
+      synthesisPlanExists,
+      knowledgeTreeExists: fs.existsSync(knowledgeTreePath),
+      treeOutlineExists: fs.existsSync(treeOutlinePath),
+      structureReviewExists: fs.existsSync(structureReviewPath),
+      coverageMatrixExists: fs.existsSync(coverageMatrixPath),
+      blockRereadLedgerExists: fs.existsSync(blockRereadLedgerPath),
+      sectionDossiersExists: fs.existsSync(sectionDossiersDir),
+      learningNotesExists: fs.existsSync(learningNotesPath),
+      chapterMindmapExists: fs.existsSync(chapterMindmapPath),
+      conceptGraphExists: fs.existsSync(path.join(workDir, 'concept_graph.json')),
+      selfCheckExists: fs.existsSync(path.join(workDir, 'self_check.md')),
+    })
+    if (explicitRunStage === 'learning_notes_ready' && derivedWorkflowStage !== 'learning_notes_ready' && !hasAnyIntermediateOutputs) {
+      resetMaterialGeneratedDrafts(materialPath, [])
+    }
+    const workflowStage =
+      derivedWorkflowStage === 'learning_notes_ready' && !validationReport.pipeline_ready
+        ? 'needs_deepening'
+        : derivedWorkflowStage || explicitRunStage
     const workflowStageLabels: Record<string, string> = {
       knowledge_ready: '学习笔记已可学习',
       learning_notes_ready: '学习笔记可导入',
       partial_learning_notes: '部分章节已深写',
       needs_restructure: '需调整结构',
-      needs_deepening: '需要加厚',
+      needs_deepening: validationReport.summary.error_count > 0 ? '验证未通过' : '需要加厚',
       dossier_incomplete: '章节材料不足',
       dossier_ready: '章节材料已就绪',
       coverage_ready: '覆盖层已就绪',
@@ -1141,7 +1562,7 @@ function listMaterialPackages(settings: RuntimeSettings) {
       learning_notes_ready: '开始学习',
       partial_learning_notes: '继续深写后续章节',
       needs_restructure: '调整知识树',
-      needs_deepening: '按薄度复查返工',
+      needs_deepening: validationReport.summary.error_count > 0 ? '查看验证报告并返工' : '按薄度复查返工',
       dossier_incomplete: '补章节材料包',
       dossier_ready: '开始分章深写',
       coverage_ready: '生成章节材料包',
@@ -1171,6 +1592,13 @@ function listMaterialPackages(settings: RuntimeSettings) {
       workflowStage,
       workflowStageLabel,
       nextActionLabel,
+      pipelineReady: validationReport.pipeline_ready,
+      auditReady: validationReport.audit_ready,
+      releaseReady: validationReport.release_ready,
+      validationReportPath: path.join(reviewExportsDir, 'validation_report.json'),
+      validationReportExists: fs.existsSync(path.join(reviewExportsDir, 'validation_report.json')),
+      validationErrorCount: validationReport.summary.error_count,
+      validationWarningCount: validationReport.summary.warning_count,
       authoringDir,
       gptMaterialPromptPath: fs.existsSync(gptMaterialPromptPath) ? gptMaterialPromptPath : '',
       gptMaterialWorkspaceZipPath: gptMaterialWorkspaceZipPath,
@@ -1252,9 +1680,196 @@ function deletePathIfInsideAnyRoot(
   deletePathIfExists(resolvedTarget, deletedPaths)
 }
 
+function writeInitialContentDraftReadmes(materialPath: string) {
+  const workDir = path.join(materialPath, 'content_draft', 'work')
+  const reviewExportsDir = path.join(materialPath, 'content_draft', 'review_exports')
+  fs.mkdirSync(workDir, { recursive: true })
+  fs.mkdirSync(reviewExportsDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(workDir, 'README.md'),
+    [
+      '# Content Draft Work',
+      '',
+      '这里保存 Codex Goal v8 的中间工作文件。工作台清理整理结果后，会保留字幕、转写、blocks、indexes 和 authoring，只重置这里的生成稿。',
+      '',
+    ].join('\n'),
+    'utf-8',
+  )
+  fs.writeFileSync(
+    path.join(reviewExportsDir, 'README.md'),
+    [
+      '# Review Exports',
+      '',
+      '第二个只读审计窗口只允许把学习笔记审计报告写到这里。',
+      '',
+      '推荐固定输出：`latest-readonly-audit.md`。',
+      '',
+    ].join('\n'),
+    'utf-8',
+  )
+}
+
+function resetMaterialRunState(materialPath: string) {
+  const runStatePath = path.join(materialPath, 'run_state.json')
+  if (!fs.existsSync(runStatePath)) return
+
+  try {
+    const current = JSON.parse(fs.readFileSync(runStatePath, 'utf-8')) as Record<string, unknown>
+    const baseState = { ...current }
+    for (const staleKey of [
+      'coverage_ready',
+      'dossier_ready',
+      'importable',
+      'knowledge_tree_ready',
+      'learning_notes_ready',
+      'partial_learning_notes',
+      'steps',
+      'validation_report',
+    ]) {
+      delete baseState[staleKey]
+    }
+    const reset = {
+      ...baseState,
+      stage: 'material_ready',
+      stage_label: '待知识树整理',
+      current_stage: 'material_ready',
+      completed_stages: ['material_package'],
+      dirty_outputs: [],
+      importable: false,
+      pipeline_ready: false,
+      audit_ready: false,
+      release_ready: false,
+      stage_outputs: {},
+      steps: [
+        {
+          id: 'material_package',
+          label: '原材料包',
+          status: 'done',
+          output: 'manifest.json, raw_transcript.txt, blocks/, indexes/, authoring/',
+        },
+        {
+          id: 'codex_synthesis',
+          label: 'Codex v8 学习笔记',
+          status: 'next',
+          output: 'knowledge_tree_ready -> coverage_ready -> dossier_ready -> partial_learning_notes -> learning_notes_ready',
+        },
+        {
+          id: 'readonly_audit',
+          label: '只读审计',
+          status: 'optional',
+          output: 'content_draft/review_exports/latest-readonly-audit.md',
+        },
+        {
+          id: 'import_content',
+          label: '开始学习',
+          status: 'pending',
+          output: 'content_draft/learning_notes.md',
+        },
+      ],
+      updated_at: new Date().toISOString(),
+      resume_instruction: '复制 authoring/02_start_codex_synthesis.md 到 Codex；v8 会在同一个 Goal 中自动多轮推进，每轮只过一个阶段闸门。',
+      next_action: '复制 authoring/02_start_codex_synthesis.md 到 Codex；从知识树整理重新开始。',
+    }
+    fs.writeFileSync(runStatePath, `${JSON.stringify(reset, null, 2)}\n`, 'utf-8')
+  } catch {
+    // A broken run_state should not prevent cleaning generated drafts.
+  }
+}
+
+function resetMaterialGeneratedDrafts(materialPath: string, deletedPaths: string[]) {
+  const contentDraftDir = path.join(materialPath, 'content_draft')
+  fs.mkdirSync(contentDraftDir, { recursive: true })
+
+  for (const relativePath of [
+    'synthesis_plan.json',
+    'learning_notes.md',
+    'chapter_mindmap.md',
+    path.join('work'),
+    path.join('review_exports'),
+  ]) {
+    deletePathIfExists(path.join(contentDraftDir, relativePath), deletedPaths)
+  }
+
+  writeInitialContentDraftReadmes(materialPath)
+  resetMaterialRunState(materialPath)
+}
+
+function deleteCoursePackageFile(packagePath: string, deletedPaths: string[], skippedPaths: string[]) {
+  const settings = loadSettings()
+  const coursePackageRootDir = resolveCoursePackageOutputDir(settings)
+  const outputRootDir = normalizeOutputRoot(settings.output_dir)
+  const resolvedPath = path.resolve(packagePath)
+  deletePathIfInsideAnyRoot(resolvedPath, [coursePackageRootDir, outputRootDir], deletedPaths, skippedPaths)
+
+  if (resolvedPath.endsWith('.course-package.json')) {
+    const assetDir = path.join(
+      path.dirname(resolvedPath),
+      `${path.basename(resolvedPath).replace(/\.course-package\.json$/iu, '')}.assets`,
+    )
+    deletePathIfInsideAnyRoot(assetDir, [coursePackageRootDir, outputRootDir], deletedPaths, skippedPaths)
+  }
+}
+
+function deleteLearningRecordArtifacts(record: LearningRecord, deletedPaths: string[], skippedPaths: string[]) {
+  const candidatePaths = [
+    record.packagePath,
+    record.importedCoursePath,
+  ]
+
+  for (const candidatePath of candidatePaths) {
+    if (!isWritableCoursePackagePath(candidatePath)) continue
+    deleteCoursePackageFile(String(candidatePath), deletedPaths, skippedPaths)
+  }
+}
+
+function deleteCoursePackagesBySource(
+  settings: RuntimeSettings,
+  sourceId: string,
+  title: string,
+  deletedPaths: string[],
+  skippedPaths: string[],
+) {
+  const coursePackageRootDir = resolveCoursePackageOutputDir(settings)
+  if (!fs.existsSync(coursePackageRootDir)) return
+  const normalizedSourceId = sanitizeDisplayText(sourceId)
+  const normalizedTitle = sanitizeDisplayText(title)
+
+  for (const entry of fs.readdirSync(coursePackageRootDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.course-package.json')) continue
+    const packagePath = path.join(coursePackageRootDir, entry.name)
+    try {
+      const payload = JSON.parse(fs.readFileSync(packagePath, 'utf-8')) as Record<string, unknown>
+      const source = payload.source && typeof payload.source === 'object' ? payload.source as Record<string, unknown> : {}
+      const course = payload.course && typeof payload.course === 'object' ? payload.course as Record<string, unknown> : {}
+      const packageSourceId = sanitizeDisplayText(source.source_id ?? '')
+      const packageTitle = sanitizeDisplayText(course.title ?? source.title ?? '')
+      const matchesSource = Boolean(normalizedSourceId && packageSourceId === normalizedSourceId)
+      const matchesTitle = Boolean(normalizedTitle && packageTitle === normalizedTitle)
+      if (matchesSource || matchesTitle) {
+        deleteCoursePackageFile(packagePath, deletedPaths, skippedPaths)
+      }
+    } catch {
+      // Ignore unrelated or broken package JSON.
+    }
+  }
+}
+
+function shouldDeleteMaterialPackageFile(record: MaterialPackageSummary | undefined) {
+  if (!record) return false
+  return (
+    record.workflowStage === 'material_ready' &&
+    !record.synthesisPlanExists &&
+    !record.knowledgeBriefExists &&
+    !record.chapterMapExists &&
+    !record.knowledgeImported &&
+    !record.finalCourseExists &&
+    !record.publishedCourseExists &&
+    !record.importReadyCourseExists
+  )
+}
+
 function deleteMaterialPackage(settings: RuntimeSettings, materialPath: string): DeleteResult {
   const rootDir = resolveMaterialOutputDir(settings)
-  const coursePackageRootDir = resolveCoursePackageOutputDir(settings)
   const knowledgeRootDir = resolveKnowledgeOutputDir(settings)
   const outputRootDir = normalizeOutputRoot(settings.output_dir)
   const safeMaterialPath = assertPathInside(materialPath, rootDir, '原材料包')
@@ -1262,13 +1877,18 @@ function deleteMaterialPackage(settings: RuntimeSettings, materialPath: string):
   const record = inventory.records.find((item) => getComparablePath(item.path) === getComparablePath(safeMaterialPath))
   const deletedPaths: string[] = []
   const skippedPaths: string[] = []
-  deletePathIfExists(safeMaterialPath, deletedPaths)
+  const deleteMaterialPackageFile = shouldDeleteMaterialPackageFile(record)
 
-  for (const candidate of [record?.finalCoursePath, record?.publishedCoursePath]) {
-    deletePathIfInsideAnyRoot(candidate, [coursePackageRootDir, outputRootDir], deletedPaths, skippedPaths)
+  if (deleteMaterialPackageFile) {
+    deletePathIfExists(safeMaterialPath, deletedPaths)
+  } else {
+    resetMaterialGeneratedDrafts(safeMaterialPath, deletedPaths)
   }
 
   const sourceId = sanitizeDisplayText(record?.sourceId ?? '')
+  const title = sanitizeDisplayText(record?.title ?? '')
+  deleteCoursePackagesBySource(settings, sourceId, title, deletedPaths, skippedPaths)
+
   const knowledgeLibrary = loadKnowledgeLibraryFile(settings)
   const nextKnowledgeRecords = knowledgeLibrary.records.filter((item) => {
     const materialMatches = getComparablePath(item.materialPath) === getComparablePath(safeMaterialPath)
@@ -1298,7 +1918,11 @@ function deleteMaterialPackage(settings: RuntimeSettings, materialPath: string):
         (comparableImportedPath === comparableMaterialPath || comparableImportedPath.startsWith(`${comparableMaterialPath}${path.sep}`)),
       )
       const sourceMatches = Boolean(sourceId && item.sourceId === sourceId)
-      return !pathMatches && !sourceMatches
+      const shouldDelete = pathMatches || sourceMatches
+      if (shouldDelete) {
+        deleteLearningRecordArtifacts(item, deletedPaths, skippedPaths)
+      }
+      return !shouldDelete
     }),
   )
   if (Object.keys(nextLearningRecords).length !== Object.keys(learningLibrary.records).length) {
@@ -1841,9 +2465,10 @@ function normalizeCoursePackageText(courseText: string, targetPath?: string | nu
       return { text: courseText, changed: false }
     }
     const nextText = JSON.stringify(compacted.payload, null, 2)
-    if (targetPath) {
+    const writableTargetPath = isWritableCoursePackagePath(targetPath) ? String(targetPath).trim() : ''
+    if (writableTargetPath) {
       try {
-        fs.writeFileSync(targetPath, nextText, 'utf-8')
+        fs.writeFileSync(writableTargetPath, nextText, 'utf-8')
       } catch {
         // ignore package write-back failures and still return upgraded text
       }
@@ -1852,6 +2477,13 @@ function normalizeCoursePackageText(courseText: string, targetPath?: string | nu
   } catch {
     return { text: courseText, changed: false }
   }
+}
+
+function isWritableCoursePackagePath(targetPath?: string | null) {
+  const normalized = String(targetPath ?? '').trim()
+  if (!normalized) return false
+  if (path.basename(normalized).toLowerCase() === 'learning_notes.md') return false
+  return path.extname(normalized).toLowerCase() === '.json'
 }
 
 function buildCourseVisualMapAssetPaths(packagePath: string, imagePath: string) {
@@ -1960,6 +2592,7 @@ function normalizeNodeSession(raw: Partial<PersistedNodeLearningSession> | null 
 }
 
 function readPackageTextWithLightMapUpgrade(courseText: string, packagePath: string | null) {
+  if (!isWritableCoursePackagePath(packagePath)) return courseText
   const resolvedPath = packagePath ? path.resolve(packagePath) : ''
   if (!resolvedPath || !fs.existsSync(resolvedPath)) return courseText
 
@@ -1986,21 +2619,24 @@ function normalizeLearningRecord(raw: Partial<LearningRecord> | null | undefined
     },
     {},
   )
-  const importedCoursePath =
+  const rawImportedCoursePath =
     raw?.importedCoursePath === null
       ? null
       : String(raw?.importedCoursePath ?? existing?.importedCoursePath ?? '') || null
-  const packagePath =
+  const rawPackagePath =
     raw?.packagePath === null
       ? null
       : String(raw?.packagePath ?? existing?.packagePath ?? '') || null
+  const importedCoursePath = isWritableCoursePackagePath(rawImportedCoursePath) ? rawImportedCoursePath : null
+  const packagePath = isWritableCoursePackagePath(rawPackagePath) ? rawPackagePath : null
+  const preferredPackagePath = packagePath ?? importedCoursePath
   const rawCourseText = readPackageTextWithLightMapUpgrade(
     String(raw?.courseText ?? existing?.courseText ?? ''),
-    packagePath ?? importedCoursePath,
+    preferredPackagePath,
   )
   const normalizedCourseText = normalizeCoursePackageText(
     rawCourseText,
-    packagePath ?? importedCoursePath,
+    preferredPackagePath,
   )
 
   return {
@@ -2056,7 +2692,12 @@ function loadLearningLibraryState(): LearningLibraryState {
   let shouldPersistNormalizedRecords = false
   const records = Object.entries(raw?.records ?? {}).reduce<Record<string, LearningRecord>>((accumulator, [recordId, record]) => {
     const normalized = normalizeLearningRecord(record, undefined)
-    if (normalized.courseText !== String((record as Partial<LearningRecord> | undefined)?.courseText ?? '')) {
+    const previous = record as Partial<LearningRecord> | undefined
+    if (
+      normalized.courseText !== String(previous?.courseText ?? '') ||
+      normalized.importedCoursePath !== (previous?.importedCoursePath ?? null) ||
+      normalized.packagePath !== (previous?.packagePath ?? null)
+    ) {
       shouldPersistNormalizedRecords = true
     }
     accumulator[recordId] = normalized
@@ -2329,7 +2970,11 @@ function refreshLearningLibraryStructure(): LearningLibraryRefreshResult {
     }
 
     const normalized = normalizeLearningRecord(record, record)
-    if (normalized.courseText !== record.courseText) {
+    if (
+      normalized.courseText !== record.courseText ||
+      normalized.importedCoursePath !== record.importedCoursePath ||
+      normalized.packagePath !== record.packagePath
+    ) {
       recordUpdates += 1
       if (packagePath) {
         refreshedPackagePaths.add(path.resolve(packagePath))
@@ -2390,11 +3035,17 @@ function upsertLearningRecord(nextRecord: LearningRecord) {
 
 function deleteLearningRecord(recordId: string) {
   const library = loadLearningLibraryState()
+  const record = library.records[recordId]
+  const deletedPaths: string[] = []
+  const skippedPaths: string[] = []
+  if (record) {
+    deleteLearningRecordArtifacts(record, deletedPaths, skippedPaths)
+  }
   const nextRecords = { ...library.records }
   delete nextRecords[recordId]
   const nextCurrentRecordId =
     library.currentRecordId === recordId
-      ? sortLearningRecords(Object.values(nextRecords))[0]?.id ?? null
+      ? null
       : library.currentRecordId
   saveLearningLibraryState({
     currentRecordId: nextCurrentRecordId,
@@ -4440,6 +5091,19 @@ ipcMain.handle('file:readText', async (_event, targetPath: string) => {
     throw new Error(`文件不存在：${resolvedPath}`)
   }
   return fs.readFileSync(resolvedPath, 'utf-8')
+})
+
+ipcMain.handle('file:copyText', async (_event, targetPath: string) => {
+  const resolvedPath = path.resolve(String(targetPath || ''))
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error(`文件不存在：${resolvedPath}`)
+  }
+  const text = fs.readFileSync(resolvedPath, 'utf-8')
+  clipboard.writeText(text)
+  return {
+    path: resolvedPath,
+    length: text.length,
+  }
 })
 
 ipcMain.handle('shell:openPath', async (_event, targetPath: string) => {

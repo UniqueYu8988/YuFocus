@@ -25,6 +25,7 @@ type MarkdownChapter = {
   summary: string
   keyPoints: string[]
   lessons: MarkdownSection[]
+  asStudyNode?: boolean
 }
 
 function stripKnowledgeBriefMetadata(content: string) {
@@ -182,6 +183,44 @@ function makeMarkdownSection(raw: { title: string; content: string }, index: num
   }
 }
 
+function makeMarkdownChapterStudyUnit(raw: { title: string; content: string }, index: number): MarkdownChapter {
+  const title = normalizeTitle(raw.title, `小节 ${index + 1}`)
+  return {
+    id: makeNodeId('section', `${title}\n${raw.content}`, index),
+    title,
+    content: raw.content,
+    summary: summarizeMarkdown(raw.content, title),
+    keyPoints: extractKeyPoints(raw.content, title),
+    lessons: [],
+    asStudyNode: true,
+  }
+}
+
+function getPlainLength(markdown: string) {
+  return stripMarkdownNoise(markdown).length
+}
+
+function shouldUseCompactDocumentMode(rawChapters: Array<{ title: string; content: string }>, markdown: string) {
+  if (rawChapters.length === 0) return false
+  const rawLessonCount = rawChapters.reduce((sum, chapter) => sum + collectHeadingSections(chapter.content, 3).length, 0)
+  if (rawLessonCount === 0) return true
+
+  const plainLength = getPlainLength(markdown)
+  const averageLessonLength = plainLength / Math.max(1, rawLessonCount)
+  return rawChapters.length <= 10 && rawLessonCount >= 12 && plainLength <= 14000 && averageLessonLength < 850
+}
+
+function shouldCollapseChapterToStudyUnit(
+  chapter: { title: string; content: string },
+  rawLessons: Array<{ title: string; content: string }>,
+) {
+  if (rawLessons.length === 0) return true
+  const chapterPlainLength = getPlainLength(chapter.content)
+  const averageLessonLength =
+    rawLessons.reduce((sum, lesson) => sum + getPlainLength(lesson.content), 0) / Math.max(1, rawLessons.length)
+  return rawLessons.length >= 6 && chapterPlainLength <= 2200 && averageLessonLength < 420
+}
+
 function splitMarkdownIntoChapters(markdown: string): MarkdownChapter[] {
   const withoutMainTitle = markdown.replace(/^#\s+.+?\s*#*\s*$/mu, '').trim()
   const rawChapters = collectHeadingSections(withoutMainTitle, 2)
@@ -194,9 +233,12 @@ function splitMarkdownIntoChapters(markdown: string): MarkdownChapter[] {
       content: section.content,
       summary: section.summary,
       keyPoints: section.keyPoints,
-      lessons: [section],
+      lessons: [],
+      asStudyNode: true,
     }))
   }
+
+  const compactDocumentMode = shouldUseCompactDocumentMode(rawChapters, withoutMainTitle)
 
   return rawChapters
     .filter((chapter) => stripMarkdownNoise(chapter.content).length > 40)
@@ -204,6 +246,10 @@ function splitMarkdownIntoChapters(markdown: string): MarkdownChapter[] {
     .map((chapter, chapterIndex) => {
       const chapterTitle = normalizeTitle(chapter.title, `章节 ${chapterIndex + 1}`)
       const rawLessons = collectHeadingSections(chapter.content, 3)
+      if (compactDocumentMode || shouldCollapseChapterToStudyUnit(chapter, rawLessons)) {
+        return makeMarkdownChapterStudyUnit({ title: chapterTitle, content: chapter.content }, chapterIndex)
+      }
+
       const lessons = (rawLessons.length > 0
         ? rawLessons.map((lesson, lessonIndex) => makeMarkdownSection(lesson, lessonIndex, `lesson-${chapterIndex + 1}`))
         : [makeMarkdownSection(chapter, 0, `lesson-${chapterIndex + 1}`)]
@@ -278,7 +324,24 @@ function buildCourseLesson(section: MarkdownSection, order: number): CourseNode 
   }
 }
 
+function buildChapterStudyNode(chapter: MarkdownChapter, order: number): CourseNode {
+  return buildCourseLesson(
+    {
+      id: chapter.id,
+      title: chapter.title,
+      content: chapter.content,
+      summary: chapter.summary,
+      keyPoints: chapter.keyPoints,
+    },
+    order,
+  )
+}
+
 function buildCourseChapter(chapter: MarkdownChapter, index: number): CourseNode {
+  if (chapter.asStudyNode) {
+    return buildChapterStudyNode(chapter, index + 1)
+  }
+
   return {
     id: getChapterNodeId(chapter, index),
     node_type: 'chapter',
@@ -314,32 +377,44 @@ function buildLightLearningMap(title: string, chapters: MarkdownChapter[]): Ligh
     course_title: title,
     global_route: chapters.map((chapter, index) => ({
       chapter_id: getChapterNodeId(chapter, index),
-      label: `第 ${index + 1} 章`,
+      label: chapter.asStudyNode ? `第 ${index + 1} 节` : `第 ${index + 1} 章`,
       title: chapter.title,
       focus: chapter.summary,
       risk: '',
       completion_signal: '',
     })),
-    chapter_maps: chapters.map((chapter, index) => ({
-      chapter_id: getChapterNodeId(chapter, index),
-      label: `第 ${index + 1} 章`,
-      title: chapter.title,
-      focus: chapter.summary,
-      nodes: chapter.lessons.map((lesson) => ({
-        lesson_id: lesson.id,
-        label: lesson.title,
-        title: lesson.title,
-        action: '阅读',
-        risk: '',
-        signal: '',
-        high_density: lesson.content.length > 2800,
-      })),
-      edges: chapter.lessons.slice(0, -1).map((lesson, lessonIndex) => ({
-        from: lesson.id,
-        to: chapter.lessons[lessonIndex + 1].id,
-        label: '继续',
-      })),
-    })),
+    chapter_maps: chapters.map((chapter, index) => {
+      const mapNodes: MarkdownSection[] = chapter.asStudyNode
+        ? [{
+            id: chapter.id,
+            title: chapter.title,
+            content: chapter.content,
+            summary: chapter.summary,
+            keyPoints: chapter.keyPoints,
+          }]
+        : chapter.lessons
+
+      return {
+        chapter_id: getChapterNodeId(chapter, index),
+        label: chapter.asStudyNode ? `第 ${index + 1} 节` : `第 ${index + 1} 章`,
+        title: chapter.title,
+        focus: chapter.summary,
+        nodes: mapNodes.map((lesson) => ({
+          lesson_id: lesson.id,
+          label: lesson.title,
+          title: lesson.title,
+          action: '阅读',
+          risk: '',
+          signal: '',
+          high_density: lesson.content.length > 2800,
+        })),
+        edges: chapter.asStudyNode ? [] : chapter.lessons.slice(0, -1).map((lesson, lessonIndex) => ({
+          from: lesson.id,
+          to: chapter.lessons[lessonIndex + 1].id,
+          label: '继续',
+        })),
+      }
+    }),
   }
 }
 
@@ -359,7 +434,8 @@ export function buildLearningNotesStudyPackage(options: BuildLearningNotesStudyP
     : [{
         ...fallbackSection,
         id: getChapterNodeId(fallbackSection, 0),
-        lessons: [fallbackSection],
+        lessons: [],
+        asStudyNode: true,
       }]
   const packageId = `learning-notes-${createStableId(`${courseTitle}\n${options.sourceId ?? ''}\n${options.materialPath}`)}`
   const textLength = cleanBrief.length

@@ -1004,14 +1004,16 @@ def _write_authoring_workspace(material_dir: str, *, course_title: str, material
                 "",
                 "你是视界专注主生产窗口。请按 v8 流水线生成学习笔记：material_ready -> knowledge_tree_ready -> coverage_ready -> dossier_ready -> partial_learning_notes -> learning_notes_ready。长材料每轮只推进一个阶段，先搭知识树，再做 topic 覆盖，再写正文。",
                 "",
-                "核心原则：先读 run_state 决定阶段；knowledge_tree_ready 必须先确定主干、分支、子节点和跨章连接；coverage_ready 后必须回读 blocks 写 block_reread_ledger 和 section_dossiers；正文必须使用一个 # 标题、## 主章节和 ### 学习小节。",
+                "核心原则：先读 run_state 决定阶段；knowledge_tree_ready 必须先确定主干、分支、子节点、跨章连接和 presentation_policy；coverage_ready 后必须回读 blocks 写 block_reread_ledger 和 section_dossiers；短材料可用 # 标题 + 少量 ## 学习小节，中长材料才使用 ## 大章节和 ### 完整小节。",
             ],
         )
 
     codex_copy_text = [
-        f"/goal 在 `{material_dir}` 执行 `authoring/codex-goal-content-synthesis-v8.md`，按 v8 知识树优先流水线处理《{course_title}》。",
+        f"/goal 在 `{material_dir}` 执行 `authoring/codex-goal-content-synthesis-v8.md`，按 v8 知识树优先流水线处理《{course_title}》；目标是产出生产侧完整的学习笔记包。Codex 负责把 `run_state.stage` 推进到 `learning_notes_ready`；`importable`、`pipeline_ready` 和 `release_ready` 保持由软件 validator 接管。",
         "",
-        "先读取根目录 `run_state.json` 和 `content_draft/work/run_state.json`：`material_ready` 只做到 `knowledge_tree_ready`；`knowledge_tree_ready` 只做到 `coverage_ready`；`coverage_ready` 只做到 `dossier_ready`；`dossier_ready` 或 `partial_learning_notes` 每轮只深写 1-2 个知识树分支，直到 `learning_notes_ready`。不要跳阶段。",
+        "先读取根目录 `run_state.json` 和 `content_draft/work/run_state.json`：这是单次复制入口，同一个 Goal 应自动多轮推进；每一轮最多只过一个阶段闸门。`material_ready` 先到 `knowledge_tree_ready`；`knowledge_tree_ready` 再到 `coverage_ready`；`coverage_ready` 再到 `dossier_ready`；`dossier_ready` 或 `partial_learning_notes` 每轮只深写 1-2 个知识树分支，直到 `learning_notes_ready`。阶段完成不是 Goal 完成，不要跳阶段。",
+        "",
+        "若材料超过 100000 字、超过 8 blocks，或属于考试/医学/教程等密集材料，即使用户希望直接完成，也只在当前轮推进当前阶段并留下下一轮继续入口；coverage、dossier、draft、导图和 validator 状态分层推进。",
     ]
     _write_text_file(codex_copy_path, codex_copy_text)
 
@@ -1033,7 +1035,7 @@ def _write_authoring_workspace(material_dir: str, *, course_title: str, material
         "- `content_draft/chapter_mindmap.md`",
         "",
         "请读取 `authoring/content-synthesis-authoring.md`、`content_draft/synthesis_plan.json`、`content_draft/learning_notes.md`、`content_draft/work/evidence_ledger.jsonl`、`content_draft/work/specificity_review.md` 和 `content_draft/chapter_mindmap.md`。",
-        "重点判断：是否以视频内容为主体，是否只是字幕压缩版或总结文章，是否丢掉材料的解读方向、具体情境、例子、边界和表达重心；正文是否按 `##` 章节组和 `###` 学习小节组织；章节思维导图是否适合作为学习台对话流中的一整条图文消息展示。",
+        "重点判断：是否以视频内容为主体，是否只是字幕压缩版或总结文章，是否丢掉材料的解读方向、具体情境、例子、边界和表达重心；正文是否按材料选择 `compact_notes` 或 `chaptered_notes`，可打开小节是否完整可读而不是一个 topic 一页；章节思维导图是否适合作为学习台对话流中的一整条图文消息展示。",
         "输出一份中文审计报告到 `content_draft/review_exports/latest-readonly-audit.md`，只写是否通过、主要问题、证据和返工方向。不要直接重写正文。",
         "```",
     ]
@@ -1064,8 +1066,12 @@ def _build_run_state(
         "current_stage": "material_ready",
         "completed_stages": ["material_package"],
         "dirty_outputs": [],
-        "resume_instruction": "复制 authoring/02_start_codex_synthesis.md 到 Codex；v8 会按 run_state 自动推进一个阶段：knowledge_tree_ready、coverage_ready、dossier_ready、partial_learning_notes 或 learning_notes_ready。",
-        "next_action": "复制 authoring/02_start_codex_synthesis.md 到 Codex；v8 会按 run_state 自动推进一个阶段：knowledge_tree_ready、coverage_ready、dossier_ready、partial_learning_notes 或 learning_notes_ready。",
+        "importable": False,
+        "pipeline_ready": False,
+        "audit_ready": False,
+        "release_ready": False,
+        "resume_instruction": "复制 authoring/02_start_codex_synthesis.md 到 Codex；v8 会在同一个 Goal 中按 run_state 自动多轮推进，每轮只过一个阶段闸门。",
+        "next_action": "复制 authoring/02_start_codex_synthesis.md 到 Codex；v8 会在同一个 Goal 中按 run_state 自动多轮推进，每轮只过一个阶段闸门。",
         "material": {
             "title": course_title,
             "material_id": material_id,
@@ -1091,6 +1097,8 @@ def _build_run_state(
             "coverage_matrix": os.path.join(material_dir, "content_draft", "work", "coverage_matrix.json"),
             "block_reread_ledger": os.path.join(material_dir, "content_draft", "work", "block_reread_ledger.jsonl"),
             "codex_readonly_audit_prompt": os.path.join(material_dir, "authoring", "03_readonly_synthesis_audit.md"),
+            "validation_report": os.path.join(material_dir, "content_draft", "review_exports", "validation_report.json"),
+            "quality_audit_report": os.path.join(material_dir, "content_draft", "review_exports", "quality_audit_report.md"),
             "source_map": os.path.join(material_dir, "content_draft", "work", "source_map.json"),
             "evidence_ledger": os.path.join(material_dir, "content_draft", "work", "evidence_ledger.jsonl"),
             "theme_model": os.path.join(material_dir, "content_draft", "work", "theme_model.json"),
@@ -1126,7 +1134,7 @@ def _build_run_state(
         ],
         "notes": [
             "当前唯一主流程是：软件生成原材料包 -> Codex Goal v8 知识树优先学习笔记 -> 可选只读审计 -> 进入学习台。",
-            "v8 是长材料阶段化的可恢复流水线：knowledge_tree_ready 先定知识树；coverage_ready 只证明 topic 已挂树；dossier_ready 证明已按分支回读 blocks；partial_learning_notes 每轮只深写 1-2 个分支；learning_notes_ready 才能导入学习。",
+            "v8 是长材料阶段化的可恢复流水线：knowledge_tree_ready 先定知识树；coverage_ready 只证明 topic 已挂树；dossier_ready 证明已按分支回读 blocks；partial_learning_notes 每轮只深写 1-2 个分支；learning_notes_ready 代表生产侧产物齐备，软件 validator 通过后才能导入学习。",
         ],
     }
 
@@ -1173,7 +1181,7 @@ def _write_handoff_files(
             "",
             "✅ 原材料包已生成",
             "",
-            "下一步：复制 `authoring/02_start_codex_synthesis.md` 到 Codex。v8 会按当前 stage 每轮只推进一个阶段。",
+            "下一步：复制 `authoring/02_start_codex_synthesis.md` 到 Codex。v8 会在同一个 Goal 中自动多轮推进，但每轮只过一个阶段闸门。",
             "",
             "## 唯一主流程",
             "",
@@ -1314,6 +1322,8 @@ def save_codex_material_package(
             "learning_notes": "content_draft/learning_notes.md",
             "chapter_mindmap": "content_draft/chapter_mindmap.md",
             "review_exports_dir": "content_draft/review_exports",
+            "validation_report": "content_draft/review_exports/validation_report.json",
+            "quality_audit_report": "content_draft/review_exports/quality_audit_report.md",
             "block_schema": "schemas/codex_material_package.schema.json#/$defs/materialBlock",
         },
         "block_count": 0,
@@ -1330,6 +1340,7 @@ def save_codex_material_package(
             "active_workflow": "material_package -> Codex Goal v8 knowledge_tree_ready -> coverage_ready -> dossier_ready -> partial_learning_notes -> learning_notes_ready -> learning import",
             "coverage_strategy": "长材料第一轮只做到 knowledge_tree_ready；第二轮把 topic 挂到知识树并停在 coverage_ready；第三轮必须按分支回读 blocks 写 block_reread_ledger 和 section_dossiers；后续每轮只深写 1-2 个知识树分支。",
             "review_strategy": "v8 学习笔记以 structure_review、thinness_review 和 specificity_review 作为能否导入学习的质量闸门；文件存在不等于 learning_notes_ready。",
+            "presentation_strategy": "短材料或主题集中材料使用 compact_notes：# 标题 + 少量 ## 完整学习小节；中长材料使用 chaptered_notes：## 大章节 + ### 完整小节。不要把单个 topic 拆成一页。",
         },
     }
 

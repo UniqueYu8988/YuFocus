@@ -96,6 +96,7 @@ type LearningStore = {
   openSavedRecord: (recordId: string) => Promise<void>
   openDeepLinkedNode: (packageId: string, nodeId?: string | null) => Promise<void>
   deleteSavedRecord: (recordId: string) => Promise<void>
+  clearActiveCourse: () => void
   importCoursePackage: () => Promise<void>
   setVideoInput: (value: string) => void
   distillCourseFromVideo: (payload?: { sourceKind?: MaterialSourceKind; mediaPath?: string }) => Promise<void>
@@ -151,6 +152,32 @@ function isSameCoursePackage(recordText: string, course: CoursePackage) {
     return JSON.stringify(JSON.parse(recordText)) === JSON.stringify(course)
   } catch {
     return false
+  }
+}
+
+function normalizeWritableStudyPackagePath(importedPath?: string | null) {
+  const normalized = String(importedPath ?? '').trim()
+  if (!normalized) return null
+  if (!/\.json$/iu.test(normalized)) return null
+  if (/learning_notes\.md$/iu.test(normalized)) return null
+  return normalized
+}
+
+function clearCourseState() {
+  return {
+    courseData: null,
+    importedCoursePath: null,
+    nodeMap: {},
+    rootNodeIds: [],
+    orderedNodeIds: [],
+    orderedStudyNodeIds: [],
+    currentNodeId: null,
+    unlockedNodeIds: [],
+    completedNodeIds: [],
+    nodeSessions: {},
+    activeRecordId: null,
+    activeRecordCreatedAt: null,
+    milestoneEvents: [],
   }
 }
 
@@ -219,16 +246,28 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
 
   refreshLibrary: async () => {
     const payload = await window.desktopAPI.loadLearningLibrary()
+    const activePackageId = get().courseData?.package_id ?? ''
+    const activeRecord = activePackageId
+      ? payload.records.find((record) => record.packageId === activePackageId) ?? null
+      : null
     set({
       libraryRecords: payload.records,
-      activeRecordId: payload.currentRecordId,
+      activeRecordId: activeRecord?.id ?? null,
     })
+    if (activePackageId && !activeRecord) {
+      set(clearCourseState())
+      set({
+        libraryRecords: payload.records,
+        activeRecordId: null,
+      })
+    }
     return payload
   },
 
   loadCourse: async (course, importedPath = null) => {
+    const writableImportedPath = normalizeWritableStudyPackagePath(importedPath)
     const existingSummary = get().libraryRecords.find((record) => record.packageId === course.package_id)
-    let nextState = buildCourseState(course, importedPath, [], null)
+    let nextState = buildCourseState(course, writableImportedPath, [], null)
     let activeRecordId = course.package_id
     let activeRecordCreatedAt: number | null = null
     let milestoneEvents: LearningMilestoneEvent[] = []
@@ -237,7 +276,7 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
       try {
         const existingRecord = await window.desktopAPI.openLearningRecord(existingSummary.id)
         if (isSameCoursePackage(existingRecord.courseText, course) || existingRecord.packageId === course.package_id) {
-          nextState = mergeRecordIntoCourseState(course, importedPath, existingRecord)
+          nextState = mergeRecordIntoCourseState(course, writableImportedPath, existingRecord)
           activeRecordId = existingRecord.id
           activeRecordCreatedAt = existingRecord.createdAt
           milestoneEvents = existingRecord.milestoneEvents ?? []
@@ -268,9 +307,10 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
 
   restoreLearningRecord: async (record) => {
     const parsed = JSON.parse(record.courseText) as CoursePackage
+    const writableImportedPath = normalizeWritableStudyPackagePath(record.packagePath ?? record.importedCoursePath)
     const nextState = buildCourseState(
       parsed,
-      record.packagePath ?? record.importedCoursePath ?? null,
+      writableImportedPath,
       record.completedNodeIds ?? [],
       record.currentNodeId ?? null,
       record.nodeSessions ?? {},
@@ -352,34 +392,30 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
   deleteSavedRecord: async (recordId) => {
     const currentRecordId = get().activeRecordId
     const record = get().libraryRecords.find((item) => item.id === recordId) ?? null
+    const activePackageId = get().courseData?.package_id ?? ''
     const payload = await window.desktopAPI.deleteLearningRecord(recordId)
     set({
       libraryRecords: payload.records,
-      activeRecordId: payload.currentRecordId,
+      activeRecordId: currentRecordId === recordId ? null : get().activeRecordId,
     })
 
-    if (currentRecordId === recordId) {
-      if (payload.currentRecordId) {
-        const record = await window.desktopAPI.openLearningRecord(payload.currentRecordId)
-        await get().restoreLearningRecord(record)
-      } else {
-        set({
-          courseData: null,
-          importedCoursePath: null,
-          nodeMap: {},
-          rootNodeIds: [],
-          orderedNodeIds: [],
-          orderedStudyNodeIds: [],
-          currentNodeId: null,
-          unlockedNodeIds: [],
-          completedNodeIds: [],
-          nodeSessions: {},
-          activeRecordId: null,
-          activeRecordCreatedAt: null,
-        })
-      }
+    const deletedActiveRecord =
+      currentRecordId === recordId ||
+      Boolean(record?.packageId && activePackageId && record.packageId === activePackageId) ||
+      (payload.records.length === 0 && Boolean(activePackageId))
+
+    if (deletedActiveRecord) {
+      set(clearCourseState())
+      set({
+        libraryRecords: payload.records,
+        activeRecordId: null,
+      })
     }
     get().pushToast('学习记录已删除', record ? `《${record.title}》已从本地档案柜移除` : '本地记录已移除', 'success')
+  },
+
+  clearActiveCourse: () => {
+    set(clearCourseState())
   },
 
   importCoursePackage: async () => {

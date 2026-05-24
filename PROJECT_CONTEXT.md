@@ -68,9 +68,15 @@ material_ready
 - `coverage_ready`：把 topic 挂到知识树节点，证明材料覆盖和证据去向。
 - `dossier_ready`：按知识树分支回读 blocks，写分支材料包。
 - `partial_learning_notes`：每轮只深写 1-2 个知识树分支，逐步合并到学习笔记。
-- `learning_notes_ready`：全部高价值分支通过结构复查、薄度复查和具体性复查，可导入学习台。
+- `learning_notes_ready`：生产侧最终学习笔记、章节思维导图、概念图和复查文件齐备。是否可导入学习台要继续看软件 validator 写入的 `pipeline_ready`。
 
 长材料要阶段化推进。不要在一次 Goal 里吞完整 `raw_transcript.txt` 后草草写完。尤其是超过 8 blocks、超过 100000 字，或属于考试、医学、教程、操作训练、法规、密集攻略等密集材料时，应按 v8 分阶段停靠。
+
+30 万字量级材料的当前策略是“单次复制入口，同一 Goal 自动多轮，阶段闸门逐步推进”。生产 Goal 每一轮只推进当前 stage：知识树、coverage、dossier、分支深写、最终收口分别留下可审计文件；阶段完成不是 Goal 完成。若某次运行在很短时间内同时标记 coverage、dossier、draft、导图和 `learning_notes_ready`，应优先视为假完成：检查 `learning_notes.md` 体量、dossier 是否只是清单、`coverage_matrix.json` 是否提前全量 `published`、`self_check.md` 是否只是存在性清单，并回退到 `partial_learning_notes`、`dossier_ready` 或 `needs_deepening`。
+
+2026-05-24 与外部 GPT 讨论后形成的长期底座共识已保存到 `docs/material-package-hardening-roadmap.md`。定稿方向：`.course_material` 是唯一材料包协议；Codex Goal 只是状态机执行代理；最终学生正文保持干净；source refs、trace map、validator、quality audit 全部旁路化；学习台最终只读取 `content_draft/learning_notes.md` 和 `content_draft/chapter_mindmap.md`。下一轮大更新优先顺序是：validator + ready 分层骨架、source index + trace map、read-only quality audit、golden eval + 300k synthetic test，最后才回到内容提示词优化。
+
+ready 需要长期拆分为内部三层：`pipeline_ready` 表示 deterministic validator 通过，只证明工程上不是假完成；`audit_ready` 表示只读质量审计或人工确认没有高风险；`release_ready` 表示产品层允许正式进入学习台。`learning_notes_ready` 以后不应单独等于“可以放心导入”，至少应配合 `pipeline_ready = true`。
 
 ## 核心产物
 
@@ -100,12 +106,28 @@ content_draft/work/self_check.md
 content_draft/review_exports/latest-readonly-audit.md
 ```
 
+长期底座升级后，还应逐步补充：
+
+```text
+blocks/block_manifest.jsonl
+indexes/source_index.jsonl
+indexes/node_contexts/
+indexes/learning_notes_trace.json
+indexes/chapter_mindmap_trace.json
+content_draft/review_exports/validation_report.json
+content_draft/review_exports/quality_audit_report.md
+```
+
 `learning_notes.md` 是学习台导入的正文。结构合同：
 
 - 一个顶层 `#` 标题。
-- `##` 作为主章节。
-- `###` 作为学习小节。
-- 主章节下应有有意义的子节点，避免退化成“每章只有一节”的长文。
+- 软件只适合少量可打开层级，不适合把知识树的每个 topic 都变成页面。
+- 短材料或主题集中材料使用 `compact_notes`：`#` 标题 + 少量 `##` 完整学习小节，不强行分大章。
+- 中长材料使用 `chaptered_notes`：`##` 作为大章节，`###` 作为完整学习小节。
+- 单个 topic、案例、机制、误区和边界优先放在同一小节内部，用加粗短标题、列表、表格、机制卡或案例卡组织。
+- 可打开小节必须是一段完整可读内容，避免“一个 topic 一页”或每次打开只有一小段。
+- 导入学习台时不得把 `content_draft/learning_notes.md` 当成可写 JSON 学习包路径；原始 Markdown 必须留在材料包内。
+- `source_ref`、`block_id`、raw offset、`debug`、`字幕证据` 等后台追溯信息不得污染学生正文。追溯信息放入 `indexes/source_index.jsonl`、`indexes/node_contexts/` 和 trace map。
 
 `chapter_mindmap.md` 是章节思维导图。它应呈现全局主干、分支、关键子节点、跨章连接、易混节点和回看路径。它未来更适合作为学习台对话流中的一整条图文消息，而不是弹窗里挤成一张乱图。
 
@@ -239,6 +261,16 @@ C:\Users\Yu\AI\视界专注
 - 能支撑学习台现有状态机即可。
 - 不让兼容字段影响产品语言。
 - 不让兼容字段重新成为作者流程、提示词流程或生成链路。
+
+## 2026-05-24 第一次学习包测试后的判断
+
+- 首次 v8 测试证明正文内容方向可行，但 `6 个 ## + 26 个 ###` 对学习台来说过碎。
+- 结构标准调整为：短材料允许 `compact_notes`，直接用少量 `##` 学习小节；中长材料才使用 `chaptered_notes`，即 `##` 大章节 + `###` 完整小节。
+- 生成侧要避免把 coverage/topic 机械升级成 Markdown 可点击层级；topic 可以进入同一小节内部。
+- 软件侧必须保护 `content_draft/learning_notes.md`，进入学习台时只能在内存或学习档案中生成 study-package 兼容 JSON，不得覆盖原始 Markdown。
+- 本地 Codex skill `shijie-course-builder` 已同步为这一规则；虽然名称仍有历史残留，但当前职责是 v8 学习笔记生产、修复和审计。
+- 文件生命周期分工：学习档案删除用于移除学习记录、进度、对话缓存和关联学习包；工作台整理记录的垃圾桶是两段式：已制作时清理 `content_draft` 学习产物并退回 `material_ready`，保留字幕、转写、blocks、indexes、authoring 和 schema；已经是 `material_ready` 且没有学习产物时，再点垃圾桶才真正删除整个 `.course_material` 材料包。
+- “当前学习”只表示当前会话真实载入的学习包；本地库里残留或未打开的记录应显示在“其他学习”，不能自动冒充当前学习。
 
 ## 验证命令
 

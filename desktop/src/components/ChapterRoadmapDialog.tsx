@@ -5,6 +5,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { copyTextToClipboard } from '@/lib/clipboard'
 import chapterRoadmapIcon from '@/assets/learn-chapter-map.svg'
 import { cn } from '@/lib/utils'
 import type {
@@ -563,7 +564,7 @@ export function ChapterRoadmapDialog({
                       <button
                         type="button"
                         className="mt-3 rounded-full bg-white/[0.08] px-3 py-1.5 text-[11px] font-semibold text-white/76 transition hover:bg-white/[0.12]"
-                        onClick={() => void navigator.clipboard?.writeText(visualAsset.prompt)}
+                        onClick={() => void copyTextToClipboard(visualAsset.prompt)}
                       >
                         复制图片提示词
                       </button>

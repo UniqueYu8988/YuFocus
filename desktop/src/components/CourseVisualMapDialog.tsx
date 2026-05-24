@@ -3,6 +3,7 @@ import {
   DialogContent,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { copyTextToClipboard } from '@/lib/clipboard'
 import type { CourseVisualMap, LightLearningMap, LightLearningMapChapter, LightLearningMapNode, LightLearningMapRoute } from '@/types/course'
 import { ArrowRight, CheckCircle2, CircleAlert, Lock, Route, Sparkles, Target, Zap } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
@@ -144,7 +145,7 @@ export function CourseVisualMapDialog({
                           <button
                             type="button"
                             className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-white/[0.08] px-3 py-1.5 text-[11px] font-semibold text-white/76 transition hover:bg-white/[0.12]"
-                            onClick={() => void navigator.clipboard?.writeText(courseVisualMap.prompt)}
+                            onClick={() => void copyTextToClipboard(courseVisualMap.prompt)}
                           >
                             <Sparkles className="size-3.5" />
                             复制图片提示词

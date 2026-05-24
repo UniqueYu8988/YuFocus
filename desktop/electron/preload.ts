@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { clipboard, contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('desktopAPI', {
   isElectron: true,
@@ -8,11 +8,15 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   loadSettings: () => ipcRenderer.invoke('settings:load'),
   saveSettings: (payload: unknown) => ipcRenderer.invoke('settings:save', payload),
   loadSettingsStatus: () => ipcRenderer.invoke('settings:status'),
+  copyText: async (text: string) => {
+    clipboard.writeText(String(text ?? ''))
+  },
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
   pickMediaFile: () => ipcRenderer.invoke('dialog:pickMediaFile'),
   pickImageFile: () => ipcRenderer.invoke('dialog:pickImageFile'),
   importCoursePackage: () => ipcRenderer.invoke('course:import'),
   readCoursePackage: (targetPath: string) => ipcRenderer.invoke('course:read', targetPath),
+  copyTextFile: (targetPath: string) => ipcRenderer.invoke('file:copyText', targetPath),
   attachCourseVisualMap: (payload: { targetPath: string; imagePath: string }) => ipcRenderer.invoke('course:attach-visual-map', payload),
   runDistillation: (payload: { video?: string; sourceKind?: 'bilibili' | 'local_media'; mediaPath?: string }) => ipcRenderer.invoke('distill:run', payload),
   listMaterialPackages: () => ipcRenderer.invoke('materials:list'),

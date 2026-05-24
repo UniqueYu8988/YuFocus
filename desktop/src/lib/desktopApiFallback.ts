@@ -66,6 +66,32 @@ function unsubscribe() {
 export function ensureDesktopApiFallback() {
   if (window.desktopAPI) {
     window.desktopAPI.isElectron ??= false
+    window.desktopAPI.copyTextFile ??= async () => {
+      throw unavailable('复制文件文本')
+    }
+    window.desktopAPI.copyText ??= async (text: string) => {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(String(text ?? ''))
+        return
+      }
+
+      const textarea = document.createElement('textarea')
+      textarea.value = String(text ?? '')
+      textarea.setAttribute('readonly', 'true')
+      textarea.style.position = 'fixed'
+      textarea.style.left = '-9999px'
+      textarea.style.top = '-9999px'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.focus()
+      textarea.select()
+
+      const copied = document.execCommand('copy')
+      document.body.removeChild(textarea)
+      if (!copied) {
+        throw unavailable('复制文本')
+      }
+    }
     window.desktopAPI.pickMediaFile ??= async () => null
     window.desktopAPI.pickImageFile ??= async () => null
     window.desktopAPI.listMaterialPackages ??= async () => ({
@@ -103,6 +129,32 @@ export function ensureDesktopApiFallback() {
         message: '浏览器预览模式暂不连接 B 站账号。',
       },
     }),
+    copyTextFile: async () => {
+      throw unavailable('复制文件文本')
+    },
+    copyText: async (text: string) => {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(String(text ?? ''))
+        return
+      }
+
+      const textarea = document.createElement('textarea')
+      textarea.value = String(text ?? '')
+      textarea.setAttribute('readonly', 'true')
+      textarea.style.position = 'fixed'
+      textarea.style.left = '-9999px'
+      textarea.style.top = '-9999px'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.focus()
+      textarea.select()
+
+      const copied = document.execCommand('copy')
+      document.body.removeChild(textarea)
+      if (!copied) {
+        throw unavailable('复制文本')
+      }
+    },
     pickDirectory: async () => null,
     pickMediaFile: async () => null,
     pickImageFile: async () => null,

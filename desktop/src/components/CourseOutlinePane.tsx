@@ -165,7 +165,7 @@ export function CourseOutlinePane({ workspaceView, onSelectView, onActivateLearn
           ) : (
             <div className="px-2 py-2">
               <div className="text-[11px] leading-5 text-muted-foreground">
-                课程载入后，主线会在这里展开。
+                学习包载入后，主线会在这里展开。
               </div>
               <div className="mt-3 flex flex-wrap gap-1.5">
                 <Button size="sm" className="h-8 rounded-xl px-3" onClick={() => onSelectView('workbench')}>

@@ -20,7 +20,8 @@
       "type": "string",
       "enum": [
         "shijie.content-synthesis-plan.v0.1",
-        "shijie.content-synthesis-plan.v0.2"
+        "shijie.content-synthesis-plan.v0.2",
+        "shijie.content-synthesis-plan.v0.3"
       ]
     },
     "plan_id": {
@@ -74,6 +75,10 @@
       "items": {
         "$ref": "#/$defs/crossLink"
       }
+    },
+    "presentation_policy": {
+      "$ref": "#/$defs/presentationPolicy",
+      "description": "学习台呈现策略。说明最终 learning_notes.md 应使用紧凑小节还是大章节+完整小节。"
     },
     "quality_policy": {
       "type": "object",
@@ -146,9 +151,54 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "shijie.content-synthesis-plan.v0.3"
+          }
+        }
+      },
+      "then": {
+        "required": ["knowledge_tree", "presentation_policy"],
+        "properties": {
+          "execution_policy": {
+            "required": ["tree_first_strategy"]
+          }
+        }
+      }
     }
   ],
   "$defs": {
+    "presentationPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "min_readable_unit", "heading_policy"],
+      "properties": {
+        "mode": {
+          "enum": ["compact_notes", "chaptered_notes"],
+          "description": "compact_notes 适合短材料或主题集中材料；chaptered_notes 适合中长材料或天然多模块材料。"
+        },
+        "min_readable_unit": {
+          "type": "string",
+          "description": "说明一个可打开学习小节应覆盖的完整阅读范围。"
+        },
+        "target_openable_units": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 40
+        },
+        "heading_policy": {
+          "type": "string",
+          "description": "说明 #、##、### 如何使用，以及哪些知识点应留在同一小节内部。"
+        },
+        "grouping_policy": {
+          "type": "string",
+          "description": "说明相邻 topic 如何合并为连续阅读小节，避免一个 topic 一页。"
+        }
+      }
+    },
     "sectionPlan": {
       "type": "object",
       "additionalProperties": false,
@@ -188,12 +238,22 @@
         "child_node_ids": {
           "type": "array",
           "default": [],
-          "description": "该小节下的子节点。用于生成 ### 学习小节和导图。",
+          "description": "该小节覆盖的知识树子节点。子节点不必全部升级为 Markdown 可点击层级，可作为同一阅读单位内部的小标题或内容块。",
           "items": { "type": "string" }
         },
         "learning_question": {
           "type": "string",
           "description": "这一小节要帮助用户解决的核心问题。"
+        },
+        "readable_unit": {
+          "type": "string",
+          "description": "这一节作为学习台可打开内容时应覆盖的完整阅读范围。"
+        },
+        "internal_headings": {
+          "type": "array",
+          "default": [],
+          "description": "建议放在同一节内部的短标题、机制卡、案例卡或边界块，不作为新的可点击层级。",
+          "items": { "type": "string" }
         },
         "source_scope": {
           "type": "array",
