@@ -245,9 +245,15 @@ function buildPromptPreviewModules(materialPath: string): PromptPreviewModule[] 
         },
         {
           id: 'readonly-audit',
-          label: '只读审计',
+          label: '质量审计',
+          path: draft('review_exports', 'quality_audit_report.md'),
+          description: '只读审计窗口写入的标准质量报告。',
+        },
+        {
+          id: 'readonly-audit-legacy',
+          label: '旧审计报告',
           path: draft('review_exports', 'latest-readonly-audit.md'),
-          description: '第二个窗口写入的审计报告。',
+          description: '旧版本只读审计报告，保留为兼容入口。',
         },
       ],
     },

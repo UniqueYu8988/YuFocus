@@ -210,6 +210,9 @@ type MaterialPackageSummary = {
   validationReportExists: boolean
   validationErrorCount: number
   validationWarningCount: number
+  qualityAuditReportPath: string
+  qualityAuditReportExists: boolean
+  qualityAuditResult: string
   authoringDir: string
   gptMaterialPromptPath: string
   gptMaterialWorkspaceZipPath: string
@@ -263,6 +266,8 @@ type MaterialValidationReport = {
     source_index_entries: number
     learning_notes_trace_links: number
     chapter_mindmap_trace_links: number
+    quality_audit_report_exists: boolean
+    quality_audit_result: string
   }
   issues: MaterialValidationIssue[]
 }
@@ -945,6 +950,54 @@ function readTraceMapLinks(documentPath: string) {
   return payload.links.filter((link): link is Record<string, unknown> => Boolean(link && typeof link === 'object' && !Array.isArray(link)))
 }
 
+function readQualityAuditReportStatus(reportPath: string, legacyReportPath: string) {
+  const resolvedPath = fs.existsSync(reportPath) ? reportPath : legacyReportPath
+  if (!fs.existsSync(resolvedPath)) {
+    return {
+      exists: false,
+      path: reportPath,
+      result: 'missing',
+    }
+  }
+
+  try {
+    const content = fs.readFileSync(resolvedPath, 'utf-8')
+    const explicitResult = content.match(/^\s*audit_result\s*:\s*(pass|needs_fix|blocked|unknown)\s*$/imu)?.[1]?.toLowerCase()
+    if (explicitResult) {
+      return {
+        exists: true,
+        path: resolvedPath,
+        result: explicitResult,
+      }
+    }
+    if (/审计结果\s*[:：]\s*通过|是否通过\s*[:：]\s*通过|结论\s*[:：]\s*通过|质量审计通过/u.test(content)) {
+      return {
+        exists: true,
+        path: resolvedPath,
+        result: 'pass',
+      }
+    }
+    if (/不通过|未通过|高风险|建议回退|需要返工|needs_fix|blocked|假完成/u.test(content)) {
+      return {
+        exists: true,
+        path: resolvedPath,
+        result: 'needs_fix',
+      }
+    }
+    return {
+      exists: true,
+      path: resolvedPath,
+      result: 'unknown',
+    }
+  } catch {
+    return {
+      exists: true,
+      path: resolvedPath,
+      result: 'unknown',
+    }
+  }
+}
+
 function validateMaterialPackageArtifacts(materialPath: string, manifest: Record<string, unknown>, runState: Record<string, unknown>): MaterialValidationReport {
   const issues: MaterialValidationIssue[] = []
   const addIssue = (severity: MaterialValidationIssue['severity'], code: string, message: string, relativePath?: string) => {
@@ -963,6 +1016,8 @@ function validateMaterialPackageArtifacts(materialPath: string, manifest: Record
   const learningNotesPath = path.join(contentDraftDir, 'learning_notes.md')
   const chapterMindmapPath = path.join(contentDraftDir, 'chapter_mindmap.md')
   const validationReportPath = path.join(reviewExportsDir, 'validation_report.json')
+  const qualityAuditReportPath = path.join(reviewExportsDir, 'quality_audit_report.md')
+  const legacyReadonlyAuditPath = path.join(reviewExportsDir, 'latest-readonly-audit.md')
   const coverageMatrixPath = path.join(workDir, 'coverage_matrix.json')
   const sourceIndexPath = path.join(materialPath, 'indexes', 'source_index.jsonl')
   const learningNotesTracePath = path.join(materialPath, 'indexes', 'learning_notes_trace.json')
@@ -978,6 +1033,7 @@ function validateMaterialPackageArtifacts(materialPath: string, manifest: Record
   const sourceIndexSummary = readSourceIndexSummary(sourceIndexPath)
   const learningNotesTraceItems = readTraceMapLinks(learningNotesTracePath)
   const chapterMindmapTraceItems = readTraceMapLinks(chapterMindmapTracePath)
+  const qualityAuditStatus = readQualityAuditReportStatus(qualityAuditReportPath, legacyReadonlyAuditPath)
   const sourceIndexEntries = sourceIndexSummary.entryCount
   const learningNotesTraceLinks = learningNotesTraceItems.length
   const chapterMindmapTraceLinks = chapterMindmapTraceItems.length
@@ -1019,6 +1075,14 @@ function validateMaterialPackageArtifacts(materialPath: string, manifest: Record
           addIssue('error', `${traceName}_points_to_unknown_blocks`, `trace map 指向不存在于 source_index 的 blocks：${Array.from(missingBlockIds).slice(0, 8).join(', ')}。`, tracePath)
         }
       }
+    }
+    if (qualityAuditStatus.result === 'needs_fix' || qualityAuditStatus.result === 'blocked') {
+      addIssue(
+        'warning',
+        'quality_audit_not_passed',
+        `只读质量审计结果为 ${qualityAuditStatus.result}，不应视为 audit_ready。`,
+        path.relative(materialPath, qualityAuditStatus.path).replace(/\\/gu, '/'),
+      )
     }
   }
 
@@ -1122,8 +1186,8 @@ function validateMaterialPackageArtifacts(materialPath: string, manifest: Record
   const warningCount = issues.filter((issue) => issue.severity === 'warning').length
   const finalArtifactsExist = fs.existsSync(learningNotesPath) && fs.existsSync(chapterMindmapPath)
   const pipelineReady = stage === 'learning_notes_ready' && finalArtifactsExist && errorCount === 0
-  const auditReady = runState.audit_ready === true
-  const releaseReady = runState.release_ready === true
+  const auditReady = pipelineReady && (runState.audit_ready === true || qualityAuditStatus.result === 'pass')
+  const releaseReady = auditReady && runState.release_ready === true
   const summary = {
     error_count: errorCount,
     warning_count: warningCount,
@@ -1137,6 +1201,8 @@ function validateMaterialPackageArtifacts(materialPath: string, manifest: Record
     source_index_entries: sourceIndexEntries,
     learning_notes_trace_links: learningNotesTraceLinks,
     chapter_mindmap_trace_links: chapterMindmapTraceLinks,
+    quality_audit_report_exists: qualityAuditStatus.exists,
+    quality_audit_result: qualityAuditStatus.result,
   }
   const comparableReportPayload = {
     stage,
@@ -1560,8 +1626,10 @@ function listMaterialPackages(settings: RuntimeSettings) {
     const knowledgeImported = Boolean(knowledgeRecordPath)
     const codexCoursePlanExists = synthesisPlanExists
     const importReadyCourseExists = false
-    const readonlyAuditExists =
-      fs.existsSync(path.join(materialPath, 'content_draft', 'review_exports', 'latest-readonly-audit.md'))
+    const qualityAuditReportPath = path.join(reviewExportsDir, 'quality_audit_report.md')
+    const legacyReadonlyAuditPath = path.join(reviewExportsDir, 'latest-readonly-audit.md')
+    const qualityAuditStatus = readQualityAuditReportStatus(qualityAuditReportPath, legacyReadonlyAuditPath)
+    const readonlyAuditExists = qualityAuditStatus.exists
     const authoringExists = fs.existsSync(authoringDir)
     const canonicalMaterial = authoringExists && fs.existsSync(runStatePath)
     if (!canonicalMaterial) continue
@@ -1684,6 +1752,9 @@ function listMaterialPackages(settings: RuntimeSettings) {
       validationReportExists: fs.existsSync(path.join(reviewExportsDir, 'validation_report.json')),
       validationErrorCount: validationReport.summary.error_count,
       validationWarningCount: validationReport.summary.warning_count,
+      qualityAuditReportPath: qualityAuditStatus.path,
+      qualityAuditReportExists: qualityAuditStatus.exists,
+      qualityAuditResult: qualityAuditStatus.result,
       authoringDir,
       gptMaterialPromptPath: fs.existsSync(gptMaterialPromptPath) ? gptMaterialPromptPath : '',
       gptMaterialWorkspaceZipPath: gptMaterialWorkspaceZipPath,
@@ -1787,7 +1858,7 @@ function writeInitialContentDraftReadmes(materialPath: string) {
       '',
       '第二个只读审计窗口只允许把学习笔记审计报告写到这里。',
       '',
-      '推荐固定输出：`latest-readonly-audit.md`。',
+      '标准输出：`quality_audit_report.md`。旧版 `latest-readonly-audit.md` 仅作兼容。',
       '',
     ].join('\n'),
     'utf-8',
@@ -1860,7 +1931,7 @@ function resetMaterialRunState(materialPath: string) {
           id: 'readonly_audit',
           label: '只读审计',
           status: 'optional',
-          output: 'content_draft/review_exports/latest-readonly-audit.md',
+          output: 'content_draft/review_exports/quality_audit_report.md',
         },
         {
           id: 'import_content',

@@ -143,6 +143,9 @@ type MaterialPackageSummary = {
   validationReportExists: boolean
   validationErrorCount: number
   validationWarningCount: number
+  qualityAuditReportPath: string
+  qualityAuditReportExists: boolean
+  qualityAuditResult: string
   authoringDir: string
   codexCoursePlanPath: string
   codexCoursePlanExists: boolean

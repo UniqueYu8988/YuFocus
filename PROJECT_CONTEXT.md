@@ -80,6 +80,8 @@ ready 需要长期拆分为内部三层：`pipeline_ready` 表示 deterministic 
 
 2026-05-24 第二阶段底座开始加入旁路追溯：软件在材料包生成时写 `indexes/source_index.jsonl`，Codex 在最终收口时写 `indexes/learning_notes_trace.json` 和 `indexes/chapter_mindmap_trace.json`。学生正文仍保持干净，不暴露 block/source/debug；validator 用 trace map 判断长材料是否具备可审计来源链。
 
+2026-05-24 第三阶段底座把只读审计标准产物固定为 `content_draft/review_exports/quality_audit_report.md`，报告开头用 `audit_result: pass | needs_fix | blocked`。软件只在 `pipeline_ready=true` 且审计结果为 `pass` 时视为 `audit_ready=true`；只读审计不修改正文、trace map 或 `release_ready`。
+
 ## 核心产物
 
 `.course_material` 内的关键产物：
@@ -105,7 +107,7 @@ content_draft/work/editorial_review.md
 content_draft/work/specificity_review.md
 content_draft/work/concept_graph.json
 content_draft/work/self_check.md
-content_draft/review_exports/latest-readonly-audit.md
+content_draft/review_exports/quality_audit_report.md
 ```
 
 长期底座升级后，还应逐步补充：
@@ -117,7 +119,7 @@ indexes/node_contexts/
 indexes/learning_notes_trace.json
 indexes/chapter_mindmap_trace.json
 content_draft/review_exports/validation_report.json
-content_draft/review_exports/quality_audit_report.md
+content_draft/review_exports/latest-readonly-audit.md  # 旧兼容审计文件
 ```
 
 `learning_notes.md` 是学习台导入的正文。结构合同：

@@ -23,7 +23,7 @@ Codex 默认写入：
 - `content_draft/work/specificity_review.md`
 - `content_draft/work/concept_graph.json`
 - `content_draft/chapter_mindmap.md`
-- `content_draft/review_exports/latest-readonly-audit.md`（只读审计窗口可选）
+- `content_draft/review_exports/quality_audit_report.md`（只读质量审计窗口可选；`latest-readonly-audit.md` 仅作旧兼容）
 
 ## 学习笔记交付
 

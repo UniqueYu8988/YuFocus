@@ -18,7 +18,8 @@
 
 ## 只允许写入
 
-- `content_draft/review_exports/latest-readonly-audit.md`
+- `content_draft/review_exports/quality_audit_report.md`
+- 可选同步旧兼容文件：`content_draft/review_exports/latest-readonly-audit.md`
 
 ## 审计重点
 
@@ -44,7 +45,17 @@
 
 写一份中文审计报告到：
 
-`content_draft/review_exports/latest-readonly-audit.md`
+`content_draft/review_exports/quality_audit_report.md`
+
+报告开头必须包含机器可读 front matter：
+
+```yaml
+---
+schema_version: shijie.quality-audit-report.v0.1
+audit_result: pass | needs_fix | blocked
+recommended_stage: none | needs_restructure | coverage_ready | dossier_ready | partial_learning_notes | needs_deepening
+---
+```
 
 报告包含：
 
@@ -54,4 +65,4 @@
 - 建议返工方向
 - 若不通过，建议回退到哪个 stage：`needs_restructure`、`coverage_ready`、`dossier_ready`、`partial_learning_notes` 或 `needs_deepening`
 
-不要直接修改 `learning_notes.md` 或 `chapter_mindmap.md`。
+不要直接修改 `learning_notes.md`、`chapter_mindmap.md`、`run_state.json` 或任何 trace map。只读审计不设置 `release_ready`。

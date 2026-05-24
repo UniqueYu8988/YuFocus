@@ -278,3 +278,4 @@ content_draft/review_exports/quality_audit_report.md
 
 - 第一阶段已完成：`learning_notes_ready` 拆为生产侧完成；`pipeline_ready`、`audit_ready`、`release_ready` 由软件侧 validator、审计和发布层接管。
 - 第二阶段开始：软件生成 `indexes/source_index.jsonl`，提供 block 级 source entry；Codex 最终收口时填写 `indexes/learning_notes_trace.json` 与 `indexes/chapter_mindmap_trace.json`。validator 对长材料检查 trace map，避免“正文看似完整但来源链不可审计”。
+- 第三阶段开始：标准只读审计产物改为 `content_draft/review_exports/quality_audit_report.md`，用 `audit_result: pass | needs_fix | blocked` 作为机器可读结果；validator 只在 `pipeline_ready=true` 且审计通过时设置 `audit_ready=true`。

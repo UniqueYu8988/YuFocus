@@ -1055,9 +1055,10 @@ def _write_authoring_workspace(material_dir: str, *, course_title: str, material
         "- `content_draft/learning_notes.md`",
         "- `content_draft/chapter_mindmap.md`",
         "",
-        "请读取 `authoring/content-synthesis-authoring.md`、`content_draft/synthesis_plan.json`、`content_draft/learning_notes.md`、`content_draft/work/evidence_ledger.jsonl`、`content_draft/work/specificity_review.md`、`content_draft/chapter_mindmap.md` 和 `indexes/*trace.json`。",
+        "请读取 `authoring/readonly-synthesis-audit.md`、`authoring/content-synthesis-authoring.md`、`content_draft/synthesis_plan.json`、`content_draft/learning_notes.md`、`content_draft/work/evidence_ledger.jsonl`、`content_draft/work/specificity_review.md`、`content_draft/chapter_mindmap.md` 和 `indexes/*trace.json`。",
         "重点判断：是否以视频内容为主体，是否只是字幕压缩版或总结文章，是否丢掉材料的解读方向、具体情境、例子、边界和表达重心；正文是否按材料选择 `compact_notes` 或 `chaptered_notes`，可打开小节是否完整可读而不是一个 topic 一页；章节思维导图是否适合作为学习台对话流中的一整条图文消息展示；长材料 trace map 是否覆盖主要学习单位。",
-        "输出一份中文审计报告到 `content_draft/review_exports/latest-readonly-audit.md`，只写是否通过、主要问题、证据和返工方向。不要直接重写正文。",
+        "报告开头必须写：`---`、`schema_version: shijie.quality-audit-report.v0.1`、`audit_result: pass | needs_fix | blocked`、`recommended_stage: none | needs_restructure | coverage_ready | dossier_ready | partial_learning_notes | needs_deepening`、`---`。",
+        "输出一份中文审计报告到 `content_draft/review_exports/quality_audit_report.md`，只写 front matter、是否通过、主要问题、证据和返工方向。不要直接重写正文，不要设置 release_ready。",
         "```",
     ]
     _write_text_file(audit_copy_path, audit_copy_text)
@@ -1148,7 +1149,7 @@ def _build_run_state(
                 "id": "readonly_audit",
                 "label": "只读审计",
                 "status": "optional",
-                "output": "content_draft/review_exports/latest-readonly-audit.md",
+                "output": "content_draft/review_exports/quality_audit_report.md",
             },
             {
                 "id": "import_content",
@@ -1504,7 +1505,7 @@ def save_codex_material_package(
             "",
             "第二个只读审计窗口只允许把学习笔记审计报告写到这里。",
             "",
-            "推荐固定输出：`latest-readonly-audit.md`。",
+            "标准输出：`quality_audit_report.md`。旧版 `latest-readonly-audit.md` 只作为历史兼容文件。",
         ],
     )
     _write_authoring_workspace(
