@@ -260,6 +260,9 @@ type MaterialValidationReport = {
     shortest_section_chars: number
     median_section_chars: number
     long_material: boolean
+    source_index_entries: number
+    learning_notes_trace_links: number
+    chapter_mindmap_trace_links: number
   }
   issues: MaterialValidationIssue[]
 }
@@ -912,6 +915,36 @@ function median(values: number[]) {
   return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2)
 }
 
+function readSourceIndexSummary(documentPath: string) {
+  const entryIds = new Set<string>()
+  const blockIds = new Set<string>()
+  let invalidLineCount = 0
+  if (!fs.existsSync(documentPath)) return { entryCount: 0, invalidLineCount, entryIds, blockIds }
+  try {
+    const lines = fs.readFileSync(documentPath, 'utf-8').split(/\r?\n/u).filter((line) => line.trim())
+    for (const line of lines) {
+      try {
+        const payload = JSON.parse(line) as Record<string, unknown>
+        const entryId = sanitizeDisplayText(payload.entry_id ?? '')
+        const blockId = sanitizeDisplayText(payload.block_id ?? '')
+        if (entryId) entryIds.add(entryId)
+        if (blockId) blockIds.add(blockId)
+      } catch {
+        invalidLineCount += 1
+      }
+    }
+    return { entryCount: lines.length, invalidLineCount, entryIds, blockIds }
+  } catch {
+    return { entryCount: 0, invalidLineCount: 1, entryIds, blockIds }
+  }
+}
+
+function readTraceMapLinks(documentPath: string) {
+  const payload = readJsonDocument(documentPath)
+  if (!payload || !Array.isArray(payload.links)) return []
+  return payload.links.filter((link): link is Record<string, unknown> => Boolean(link && typeof link === 'object' && !Array.isArray(link)))
+}
+
 function validateMaterialPackageArtifacts(materialPath: string, manifest: Record<string, unknown>, runState: Record<string, unknown>): MaterialValidationReport {
   const issues: MaterialValidationIssue[] = []
   const addIssue = (severity: MaterialValidationIssue['severity'], code: string, message: string, relativePath?: string) => {
@@ -931,6 +964,9 @@ function validateMaterialPackageArtifacts(materialPath: string, manifest: Record
   const chapterMindmapPath = path.join(contentDraftDir, 'chapter_mindmap.md')
   const validationReportPath = path.join(reviewExportsDir, 'validation_report.json')
   const coverageMatrixPath = path.join(workDir, 'coverage_matrix.json')
+  const sourceIndexPath = path.join(materialPath, 'indexes', 'source_index.jsonl')
+  const learningNotesTracePath = path.join(materialPath, 'indexes', 'learning_notes_trace.json')
+  const chapterMindmapTracePath = path.join(materialPath, 'indexes', 'chapter_mindmap_trace.json')
 
   if (!Object.keys(manifest).length) addIssue('error', 'manifest_missing_or_invalid', 'manifest.json 缺失或不是合法 JSON。', 'manifest.json')
   if (!fs.existsSync(rawTranscriptPath)) addIssue('error', 'raw_transcript_missing', 'raw_transcript.txt 缺失。', 'raw_transcript.txt')
@@ -939,6 +975,52 @@ function validateMaterialPackageArtifacts(materialPath: string, manifest: Record
   const blockCount = Number(manifest.block_count ?? 0) || 0
   const rawLength = Number(manifest.raw_transcript_length ?? manifest.text_length ?? 0) || (fs.existsSync(rawTranscriptPath) ? fs.statSync(rawTranscriptPath).size : 0)
   const longMaterial = rawLength > 100_000 || blockCount > 8 || /考试|医学|医师|执业|基础精讲|教程|训练/u.test(title)
+  const sourceIndexSummary = readSourceIndexSummary(sourceIndexPath)
+  const learningNotesTraceItems = readTraceMapLinks(learningNotesTracePath)
+  const chapterMindmapTraceItems = readTraceMapLinks(chapterMindmapTracePath)
+  const sourceIndexEntries = sourceIndexSummary.entryCount
+  const learningNotesTraceLinks = learningNotesTraceItems.length
+  const chapterMindmapTraceLinks = chapterMindmapTraceItems.length
+
+  if (stage === 'learning_notes_ready') {
+    if (!fs.existsSync(sourceIndexPath)) {
+      addIssue(longMaterial ? 'error' : 'warning', 'source_index_missing', 'indexes/source_index.jsonl 缺失，无法旁路追溯最终正文来源。', 'indexes/source_index.jsonl')
+    } else if (sourceIndexSummary.invalidLineCount > 0) {
+      addIssue('error', 'source_index_invalid_jsonl', `source_index 存在 ${sourceIndexSummary.invalidLineCount} 行无法解析。`, 'indexes/source_index.jsonl')
+    } else if (blockCount > 0 && sourceIndexEntries < blockCount) {
+      addIssue('warning', 'source_index_incomplete', `source_index 条目数 ${sourceIndexEntries} 少于 manifest.block_count ${blockCount}。`, 'indexes/source_index.jsonl')
+    }
+    if (longMaterial && !fs.existsSync(learningNotesTracePath)) {
+      addIssue('error', 'learning_notes_trace_missing', '长材料缺少 indexes/learning_notes_trace.json，无法证明正文覆盖来自哪些 blocks。', 'indexes/learning_notes_trace.json')
+    } else if (longMaterial && learningNotesTraceLinks === 0) {
+      addIssue('error', 'learning_notes_trace_empty', 'learning_notes_trace.json 没有 trace links，正文来源仍不可审计。', 'indexes/learning_notes_trace.json')
+    }
+    if (longMaterial && !fs.existsSync(chapterMindmapTracePath)) {
+      addIssue('error', 'chapter_mindmap_trace_missing', '长材料缺少 indexes/chapter_mindmap_trace.json，章节思维导图来源不可审计。', 'indexes/chapter_mindmap_trace.json')
+    } else if (longMaterial && chapterMindmapTraceLinks === 0) {
+      addIssue('error', 'chapter_mindmap_trace_empty', 'chapter_mindmap_trace.json 没有 trace links，导图来源仍不可审计。', 'indexes/chapter_mindmap_trace.json')
+    }
+    if (sourceIndexSummary.blockIds.size > 0) {
+      for (const [traceName, tracePath, links] of [
+        ['learning_notes_trace', 'indexes/learning_notes_trace.json', learningNotesTraceItems],
+        ['chapter_mindmap_trace', 'indexes/chapter_mindmap_trace.json', chapterMindmapTraceItems],
+      ] as const) {
+        const missingBlockIds = new Set<string>()
+        for (const link of links) {
+          const blockIds = Array.isArray(link.block_ids) ? link.block_ids : []
+          for (const blockId of blockIds) {
+            const normalizedBlockId = sanitizeDisplayText(blockId)
+            if (normalizedBlockId && !sourceIndexSummary.blockIds.has(normalizedBlockId)) {
+              missingBlockIds.add(normalizedBlockId)
+            }
+          }
+        }
+        if (missingBlockIds.size > 0) {
+          addIssue('error', `${traceName}_points_to_unknown_blocks`, `trace map 指向不存在于 source_index 的 blocks：${Array.from(missingBlockIds).slice(0, 8).join(', ')}。`, tracePath)
+        }
+      }
+    }
+  }
 
   let learningNotes = ''
   let learningNotesPlainLength = 0
@@ -1052,6 +1134,9 @@ function validateMaterialPackageArtifacts(materialPath: string, manifest: Record
     shortest_section_chars: shortestSectionChars,
     median_section_chars: medianSectionChars,
     long_material: longMaterial,
+    source_index_entries: sourceIndexEntries,
+    learning_notes_trace_links: learningNotesTraceLinks,
+    chapter_mindmap_trace_links: chapterMindmapTraceLinks,
   }
   const comparableReportPayload = {
     stage,
@@ -1690,7 +1775,7 @@ function writeInitialContentDraftReadmes(materialPath: string) {
     [
       '# Content Draft Work',
       '',
-      '这里保存 Codex Goal v8 的中间工作文件。工作台清理整理结果后，会保留字幕、转写、blocks、indexes 和 authoring，只重置这里的生成稿。',
+      '这里保存 Codex Goal v8 的中间工作文件。工作台清理整理结果后，会保留字幕、转写、blocks、source_index 和 authoring，只重置生成稿与 trace map。',
       '',
     ].join('\n'),
     'utf-8',
@@ -1703,6 +1788,24 @@ function writeInitialContentDraftReadmes(materialPath: string) {
       '第二个只读审计窗口只允许把学习笔记审计报告写到这里。',
       '',
       '推荐固定输出：`latest-readonly-audit.md`。',
+      '',
+    ].join('\n'),
+    'utf-8',
+  )
+}
+
+function resetMaterialTraceArtifacts(materialPath: string, deletedPaths: string[]) {
+  const indexesDir = path.join(materialPath, 'indexes')
+  deletePathIfExists(path.join(indexesDir, 'node_contexts'), deletedPaths)
+  deletePathIfExists(path.join(indexesDir, 'learning_notes_trace.json'), deletedPaths)
+  deletePathIfExists(path.join(indexesDir, 'chapter_mindmap_trace.json'), deletedPaths)
+  fs.mkdirSync(path.join(indexesDir, 'node_contexts'), { recursive: true })
+  fs.writeFileSync(
+    path.join(indexesDir, 'node_contexts', 'README.md'),
+    [
+      '# Node Contexts',
+      '',
+      'Codex 在 coverage/dossier 阶段可以把知识树节点或分支的原文依据写到这里。',
       '',
     ].join('\n'),
     'utf-8',
@@ -1791,6 +1894,7 @@ function resetMaterialGeneratedDrafts(materialPath: string, deletedPaths: string
   }
 
   writeInitialContentDraftReadmes(materialPath)
+  resetMaterialTraceArtifacts(materialPath, deletedPaths)
   resetMaterialRunState(materialPath)
 }
 

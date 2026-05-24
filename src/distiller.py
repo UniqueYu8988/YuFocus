@@ -458,6 +458,14 @@ def _save_json_file(file_path: str, payload: dict[str, Any]) -> str:
     return file_path
 
 
+def _save_jsonl_file(file_path: str, items: list[dict[str, Any]]) -> str:
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, "w", encoding="utf-8") as file:
+        for item in items:
+            file.write(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
+    return file_path
+
+
 def _safe_material_dir_name(title: str, bvid: str) -> str:
     stem = config.sanitize_filename(title or bvid or "course_material")
     return f"{stem}.course_material"
@@ -870,6 +878,17 @@ def _build_teaching_map(part_index: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_initial_trace_map(*, material_id: str, artifact: str) -> dict[str, Any]:
+    return {
+        "schema_version": "shijie.trace-map.v0.1",
+        "material_id": material_id,
+        "artifact": artifact,
+        "status": "pending_codex_trace",
+        "purpose": "旁路追溯表：把最终学习产物的可见章节/节点映射回 source_index 与 blocks；不要写入学生正文。",
+        "links": [],
+    }
+
+
 def _estimate_material_block_tokens(text: str) -> int:
     return max(1, math.ceil(len(text) / 1.7))
 
@@ -1013,6 +1032,8 @@ def _write_authoring_workspace(material_dir: str, *, course_title: str, material
         "",
         "先读取根目录 `run_state.json` 和 `content_draft/work/run_state.json`：这是单次复制入口，同一个 Goal 应自动多轮推进；每一轮最多只过一个阶段闸门。`material_ready` 先到 `knowledge_tree_ready`；`knowledge_tree_ready` 再到 `coverage_ready`；`coverage_ready` 再到 `dossier_ready`；`dossier_ready` 或 `partial_learning_notes` 每轮只深写 1-2 个知识树分支，直到 `learning_notes_ready`。阶段完成不是 Goal 完成，不要跳阶段。",
         "",
+        "软件已生成 `indexes/source_index.jsonl`。最终收口时请把正文和导图来源写入 `indexes/learning_notes_trace.json`、`indexes/chapter_mindmap_trace.json`；学生正文保持干净，不写 block/source/debug 信息。",
+        "",
         "若材料超过 100000 字、超过 8 blocks，或属于考试/医学/教程等密集材料，即使用户希望直接完成，也只在当前轮推进当前阶段并留下下一轮继续入口；coverage、dossier、draft、导图和 validator 状态分层推进。",
     ]
     _write_text_file(codex_copy_path, codex_copy_text)
@@ -1034,8 +1055,8 @@ def _write_authoring_workspace(material_dir: str, *, course_title: str, material
         "- `content_draft/learning_notes.md`",
         "- `content_draft/chapter_mindmap.md`",
         "",
-        "请读取 `authoring/content-synthesis-authoring.md`、`content_draft/synthesis_plan.json`、`content_draft/learning_notes.md`、`content_draft/work/evidence_ledger.jsonl`、`content_draft/work/specificity_review.md` 和 `content_draft/chapter_mindmap.md`。",
-        "重点判断：是否以视频内容为主体，是否只是字幕压缩版或总结文章，是否丢掉材料的解读方向、具体情境、例子、边界和表达重心；正文是否按材料选择 `compact_notes` 或 `chaptered_notes`，可打开小节是否完整可读而不是一个 topic 一页；章节思维导图是否适合作为学习台对话流中的一整条图文消息展示。",
+        "请读取 `authoring/content-synthesis-authoring.md`、`content_draft/synthesis_plan.json`、`content_draft/learning_notes.md`、`content_draft/work/evidence_ledger.jsonl`、`content_draft/work/specificity_review.md`、`content_draft/chapter_mindmap.md` 和 `indexes/*trace.json`。",
+        "重点判断：是否以视频内容为主体，是否只是字幕压缩版或总结文章，是否丢掉材料的解读方向、具体情境、例子、边界和表达重心；正文是否按材料选择 `compact_notes` 或 `chaptered_notes`，可打开小节是否完整可读而不是一个 topic 一页；章节思维导图是否适合作为学习台对话流中的一整条图文消息展示；长材料 trace map 是否覆盖主要学习单位。",
         "输出一份中文审计报告到 `content_draft/review_exports/latest-readonly-audit.md`，只写是否通过、主要问题、证据和返工方向。不要直接重写正文。",
         "```",
     ]
@@ -1087,6 +1108,10 @@ def _build_run_state(
             "synthesis_plan": os.path.join(material_dir, "content_draft", "synthesis_plan.json"),
             "learning_notes": os.path.join(material_dir, "content_draft", "learning_notes.md"),
             "chapter_mindmap": os.path.join(material_dir, "content_draft", "chapter_mindmap.md"),
+            "source_index": os.path.join(material_dir, "indexes", "source_index.jsonl"),
+            "node_contexts_dir": os.path.join(material_dir, "indexes", "node_contexts"),
+            "learning_notes_trace": os.path.join(material_dir, "indexes", "learning_notes_trace.json"),
+            "chapter_mindmap_trace": os.path.join(material_dir, "indexes", "chapter_mindmap_trace.json"),
             "codex_prompt": os.path.join(material_dir, "authoring", "02_start_codex_synthesis.md"),
             "codex_goal_v8": os.path.join(material_dir, "authoring", "codex-goal-content-synthesis-v8.md"),
             "knowledge_tree": os.path.join(material_dir, "content_draft", "work", "knowledge_tree.json"),
@@ -1190,7 +1215,7 @@ def _write_handoff_files(
             "3. `knowledge_tree_ready`：Codex 把 topic 挂到知识树节点，建立 block digest、topic inventory、source cards、evidence ledger 和 coverage matrix，停在 `coverage_ready`。",
             "4. `coverage_ready`：Codex 按知识树分支回读 blocks，写 `block_reread_ledger.jsonl`、`section_dossiers/*.md` 和 `thinness_review.md`，停在 `dossier_ready`。",
             "5. `dossier_ready` 或 `partial_learning_notes`：Codex 每轮只深写 1-2 个知识树分支，逐步合并 `learning_notes.md`。",
-            "6. 全部高价值分支通过结构复查和 thinness review 后，Codex 写入 `chapter_mindmap.md` 并标记 `learning_notes_ready`。",
+            "6. 全部高价值分支通过结构复查和 thinness review 后，Codex 写入 `chapter_mindmap.md`、trace map，并标记 `learning_notes_ready`。",
             "7. 回到软件，点击“开始学习”，把结构化资料载入学习台。",
             "",
             "## 关键文件",
@@ -1199,6 +1224,8 @@ def _write_handoff_files(
             f"- Codex 学习笔记入口：`{codex_prompt}`",
             f"- Codex Goal v8 流水线：`{goal_v8_prompt}`",
             f"- Codex 只读审计提示：`{audit_prompt}`",
+            f"- 原文旁路索引：`{os.path.join(material_dir, 'indexes', 'source_index.jsonl')}`",
+            f"- 正文 trace map：`{os.path.join(material_dir, 'indexes', 'learning_notes_trace.json')}`",
             f"- 学习笔记：`{learning_notes_path}`",
             f"- 章节思维导图：`{chapter_mindmap_path}`",
         ],
@@ -1227,8 +1254,10 @@ def save_codex_material_package(
     content_draft_dir = os.path.join(material_dir, "content_draft")
     review_exports_dir = os.path.join(content_draft_dir, "review_exports")
     work_dir = os.path.join(content_draft_dir, "work")
+    node_contexts_dir = os.path.join(indexes_dir, "node_contexts")
     os.makedirs(blocks_dir, exist_ok=True)
     os.makedirs(indexes_dir, exist_ok=True)
+    os.makedirs(node_contexts_dir, exist_ok=True)
     os.makedirs(authoring_dir, exist_ok=True)
     os.makedirs(schemas_dir, exist_ok=True)
     os.makedirs(content_draft_dir, exist_ok=True)
@@ -1288,6 +1317,10 @@ def save_codex_material_package(
             "blocks_dir": "blocks",
             "indexes_dir": "indexes",
             "part_index": "indexes/part_index.json",
+            "source_index": "indexes/source_index.jsonl",
+            "node_contexts_dir": "indexes/node_contexts",
+            "learning_notes_trace": "indexes/learning_notes_trace.json",
+            "chapter_mindmap_trace": "indexes/chapter_mindmap_trace.json",
             "teaching_map": "indexes/teaching_map.json",
             "term_normalization": "indexes/term_normalization.json",
             "noise_segments": "indexes/noise_segments.json",
@@ -1341,6 +1374,7 @@ def save_codex_material_package(
             "coverage_strategy": "长材料第一轮只做到 knowledge_tree_ready；第二轮把 topic 挂到知识树并停在 coverage_ready；第三轮必须按分支回读 blocks 写 block_reread_ledger 和 section_dossiers；后续每轮只深写 1-2 个知识树分支。",
             "review_strategy": "v8 学习笔记以 structure_review、thinness_review 和 specificity_review 作为能否导入学习的质量闸门；文件存在不等于 learning_notes_ready。",
             "presentation_strategy": "短材料或主题集中材料使用 compact_notes：# 标题 + 少量 ## 完整学习小节；中长材料使用 chaptered_notes：## 大章节 + ### 完整小节。不要把单个 topic 拆成一页。",
+            "trace_strategy": "source refs、block_id、raw offset 等追溯信息只写入 indexes/source_index.jsonl、indexes/node_contexts/ 和 trace map，学生正文保持干净。",
         },
     }
 
@@ -1355,7 +1389,26 @@ def save_codex_material_package(
     manifest["block_count"] = len(material_blocks)
     _save_json_file(os.path.join(material_dir, "manifest.json"), manifest)
     _save_json_file(os.path.join(indexes_dir, "part_index.json"), part_index)
+    _write_text_file(
+        os.path.join(node_contexts_dir, "README.md"),
+        [
+            "# Node Contexts",
+            "",
+            "Codex 在 coverage/dossier 阶段可以把知识树节点或分支的原文依据写到这里。",
+            "",
+            "建议文件名：`branch_001.json`、`node_001_001.json`。学生正文不读取这里。",
+        ],
+    )
+    _save_json_file(
+        os.path.join(indexes_dir, "learning_notes_trace.json"),
+        _build_initial_trace_map(material_id=str(manifest.get("material_id") or bvid), artifact="learning_notes.md"),
+    )
+    _save_json_file(
+        os.path.join(indexes_dir, "chapter_mindmap_trace.json"),
+        _build_initial_trace_map(material_id=str(manifest.get("material_id") or bvid), artifact="chapter_mindmap.md"),
+    )
 
+    source_index_entries: list[dict[str, Any]] = []
     for block in material_blocks:
         block_id = str(block["block_id"])
         block_text = str(block["text"])
@@ -1383,6 +1436,24 @@ def save_codex_material_package(
             ],
         }
         _save_json_file(os.path.join(blocks_dir, f"{block_id}.json"), block_payload)
+        source_index_entries.append(
+            {
+                "schema_version": "shijie.source-index-entry.v0.1",
+                "entry_id": f"src_{block_id}",
+                "block_id": block_id,
+                "block_path": f"blocks/{block_id}.json",
+                "order": block["order"],
+                "source_chunk_ids": block["chunk_ids"],
+                "page_labels": page_labels,
+                "time_range": time_range,
+                "char_count": block["char_count"],
+                "estimated_tokens": block["estimated_tokens"],
+                "text_sha1": hashlib.sha1(block_text.encode("utf-8")).hexdigest(),
+                "key_terms": _extract_material_terms(block_text, limit=14),
+                "key_points": key_points[:6],
+                "source_excerpt": _normalize_whitespace(block_text)[:700],
+            }
+        )
         outline_items.append(
             {
                 "block_id": block_id,
@@ -1403,6 +1474,7 @@ def save_codex_material_package(
             for token in _split_material_tokens(point)[:6]:
                 concept_index.setdefault(token, []).append(block_id)
 
+    _save_jsonl_file(os.path.join(indexes_dir, "source_index.jsonl"), source_index_entries)
     _save_json_file(os.path.join(indexes_dir, "global_outline.json"), {"items": outline_items})
     _save_json_file(
         os.path.join(indexes_dir, "concept_index.json"),

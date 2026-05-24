@@ -76,6 +76,10 @@
         "blocks_dir": { "type": "string" },
         "indexes_dir": { "type": "string" },
         "part_index": { "type": "string" },
+        "source_index": { "type": "string" },
+        "node_contexts_dir": { "type": "string" },
+        "learning_notes_trace": { "type": "string" },
+        "chapter_mindmap_trace": { "type": "string" },
         "teaching_map": { "type": "string" },
         "term_normalization": { "type": "string" },
         "noise_segments": { "type": "string" },
@@ -125,11 +129,107 @@
         "single_pass_blocks": { "type": "string" },
         "active_workflow": { "type": "string" },
         "coverage_strategy": { "type": "string" },
-        "review_strategy": { "type": "string" }
+        "review_strategy": { "type": "string" },
+        "trace_strategy": { "type": "string" }
       }
     }
   },
   "$defs": {
+    "sourceIndexEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "entry_id",
+        "block_id",
+        "block_path",
+        "order",
+        "source_chunk_ids",
+        "page_labels",
+        "time_range",
+        "char_count",
+        "estimated_tokens",
+        "text_sha1",
+        "key_terms",
+        "key_points",
+        "source_excerpt"
+      ],
+      "properties": {
+        "schema_version": { "const": "shijie.source-index-entry.v0.1" },
+        "entry_id": { "type": "string", "pattern": "^src_block_[0-9]{3,}$" },
+        "block_id": { "type": "string", "pattern": "^block_[0-9]{3,}$" },
+        "block_path": { "type": "string" },
+        "order": { "type": "integer", "minimum": 1 },
+        "source_chunk_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "page_labels": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "time_range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["from", "to"],
+          "properties": {
+            "from": { "type": ["number", "null"] },
+            "to": { "type": ["number", "null"] }
+          }
+        },
+        "char_count": { "type": "integer", "minimum": 0 },
+        "estimated_tokens": { "type": "integer", "minimum": 0 },
+        "text_sha1": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "key_terms": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "key_points": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "source_excerpt": { "type": "string" }
+      }
+    },
+    "traceMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "material_id", "artifact", "status", "links"],
+      "properties": {
+        "schema_version": { "const": "shijie.trace-map.v0.1" },
+        "material_id": { "type": "string" },
+        "artifact": { "enum": ["learning_notes.md", "chapter_mindmap.md"] },
+        "status": { "type": "string" },
+        "purpose": { "type": "string" },
+        "links": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/traceLink" }
+        }
+      }
+    },
+    "traceLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_id", "target_title", "block_ids", "coverage_note"],
+      "properties": {
+        "target_id": { "type": "string" },
+        "target_title": { "type": "string" },
+        "target_heading": { "type": "string" },
+        "source_index_entry_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "block_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^block_[0-9]{3,}$" }
+        },
+        "coverage_note": { "type": "string" },
+        "confidence": {
+          "enum": ["low", "medium", "high"]
+        }
+      }
+    },
     "materialBlock": {
       "type": "object",
       "additionalProperties": false,

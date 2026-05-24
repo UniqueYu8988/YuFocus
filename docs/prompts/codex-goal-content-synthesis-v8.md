@@ -34,6 +34,7 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 - `HANDOFF.md`
 - `indexes/global_outline.json`
 - `indexes/part_index.json`
+- `indexes/source_index.jsonl`
 - `indexes/teaching_map.json`
 - `blocks/*.json`（按阶段逐步回读，不要一次吞完整 raw_transcript）
 
@@ -82,7 +83,7 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 
 目标：先建立这门材料的学习结构，而不是先追 topic 完成度。
 
-读取 `HANDOFF.md`、`manifest.json`、`run_state.json`、`indexes/`，再抽读能代表主题边界的 `blocks/*.json`。不要写正文。
+读取 `HANDOFF.md`、`manifest.json`、`run_state.json`、`indexes/part_index.json`、`indexes/source_index.jsonl`，再抽读能代表主题边界的 `blocks/*.json`。不要写正文。
 
 写入：
 
@@ -180,6 +181,7 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 - `content_draft/work/evidence_ledger.jsonl`
 - `content_draft/work/coverage_matrix.json`
 - `content_draft/work/coverage_gap_report.md`
+- `indexes/node_contexts/*.json`（旁路记录知识树节点/分支对应的 source_index entries 与 blocks）
 - 必要时更新 `content_draft/work/structure_review.md`
 
 本阶段不写：
@@ -268,6 +270,7 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 - `content_draft/work/specificity_review.md`
 - `content_draft/work/self_check.md`
 - 更新 `content_draft/work/coverage_matrix.json`
+- 更新 `indexes/learning_notes_trace.json`
 
 ### Markdown 层级与阅读单位
 
@@ -308,6 +311,7 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 - `content_draft/work/editorial_review.md`
 - `content_draft/work/specificity_review.md`
 - `content_draft/work/self_check.md`
+- `indexes/chapter_mindmap_trace.json`
 - 更新 `content_draft/synthesis_plan.json`
 - 更新根目录和工作目录 `run_state.json`
 
@@ -330,6 +334,12 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 - `pipeline_ready = false`
 
 不要主观设置 `pipeline_ready = true` 或 `release_ready = true`。软件会在工作台刷新时运行 deterministic validator，只有通过后才设置 `pipeline_ready = true` 并允许进入学习台。
+
+同时把来源追溯写到旁路 trace map：
+
+- `indexes/learning_notes_trace.json`：按最终正文的可打开学习单位映射到 `source_index_entry_ids`、`block_ids` 和简短 coverage note。
+- `indexes/chapter_mindmap_trace.json`：按导图节点或边映射到 `source_index_entry_ids`、`block_ids` 和简短 coverage note。
+- 学生正文和章节思维导图里不要暴露 `source_index_entry_ids`、`block_ids`、raw offset 或后台制作说明。
 
 只有在以下条件同时成立时，才可以执行本阶段：
 
@@ -373,3 +383,4 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 - 如果是 `needs_restructure`，哪些结构问题需要修。
 - 如果是 `needs_deepening`，哪些分支偏薄以及为什么。
 - 生产侧是否已经到 `learning_notes_ready`；若软件 validator 已生成报告，同时说明 `pipeline_ready` 结果。
+- trace map 是否已经写入，以及大致覆盖了多少正文学习单位和导图节点。
