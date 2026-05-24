@@ -279,3 +279,4 @@ content_draft/review_exports/quality_audit_report.md
 - 第一阶段已完成：`learning_notes_ready` 拆为生产侧完成；`pipeline_ready`、`audit_ready`、`release_ready` 由软件侧 validator、审计和发布层接管。
 - 第二阶段开始：软件生成 `indexes/source_index.jsonl`，提供 block 级 source entry；Codex 最终收口时填写 `indexes/learning_notes_trace.json` 与 `indexes/chapter_mindmap_trace.json`。validator 对长材料检查 trace map，避免“正文看似完整但来源链不可审计”。
 - 第三阶段开始：标准只读审计产物改为 `content_draft/review_exports/quality_audit_report.md`，用 `audit_result: pass | needs_fix | blocked` 作为机器可读结果；validator 只在 `pipeline_ready=true` 且审计通过时设置 `audit_ready=true`。
+- 第四阶段开始：新增 `src/eval_material_pipeline.py`，生成 30 万字 synthetic 材料包并跑 golden cases，覆盖 valid ready、正文过薄、trace 为空、trace 指向未知 block、审计 needs_fix 等情况。报告写入 `output/evals/synthetic_300k/synthetic_300k_report.json`。

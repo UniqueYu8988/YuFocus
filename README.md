@@ -153,7 +153,7 @@ npm run build:portable
 
 ```powershell
 cd C:\Users\Yu\AI\视界专注
-python -m py_compile src\bilibili_api.py src\audio_fallback.py src\local_audio_client.py src\distiller.py src\validate_content_synthesis_plan.py
+python -m py_compile src\bilibili_api.py src\audio_fallback.py src\local_audio_client.py src\distiller.py src\validate_content_synthesis_plan.py src\eval_material_pipeline.py
 ```
 
 校验 schema：
@@ -161,6 +161,14 @@ python -m py_compile src\bilibili_api.py src\audio_fallback.py src\local_audio_c
 ```powershell
 python src\validate_content_synthesis_plan.py "<course_material_dir>\content_draft\synthesis_plan.json"
 ```
+
+运行 30 万字 synthetic 协议测试：
+
+```powershell
+python src\eval_material_pipeline.py --target-chars 300000
+```
+
+报告会写入 `output/evals/synthetic_300k/synthetic_300k_report.json`。该测试不调用真实视频或 Codex，只验证材料包、source index、trace map、validator sanity 和只读审计 gate 能否挡住假 ready。
 
 ## 本地文件与隐私
 

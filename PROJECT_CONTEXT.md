@@ -82,6 +82,8 @@ ready 需要长期拆分为内部三层：`pipeline_ready` 表示 deterministic 
 
 2026-05-24 第三阶段底座把只读审计标准产物固定为 `content_draft/review_exports/quality_audit_report.md`，报告开头用 `audit_result: pass | needs_fix | blocked`。软件只在 `pipeline_ready=true` 且审计结果为 `pass` 时视为 `audit_ready=true`；只读审计不修改正文、trace map 或 `release_ready`。
 
+2026-05-24 第四阶段加入 `src/eval_material_pipeline.py`。它生成 30 万字 synthetic `.course_material`，并制造 `valid_ready`、正文过薄、trace 为空、trace 指向未知 block、审计 needs_fix 等 golden cases。该脚本不替代真实视频测试，只用于确认协议底座能挡住假 ready。运行入口：`python src\eval_material_pipeline.py --target-chars 300000`，报告在 `output/evals/synthetic_300k/synthetic_300k_report.json`。
+
 ## 核心产物
 
 `.course_material` 内的关键产物：
