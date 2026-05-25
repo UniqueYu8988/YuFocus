@@ -84,6 +84,17 @@ def _heading_body_lengths(markdown: str, level: int) -> list[int]:
     return [item for item in lengths if item > 0]
 
 
+def _markdown_headings(markdown: str) -> list[tuple[int, str]]:
+    return [
+        (len(match.group(1)), match.group(2).strip())
+        for match in re.finditer(r"^(#{1,6})\s+(.+?)\s*#*\s*$", markdown, flags=re.MULTILINE)
+    ]
+
+
+def _normalize_heading(value: str) -> str:
+    return re.sub(r"\s+", "", re.sub(r"^#{1,6}\s+", "", value.strip())).lower()
+
+
 def _median(values: list[int]) -> int:
     if not values:
         return 0
@@ -186,6 +197,10 @@ def _first_text(payload: dict[str, Any], keys: tuple[str, ...]) -> str:
     return ""
 
 
+def _target_heading(payload: dict[str, Any]) -> str:
+    return _first_text(payload, ("target_heading", "heading", "title", "target_title"))
+
+
 def _audit_result(path: Path) -> str:
     if not path.exists():
         return "missing"
@@ -200,6 +215,7 @@ def _validate_strict_evidence(
     material_path: Path,
     *,
     learning_unit_count: int,
+    learning_unit_headings: list[str],
     required_topic_count: int,
     source_entry_ids: set[str],
     source_block_ids: set[str],
@@ -214,12 +230,32 @@ def _validate_strict_evidence(
     candidate_records, candidate_invalid = _structured_records_from_dir(material_path / "content_draft" / "work" / "source_cards" / "candidates")
     required_records, required_invalid = _structured_records_from_dir(material_path / "content_draft" / "work" / "source_cards" / "required")
     claim_records, claim_invalid = _structured_records_from_dir(material_path / "content_draft" / "work" / "published_claims")
+    heading_set = {_normalize_heading(heading) for heading in learning_unit_headings if _normalize_heading(heading)}
 
     if capabilities.get("learning_page_plan") == "required":
         if plan_invalid:
             error("learning_page_plan_invalid", "learning page plan has invalid JSON/JSONL")
         if len(plan_records) < learning_unit_count:
             error("learning_page_plan_incomplete", f"plan records {len(plan_records)} < learning units {learning_unit_count}")
+    plan_heading_set: set[str] = set()
+    plan_cards_by_heading: dict[str, set[str]] = {}
+    for record in plan_records:
+        heading = _target_heading(record)
+        normalized = _normalize_heading(heading) if heading else ""
+        if not normalized:
+            error("learning_page_plan_missing_target_heading", "learning page plan missing target heading")
+        else:
+            plan_heading_set.add(normalized)
+            if heading_set and normalized not in heading_set:
+                error("learning_page_plan_unknown_target_heading", heading)
+        refs = _list_strings(record.get("required_source_card_ids") or record.get("source_card_ids") or record.get("card_ids"))
+        plan_cards_by_heading.setdefault(normalized, set()).update(refs)
+        if not refs:
+            error("learning_page_plan_missing_source_cards", "learning page plan missing source cards")
+    for heading in heading_set:
+        if heading not in plan_heading_set:
+            error("learning_page_plan_missing_for_units", heading)
+
     if capabilities.get("candidate_source_cards") == "required":
         if candidate_invalid:
             error("candidate_source_cards_invalid", "candidate source cards have invalid JSON/JSONL")
@@ -232,12 +268,17 @@ def _validate_strict_evidence(
             error("required_source_cards_empty", "required source cards are empty")
 
     required_card_ids: set[str] = set()
+    candidate_card_ids = {_first_text(record, ("card_id", "source_card_id", "id")) for record in candidate_records}
+    candidate_card_ids.discard("")
     for record in required_records:
         card_id = _first_text(record, ("card_id", "source_card_id", "id"))
         if not card_id:
             error("required_source_cards_missing_id", "required source card missing id")
         else:
             required_card_ids.add(card_id)
+        candidate_id = _first_text(record, ("candidate_card_id", "candidate_id"))
+        if candidate_id and candidate_card_ids and candidate_id not in candidate_card_ids:
+            error("required_source_cards_unknown_candidates", candidate_id)
         entry_ids = _list_strings(record.get("source_index_entry_ids") or record.get("source_entry_ids"))
         block_ids = _list_strings(record.get("block_ids") or record.get("blocks"))
         if not entry_ids and not block_ids:
@@ -257,15 +298,30 @@ def _validate_strict_evidence(
         minimum_claims = max(learning_unit_count, min(required_topic_count, learning_unit_count * 3))
         if len(claim_records) < minimum_claims:
             error("published_claims_too_few", f"claims {len(claim_records)} < {minimum_claims}")
+    claim_heading_set: set[str] = set()
     for record in claim_records:
         if not _first_text(record, ("claim", "text", "statement")):
             error("published_claims_missing_text", "published claim missing text")
+        heading = _target_heading(record)
+        normalized = _normalize_heading(heading) if heading else ""
+        if not normalized:
+            error("published_claims_missing_target_heading", "published claim missing target heading")
+        else:
+            claim_heading_set.add(normalized)
+            if heading_set and normalized not in heading_set:
+                error("published_claims_unknown_target_heading", heading)
         refs = _list_strings(record.get("required_source_card_ids") or record.get("source_card_ids") or record.get("card_ids"))
         if not refs:
             error("published_claims_missing_source_cards", "published claim missing source card refs")
         unknown_refs = [card_id for card_id in refs if required_card_ids and card_id not in required_card_ids]
         if unknown_refs:
             error("published_claims_unknown_source_cards", ", ".join(unknown_refs[:8]))
+        unplanned_refs = [card_id for card_id in refs if normalized in plan_cards_by_heading and plan_cards_by_heading[normalized] and card_id not in plan_cards_by_heading[normalized]]
+        if unplanned_refs:
+            error("published_claims_cards_not_in_page_plan", ", ".join(unplanned_refs[:8]))
+    for heading in heading_set:
+        if heading not in claim_heading_set:
+            error("published_claims_missing_for_units", heading)
 
 
 def _evaluate_package(material_path: Path) -> dict[str, Any]:
@@ -301,6 +357,7 @@ def _evaluate_package(material_path: Path) -> dict[str, Any]:
     if not learning_notes_path.exists():
         error("learning_notes_missing", "learning_notes.md is missing")
         notes = ""
+        learning_unit_headings: list[str] = []
     else:
         notes = learning_notes_path.read_text(encoding="utf-8")
         plain = _plain_length(notes)
@@ -309,6 +366,9 @@ def _evaluate_package(material_path: Path) -> dict[str, Any]:
         h2_count = len(re.findall(r"^##\s+", notes, flags=re.MULTILINE))
         h3_count = len(h3_lengths)
         learning_unit_count = h3_count if h3_count else h2_count
+        headings = _markdown_headings(notes)
+        learning_unit_level = 3 if h3_count else 2
+        learning_unit_headings = [title for level, title in headings if level == learning_unit_level]
         median_h3 = _median(h3_lengths)
         if h1_count != 1:
             error("learning_notes_h1_invalid", f"expected one h1, got {h1_count}")
@@ -351,7 +411,9 @@ def _evaluate_package(material_path: Path) -> dict[str, Any]:
             error(f"{trace_name}_points_to_unknown_blocks", ", ".join(sorted(missing_blocks)[:8]))
 
     if stage == "learning_notes_ready":
-        learning_unit_count = len(_heading_body_lengths(notes, 3)) if notes else 0
+        h3_count = len(_heading_body_lengths(notes, 3)) if notes else 0
+        h2_count = len(re.findall(r"^##\s+", notes, flags=re.MULTILINE)) if notes else 0
+        learning_unit_count = h3_count if h3_count else h2_count
         required_topic_count = 0
         coverage = _read_json(material_path / "content_draft" / "work" / "coverage_matrix.json")
         topics = coverage.get("topics") if isinstance(coverage.get("topics"), list) else []
@@ -359,6 +421,7 @@ def _evaluate_package(material_path: Path) -> dict[str, Any]:
         _validate_strict_evidence(
             material_path,
             learning_unit_count=learning_unit_count,
+            learning_unit_headings=learning_unit_headings,
             required_topic_count=required_topic_count,
             source_entry_ids=source_entry_ids,
             source_block_ids=source_block_ids,
@@ -498,6 +561,12 @@ def _make_mindmap() -> str:
     )
 
 
+def _synthetic_heading_for_index(index: int) -> str:
+    chapter_index = (index - 1) // 3 + 1
+    section_index = (index - 1) % 3 + 1
+    return f"### {chapter_index}.{section_index} Complete learning unit {index}"
+
+
 def _make_trace(material_id: str, artifact: str, block_ids: list[str], mode: str) -> dict[str, Any]:
     links: list[dict[str, Any]] = []
     if mode == "empty":
@@ -519,8 +588,8 @@ def _make_trace(material_id: str, artifact: str, block_ids: list[str], mode: str
         links = [
             {
                 "target_id": f"section_{index:03d}",
-                "target_title": f"Synthetic learning unit {index}",
-                "target_heading": f"### Synthetic learning unit {index}",
+                "target_title": f"Complete learning unit {index}",
+                "target_heading": _synthetic_heading_for_index(index),
                 "source_index_entry_ids": [f"src_{block_id}"],
                 "block_ids": [block_id],
                 "coverage_note": "Synthetic trace link for protocol eval.",
@@ -538,7 +607,7 @@ def _make_trace(material_id: str, artifact: str, block_ids: list[str], mode: str
     }
 
 
-def _write_strict_evidence(material_path: Path, block_ids: list[str]) -> None:
+def _write_strict_evidence(material_path: Path, block_ids: list[str], mode: str) -> None:
     work_dir = material_path / "content_draft" / "work"
     page_plan_dir = work_dir / "learning_page_plans"
     candidate_dir = work_dir / "source_cards" / "candidates"
@@ -554,7 +623,9 @@ def _write_strict_evidence(material_path: Path, block_ids: list[str]) -> None:
     for index, block_id in enumerate(usable_blocks, start=1):
         candidate_id = f"candidate_{index:03d}"
         card_id = f"card_{index:03d}"
-        heading = f"### Synthetic learning unit {index}"
+        heading = _synthetic_heading_for_index(index)
+        if mode == "unknown_heading":
+            heading = f"### Detached evidence page {index}"
         excerpt = (
             f"Synthetic source excerpt for block {block_id}. It includes mechanism, boundary, "
             "example, misconception, and review hook evidence for protocol testing."
@@ -601,13 +672,17 @@ def _write_strict_evidence(material_path: Path, block_ids: list[str]) -> None:
                 ensure_ascii=False,
             )
         )
+        claim_card_id = card_id
+        if mode == "unplanned_claim_card":
+            next_index = 1 if index == len(usable_blocks) else index + 1
+            claim_card_id = f"card_{next_index:03d}"
         claim_lines.append(
             json.dumps(
                 {
                     "claim_id": f"claim_{index:03d}",
                     "target_heading": heading,
                     "claim": f"Synthetic learning unit {index} explains a mechanism, boundary, and review hook.",
-                    "required_source_card_ids": [card_id],
+                    "required_source_card_ids": [claim_card_id],
                     "coverage_role": "published_learning_unit",
                 },
                 ensure_ascii=False,
@@ -651,8 +726,8 @@ def _write_ready_case(material_path: Path, spec: CaseSpec) -> None:
     _write_text(material_path / "content_draft" / "chapter_mindmap.md", _make_mindmap())
     _write_json(indexes_dir / "learning_notes_trace.json", _make_trace(material_id, "learning_notes.md", block_ids, spec.trace_mode))
     _write_json(indexes_dir / "chapter_mindmap_trace.json", _make_trace(material_id, "chapter_mindmap.md", block_ids, spec.trace_mode))
-    if spec.evidence_mode == "valid":
-        _write_strict_evidence(material_path, block_ids)
+    if spec.evidence_mode != "missing":
+        _write_strict_evidence(material_path, block_ids, spec.evidence_mode)
     _write_text(
         review_dir / "quality_audit_report.md",
         "\n".join(
@@ -701,6 +776,8 @@ def run_eval(output_dir: Path, target_chars: int) -> dict[str, Any]:
         CaseSpec("fake_ready_empty_trace", False, False, "adequate", "empty", "pass", "valid"),
         CaseSpec("fake_ready_unknown_trace", False, False, "adequate", "unknown_block", "pass", "valid"),
         CaseSpec("fake_ready_missing_strict_evidence", False, False, "adequate", "valid", "pass", "missing"),
+        CaseSpec("fake_ready_orphan_evidence_heading", False, False, "adequate", "valid", "pass", "unknown_heading"),
+        CaseSpec("fake_ready_claim_card_mismatch", False, False, "adequate", "valid", "pass", "unplanned_claim_card"),
         CaseSpec("audit_needs_fix", True, False, "adequate", "valid", "needs_fix", "valid"),
     ]
 

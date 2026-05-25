@@ -10,7 +10,7 @@ export type MaterialValidationIssue = {
 }
 
 export type MaterialValidationReport = {
-  schema_version: 'shijie.material-validation.v0.2'
+  schema_version: 'shijie.material-validation.v0.3'
   generated_at: string
   material_id: string
   material_path: string
@@ -51,9 +51,11 @@ export type MaterialValidationReport = {
     learning_notes_trace_links: number
     chapter_mindmap_trace_links: number
     learning_page_plan_units: number
+    learning_page_plan_matched_units: number
     candidate_source_card_count: number
     required_source_card_count: number
     published_claim_count: number
+    published_claim_target_units: number
     quality_audit_report_exists: boolean
     quality_audit_result: string
   }
@@ -402,6 +404,26 @@ function arrayOfStrings(value: unknown) {
   return value.map((item) => sanitizeDisplayText(item)).filter(Boolean)
 }
 
+function normalizeLearningUnitHeading(value: unknown) {
+  return sanitizeDisplayText(value)
+    .replace(/^#{1,6}\s+/u, '')
+    .replace(/\s+/gu, '')
+    .toLowerCase()
+}
+
+function recordTargetHeading(record: Record<string, unknown>) {
+  return sanitizeDisplayText(record.target_heading ?? record.heading ?? record.title ?? record.target_title ?? '')
+}
+
+function addToSetMap(map: Map<string, Set<string>>, key: string, values: string[]) {
+  if (!key) return
+  const existing = map.get(key) ?? new Set<string>()
+  for (const value of values) {
+    if (value) existing.add(value)
+  }
+  map.set(key, existing)
+}
+
 function readQualityAuditReportStatus(reportPath: string, legacyReportPath: string) {
   const resolvedPath = fs.existsSync(reportPath) ? reportPath : legacyReportPath
   if (!fs.existsSync(resolvedPath)) {
@@ -571,8 +593,8 @@ function countRequiredTopics(materialPath: string) {
 
 function repairIntentForIssueCodes(codes: string[]) {
   if (codes.some((code) => /trace|source_index/u.test(code))) return 'needs_trace_repair'
+  if (codes.some((code) => /learning_page_plan|target_heading|missing_for_units/u.test(code))) return 'needs_page_plan_repair'
   if (codes.some((code) => /source_cards|evidence|published_claims/u.test(code))) return 'needs_evidence_expansion'
-  if (codes.some((code) => /learning_page_plan/u.test(code))) return 'needs_page_plan_repair'
   if (codes.some((code) => /thin|short|h3|published_topics_under_supported/u.test(code))) return 'needs_deepening'
   if (codes.some((code) => /state|pipeline_ready|contract/u.test(code))) return 'needs_state_repair'
   if (codes.some((code) => /missing|invalid|placeholder|debug/u.test(code))) return 'needs_repair'
@@ -641,15 +663,18 @@ function checkStrictEvidenceCapabilities(
   contract: ValidationContract,
   productionWritten: boolean,
   learningUnitCount: number,
+  learningUnitHeadings: string[],
   requiredTopicCount: number,
   sourceIndexSummary: ReturnType<typeof readSourceIndexSummary>,
   addIssue: (severity: MaterialValidationIssue['severity'], code: string, message: string, relativePath?: string) => void,
 ) {
   const emptyCounts = {
     learningPagePlanUnits: 0,
+    learningPagePlanMatchedUnits: 0,
     candidateSourceCardCount: 0,
     requiredSourceCardCount: 0,
     publishedClaimCount: 0,
+    publishedClaimTargetUnits: 0,
   }
   if (!productionWritten) return emptyCounts
 
@@ -662,6 +687,23 @@ function checkStrictEvidenceCapabilities(
   const candidateCards = readStructuredRecordsFromDirectory(path.join(materialPath, candidateCardsPath), ['.json', '.jsonl'])
   const requiredCards = readStructuredRecordsFromDirectory(path.join(materialPath, requiredCardsPath), ['.json', '.jsonl'])
   const publishedClaims = readStructuredRecordsFromDirectory(path.join(materialPath, publishedClaimsPath), ['.json', '.jsonl'])
+  const normalizedLearningUnitHeadings = learningUnitHeadings
+    .map((heading) => normalizeLearningUnitHeading(heading))
+    .filter(Boolean)
+  const learningUnitHeadingSet = new Set(normalizedLearningUnitHeadings)
+  const candidateCardIds = new Set<string>()
+  for (const record of candidateCards.records) {
+    const id = recordId(record, ['card_id', 'source_card_id', 'id'])
+    if (id) candidateCardIds.add(id)
+  }
+  const requiredCardIds = new Set<string>()
+  for (const record of requiredCards.records) {
+    const id = recordId(record, ['card_id', 'source_card_id', 'id'])
+    if (id) requiredCardIds.add(id)
+  }
+  const pagePlanHeadingSet = new Set<string>()
+  const pagePlanCardRefsByHeading = new Map<string, Set<string>>()
+  const publishedClaimHeadingSet = new Set<string>()
 
   if (capabilityRequired(contract, 'learning_page_plan')) {
     if (learningPlans.files.length === 0) {
@@ -678,6 +720,31 @@ function checkStrictEvidenceCapabilities(
         learningPagePlanPath,
       )
     }
+    const plansWithoutHeading = learningPlans.records.filter((record) => !recordTargetHeading(record))
+    const unknownPlanHeadings = new Set<string>()
+    const plansWithoutCards = learningPlans.records.filter((record) => sourceCardRefs(record).length === 0)
+    const plansWithUnknownCards = new Set<string>()
+    const plansWithoutSlots = learningPlans.records.filter((record) => arrayOfStrings(record.content_slots ?? record.required_slots ?? record.coverage_slots).length === 0)
+    for (const record of learningPlans.records) {
+      const heading = recordTargetHeading(record)
+      const normalizedHeading = normalizeLearningUnitHeading(heading)
+      if (normalizedHeading) {
+        pagePlanHeadingSet.add(normalizedHeading)
+        if (learningUnitHeadingSet.size > 0 && !learningUnitHeadingSet.has(normalizedHeading)) unknownPlanHeadings.add(heading)
+      }
+      const cardRefs = sourceCardRefs(record)
+      addToSetMap(pagePlanCardRefsByHeading, normalizedHeading, cardRefs)
+      for (const cardId of cardRefs) {
+        if (requiredCardIds.size > 0 && !requiredCardIds.has(cardId)) plansWithUnknownCards.add(cardId)
+      }
+    }
+    const missingPlanHeadings = normalizedLearningUnitHeadings.filter((heading) => !pagePlanHeadingSet.has(heading))
+    if (plansWithoutHeading.length > 0) addIssue('error', 'learning_page_plan_missing_target_heading', `${plansWithoutHeading.length} 条学习页计划缺少 target_heading/heading/title。`, learningPagePlanPath)
+    if (unknownPlanHeadings.size > 0) addIssue('error', 'learning_page_plan_unknown_target_heading', `学习页计划指向 learning_notes.md 中不存在的标题：${Array.from(unknownPlanHeadings).slice(0, 8).join('、')}。`, learningPagePlanPath)
+    if (missingPlanHeadings.length > 0) addIssue('error', 'learning_page_plan_missing_for_units', `${missingPlanHeadings.length} 个最终学习单位缺少对应学习页计划。`, learningPagePlanPath)
+    if (plansWithoutCards.length > 0) addIssue('error', 'learning_page_plan_missing_source_cards', `${plansWithoutCards.length} 条学习页计划缺少 required_source_card_ids/source_card_ids。`, learningPagePlanPath)
+    if (plansWithUnknownCards.size > 0) addIssue('error', 'learning_page_plan_unknown_source_cards', `学习页计划引用了未知 required source cards：${Array.from(plansWithUnknownCards).slice(0, 8).join(', ')}。`, learningPagePlanPath)
+    if (plansWithoutSlots.length > 0) addIssue('warning', 'learning_page_plan_missing_content_slots', `${plansWithoutSlots.length} 条学习页计划没有 content_slots，后续审计难以判断正文意图。`, learningPagePlanPath)
   }
 
   if (capabilityRequired(contract, 'candidate_source_cards')) {
@@ -690,7 +757,6 @@ function checkStrictEvidenceCapabilities(
     }
   }
 
-  const requiredCardIds = new Set<string>()
   if (capabilityRequired(contract, 'required_source_cards')) {
     if (requiredCards.files.length === 0) {
       addIssue('error', 'required_source_cards_missing', 'strict 合同要求 required source cards，但 required 目录没有 .json/.jsonl。', requiredCardsPath)
@@ -703,9 +769,10 @@ function checkStrictEvidenceCapabilities(
     const cardsWithoutId = requiredCards.records.filter((record) => !recordId(record, ['card_id', 'source_card_id', 'id']))
     const cardsWithoutSource = requiredCards.records.filter((record) => sourceEntryRefs(record).length === 0 && blockRefs(record).length === 0)
     const cardsWithoutSnapshot = requiredCards.records.filter((record) => !hasLockedEvidenceSnapshot(record))
+    const requiredCardsWithUnknownCandidates = new Set<string>()
     for (const record of requiredCards.records) {
-      const id = recordId(record, ['card_id', 'source_card_id', 'id'])
-      if (id) requiredCardIds.add(id)
+      const candidateId = sanitizeDisplayText(record.candidate_card_id ?? record.candidate_id ?? '')
+      if (candidateId && candidateCardIds.size > 0 && !candidateCardIds.has(candidateId)) requiredCardsWithUnknownCandidates.add(candidateId)
     }
     const sourceRefValidation = validateSourceRefs(requiredCards.records, sourceIndexSummary)
     if (cardsWithoutId.length > 0) addIssue('error', 'required_source_cards_missing_id', `${cardsWithoutId.length} 条 required source card 缺少 card_id/source_card_id。`, requiredCardsPath)
@@ -716,6 +783,9 @@ function checkStrictEvidenceCapabilities(
     }
     if (sourceRefValidation.unknownBlocks.size > 0) {
       addIssue('error', 'required_source_cards_unknown_blocks', `required source cards 指向未知 block_ids：${Array.from(sourceRefValidation.unknownBlocks).slice(0, 8).join(', ')}。`, requiredCardsPath)
+    }
+    if (requiredCardsWithUnknownCandidates.size > 0) {
+      addIssue('error', 'required_source_cards_unknown_candidates', `required source cards 回指了未知 candidate cards：${Array.from(requiredCardsWithUnknownCandidates).slice(0, 8).join(', ')}。`, requiredCardsPath)
     }
   }
 
@@ -740,24 +810,43 @@ function checkStrictEvidenceCapabilities(
 
     const claimsWithoutText = publishedClaims.records.filter((record) => !sanitizeDisplayText(record.claim ?? record.text ?? record.statement ?? ''))
     const claimsWithoutCards = publishedClaims.records.filter((record) => sourceCardRefs(record).length === 0)
+    const claimsWithoutHeading = publishedClaims.records.filter((record) => !recordTargetHeading(record))
+    const unknownClaimHeadings = new Set<string>()
     const unknownCardRefs = new Set<string>()
+    const cardsNotPlannedForHeading = new Set<string>()
     for (const record of publishedClaims.records) {
+      const normalizedHeading = normalizeLearningUnitHeading(recordTargetHeading(record))
+      if (normalizedHeading) {
+        publishedClaimHeadingSet.add(normalizedHeading)
+        if (learningUnitHeadingSet.size > 0 && !learningUnitHeadingSet.has(normalizedHeading)) unknownClaimHeadings.add(recordTargetHeading(record))
+      }
+      const plannedCards = pagePlanCardRefsByHeading.get(normalizedHeading)
       for (const cardId of sourceCardRefs(record)) {
         if (requiredCardIds.size > 0 && !requiredCardIds.has(cardId)) unknownCardRefs.add(cardId)
+        if (plannedCards && plannedCards.size > 0 && !plannedCards.has(cardId)) cardsNotPlannedForHeading.add(`${recordTargetHeading(record)} -> ${cardId}`)
       }
     }
+    const headingsWithoutClaims = normalizedLearningUnitHeadings.filter((heading) => !publishedClaimHeadingSet.has(heading))
     if (claimsWithoutText.length > 0) addIssue('error', 'published_claims_missing_text', `${claimsWithoutText.length} 条 published claim 缺少 claim/text/statement。`, publishedClaimsPath)
     if (claimsWithoutCards.length > 0) addIssue('error', 'published_claims_missing_source_cards', `${claimsWithoutCards.length} 条 published claim 缺少 required_source_card_ids/source_card_ids。`, publishedClaimsPath)
+    if (claimsWithoutHeading.length > 0) addIssue('error', 'published_claims_missing_target_heading', `${claimsWithoutHeading.length} 条 published claim 缺少 target_heading/heading/title。`, publishedClaimsPath)
+    if (unknownClaimHeadings.size > 0) addIssue('error', 'published_claims_unknown_target_heading', `published claims 指向 learning_notes.md 中不存在的标题：${Array.from(unknownClaimHeadings).slice(0, 8).join('、')}。`, publishedClaimsPath)
+    if (headingsWithoutClaims.length > 0) addIssue('error', 'published_claims_missing_for_units', `${headingsWithoutClaims.length} 个最终学习单位没有对应 published claims。`, publishedClaimsPath)
     if (unknownCardRefs.size > 0) {
       addIssue('error', 'published_claims_unknown_source_cards', `published claims 指向未知 required source cards：${Array.from(unknownCardRefs).slice(0, 8).join(', ')}。`, publishedClaimsPath)
+    }
+    if (cardsNotPlannedForHeading.size > 0) {
+      addIssue('error', 'published_claims_cards_not_in_page_plan', `published claims 使用了未列入对应学习页计划的证据卡：${Array.from(cardsNotPlannedForHeading).slice(0, 8).join('; ')}。`, publishedClaimsPath)
     }
   }
 
   return {
     learningPagePlanUnits: learningPlans.records.length,
+    learningPagePlanMatchedUnits: pagePlanHeadingSet.size,
     candidateSourceCardCount: candidateCards.records.length,
     requiredSourceCardCount: requiredCards.records.length,
     publishedClaimCount: publishedClaims.records.length,
+    publishedClaimTargetUnits: publishedClaimHeadingSet.size,
   }
 }
 
@@ -864,6 +953,7 @@ export function validateMaterialPackageArtifacts(
   let shortSectionCount = 0
   let shortSectionRatio = 0
   let minimumLearningNotesPlainChars = 0
+  let learningUnitHeadings: string[] = []
   const requiredTopicCount = countRequiredTopics(materialPath)
 
   if (fs.existsSync(learningNotesPath)) {
@@ -874,6 +964,10 @@ export function validateMaterialPackageArtifacts(
     const h1Count = headings.filter((heading) => heading.level === 1).length
     h2Count = headings.filter((heading) => heading.level === 2).length
     h3Count = headings.filter((heading) => heading.level === 3).length
+    const learningUnitHeadingLevel = h3Count > 0 ? 3 : 2
+    learningUnitHeadings = headings
+      .filter((heading) => heading.level === learningUnitHeadingLevel)
+      .map((heading) => heading.title)
     const h4PlusCount = headings.filter((heading) => heading.level >= 4).length
     const functionalH3Titles = headings
       .filter((heading) => heading.level === 3)
@@ -965,6 +1059,7 @@ export function validateMaterialPackageArtifacts(
     contract,
     isProductionWritten(stage, runState),
     learningUnitCount,
+    learningUnitHeadings,
     requiredTopicCount,
     sourceIndexSummary,
     addIssue,
@@ -1030,9 +1125,11 @@ export function validateMaterialPackageArtifacts(
     learning_notes_trace_links: learningNotesTraceLinks,
     chapter_mindmap_trace_links: chapterMindmapTraceLinks,
     learning_page_plan_units: strictEvidenceSummary.learningPagePlanUnits,
+    learning_page_plan_matched_units: strictEvidenceSummary.learningPagePlanMatchedUnits,
     candidate_source_card_count: strictEvidenceSummary.candidateSourceCardCount,
     required_source_card_count: strictEvidenceSummary.requiredSourceCardCount,
     published_claim_count: strictEvidenceSummary.publishedClaimCount,
+    published_claim_target_units: strictEvidenceSummary.publishedClaimTargetUnits,
     quality_audit_report_exists: qualityAuditStatus.exists,
     quality_audit_result: qualityAuditStatus.result,
   }
@@ -1078,7 +1175,7 @@ export function validateMaterialPackageArtifacts(
     : new Date().toISOString()
 
   const report: MaterialValidationReport = {
-    schema_version: 'shijie.material-validation.v0.2',
+    schema_version: 'shijie.material-validation.v0.3',
     generated_at: generatedAt,
     material_id: materialId,
     material_path: materialPath,

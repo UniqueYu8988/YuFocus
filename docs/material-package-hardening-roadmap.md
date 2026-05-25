@@ -101,7 +101,7 @@ material_ready
 - `content_draft/review_exports/`：validator、只读审计、golden eval、压力测试报告。
 - `learning_notes.md` / `chapter_mindmap.md`：学习台最终读取的干净正文。
 
-strict 证据目录不是面向学生的内容，也不是提示词模板。它们只回答三个工程问题：最终每个可打开学习单位是否先有计划；关键判断是否有冻结的原文证据；正文里已经发布的 claim 是否能回指到这些证据。
+strict 证据目录不是面向学生的内容，也不是提示词模板。它们只回答三个工程问题：最终每个可打开学习单位是否先有计划；关键判断是否有冻结的原文证据；正文里已经发布的 claim 是否能回指到这些证据。第三阶段开始，validator 还会核对这些旁路记录的 `target_heading` 是否匹配最终 `learning_notes.md` 的真实学习单位标题，避免证据链和正文各写各的。
 
 ## 旁路追溯规则
 
@@ -288,4 +288,5 @@ content_draft/review_exports/quality_audit_report.md
 - 第二阶段开始：软件生成 `indexes/source_index.jsonl`，提供 block 级 source entry；Codex 最终收口时填写 `indexes/learning_notes_trace.json` 与 `indexes/chapter_mindmap_trace.json`。validator 对长材料检查 trace map，避免“正文看似完整但来源链不可审计”。
 - 第三阶段开始：标准只读审计产物改为 `content_draft/review_exports/quality_audit_report.md`，用 `audit_result: pass | needs_fix | blocked` 作为机器可读结果；validator 只在 `pipeline_ready=true` 且审计通过时设置 `audit_ready=true`。
 - 第五阶段第二步开始：新材料包的 profile 升到 `v8.2 strict`，`learning_page_plans`、candidate/required `source_cards`、`published_claims` 从预留目录升级为 deterministic gate。旧包缺失合同仍补 legacy，不会被静默升级为 strict。
+- 第五阶段第三步开始：strict gate 增加学习单位交叉审计，要求 page plan、published claims 和最终 Markdown 标题一一对齐；claim 使用的 required source card 也要在同一学习单位的 page plan 中出现。
 - 第四阶段开始：新增 `src/eval_material_pipeline.py`，生成 30 万字 synthetic 材料包并跑 golden cases，覆盖 valid ready、正文过薄、trace 为空、trace 指向未知 block、审计 needs_fix 等情况。报告写入 `output/evals/synthetic_300k/synthetic_300k_report.json`。
