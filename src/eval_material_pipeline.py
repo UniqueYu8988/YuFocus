@@ -95,6 +95,62 @@ def _normalize_heading(value: str) -> str:
     return re.sub(r"\s+", "", re.sub(r"^#{1,6}\s+", "", value.strip())).lower()
 
 
+BOILERPLATE_LABELS = [
+    "复盘抓手",
+    "题干信号",
+    "易错边界",
+    "迁移练习",
+    "考前自问",
+    "答题路径",
+    "最后校准",
+]
+
+BOILERPLATE_PHRASES = [
+    "复习时先把题干改写成一个判断任务",
+    "看到这些词时，不要只做名词匹配",
+    "考试常用一个共同词制造干扰",
+    "做题时可以按“三步走”",
+    "读完这一页后，用 30 秒问自己三件事",
+    "先找定位词，再找限定词，最后找排除词",
+    "若本页内容看似简单",
+]
+
+
+def _h3_sections(markdown: str) -> list[str]:
+    matches = list(re.finditer(r"^###\s+(.+?)\s*$", markdown, flags=re.MULTILINE))
+    sections: list[str] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+        sections.append(markdown[match.start():end])
+    return sections
+
+
+def _check_boilerplate(markdown: str, error) -> None:
+    sections = _h3_sections(markdown)
+    if not sections:
+        return
+    threshold = max(3, math.ceil(len(sections) * 0.2))
+    repeated_labels = 0
+    repeated_phrases = 0
+    boilerplate_chars = 0
+    plain = _plain_length(markdown)
+    for label in BOILERPLATE_LABELS:
+        coverage = sum(1 for section in sections if re.search(rf"(?:^|\*\*)\s*{re.escape(label)}\s*[：:]", section, flags=re.MULTILINE))
+        if coverage >= threshold:
+            repeated_labels += 1
+    for phrase in BOILERPLATE_PHRASES:
+        coverage = sum(1 for section in sections if phrase in section)
+        if coverage >= threshold:
+            repeated_phrases += 1
+            boilerplate_chars += len(phrase) * coverage
+    if repeated_labels:
+        error("repeated_section_template_too_high", f"{repeated_labels} repeated boilerplate labels")
+    if repeated_phrases:
+        error("repeated_boilerplate_phrases", f"{repeated_phrases} repeated boilerplate phrases")
+    if plain and boilerplate_chars / plain > 0.12:
+        error("boilerplate_ratio_too_high", f"boilerplate chars {boilerplate_chars} / {plain}")
+
+
 def _median(values: list[int]) -> int:
     if not values:
         return 0
@@ -380,6 +436,8 @@ def _evaluate_package(material_path: Path) -> dict[str, Any]:
                 error("learning_units_too_short", f"median h3 length {median_h3} < 650")
         if re.search(r"source_refs?|block_\d{3,}|raw offset|raw_offset|debug", notes, flags=re.IGNORECASE):
             error("learning_notes_has_debug_refs", "learning notes expose backend refs")
+        if long_material:
+            _check_boilerplate(notes, error)
 
     if not mindmap_path.exists() or len(mindmap_path.read_text(encoding="utf-8").strip()) < 240:
         error("chapter_mindmap_missing_or_short", "chapter_mindmap.md is missing or too short")
@@ -523,19 +581,47 @@ def _source_block_ids(material_path: Path) -> list[str]:
 def _make_learning_notes(mode: str, block_ids: list[str]) -> str:
     if mode == "thin":
         section_chars = 260
+    elif mode == "boilerplate":
+        section_chars = 2_500
     else:
         section_chars = 2_500
+    unique_terms = [
+        ("enamel prism", "mineral boundary", "occlusal surface"),
+        ("dentin tubule", "pulpal end", "sclerotic response"),
+        ("cementum fiber", "periodontal ligament", "alveolar socket"),
+        ("oral mucosa", "keratin layer", "lamina propria"),
+        ("salivary duct", "striated duct", "serous acinus"),
+        ("facial process", "palatal shelf", "fusion line"),
+        ("tooth germ", "enamel organ", "dental papilla"),
+        ("developmental cyst", "epithelial remnant", "anatomic location"),
+        ("odontogenic cyst", "keratin lining", "satellite cyst"),
+        ("ameloblastoma", "tumor island", "local invasion"),
+        ("squamous carcinoma", "keratin pearl", "cellular atypia"),
+        ("pigmented lesion", "basal layer", "melanin distribution"),
+    ]
     sections: list[str] = ["# Synthetic 300k Learning Notes Eval", ""]
     for chapter_index in range(1, 5):
         sections.extend([f"## Chapter {chapter_index}: Synthetic Learning Route", ""])
         for section_index in range(1, 4):
             global_index = (chapter_index - 1) * 3 + section_index
+            term_a, term_b, term_c = unique_terms[(global_index - 1) % len(unique_terms)]
             seed = (
                 f"### {chapter_index}.{section_index} Complete learning unit {global_index}\n\n"
-                "This unit states the learning problem, explains the mechanism, gives a concrete example, "
-                "marks the boundary against a nearby idea, and leaves a review hook for later reading. "
-                "It is synthetic text for protocol testing, not product content. "
+                f"This synthetic page follows {term_a}, connects it with {term_b}, and then checks {term_c}. "
+                f"The mechanism is written with page-specific words for unit {global_index}: {term_a} controls the source, "
+                f"{term_b} explains the boundary, and {term_c} gives the review anchor. "
+                f"A nearby misconception is separated by the local relation between {term_a} and {term_b}. "
             )
+            if mode == "boilerplate":
+                seed += (
+                    "\n\n**复盘抓手：** 复习时先把题干改写成一个判断任务，确认它到底在问结构位置、形成过程、镜下表现、病变来源，还是分化程度。"
+                    "\n\n**题干信号：** 看到这些词时，不要只做名词匹配，要顺手说出为什么。"
+                    "\n\n**易错边界：** 考试常用一个共同词制造干扰，第二个证据才是定向线索。"
+                    "\n\n**迁移练习：** 做题时可以按“三步走”：先定位章节和结构，再圈出题干触发词，最后排除一个最像但边界不对的选项。"
+                    "\n\n**考前自问：** 读完这一页后，用 30 秒问自己三件事。"
+                    "\n\n**答题路径：** 先找定位词，再找限定词，最后找排除词。"
+                    "\n\n**最后校准：** 若本页内容看似简单，也要把它放回整张知识树里确认一次。"
+                )
             sections.append(_repeat_to_length(seed, section_chars))
             sections.append("")
     return "\n".join(sections)
@@ -778,6 +864,7 @@ def run_eval(output_dir: Path, target_chars: int) -> dict[str, Any]:
         CaseSpec("fake_ready_missing_strict_evidence", False, False, "adequate", "valid", "pass", "missing"),
         CaseSpec("fake_ready_orphan_evidence_heading", False, False, "adequate", "valid", "pass", "unknown_heading"),
         CaseSpec("fake_ready_claim_card_mismatch", False, False, "adequate", "valid", "pass", "unplanned_claim_card"),
+        CaseSpec("fake_ready_boilerplate_padding", False, False, "boilerplate", "valid", "pass", "valid"),
         CaseSpec("audit_needs_fix", True, False, "adequate", "valid", "needs_fix", "valid"),
     ]
 

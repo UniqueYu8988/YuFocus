@@ -6,6 +6,14 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 
 学习台不适合承载很多可点击层级。正文只规划用户真正需要打开阅读的层级：短材料可以直接写成 `# 标题 + 若干 ## 学习小节`；中长材料使用 `# 标题 + ## 大章节 + ### 完整小节`。更细的知识点留在同一小节内，用加粗短标题、列表、表格、机制卡、案例卡或误区边界自然排版。
 
+## 有效内容判断
+
+`learning_notes.md` 是学科内容，不是通用学习方法手册。长度不足时，先回到本页 dossier、required source cards 和相关 blocks，补充本页专属的医学内容，例如组织来源、发生位置、镜下特点、机制链、鉴别边界、题干触发词、具体数值、分型、层次、细胞、基质或病变边界。
+
+一个段落如果换到另一个 H3 也基本成立，它就不是本节有效内容，应移到旁路复查或删除。学习页可以自然出现考试提示，但提示必须绑定具体医学对象，例如某个衬里、角化、导管、细胞异型性、周数、结构位置或疾病边界；通用的“先找关键词、注意陷阱、考前自问”不能用来补长度。
+
+`content_slots` 是旁路写作责任，不是正文固定栏目。正文结构应服从本节知识本身；如果证据不足以深写，应停在 `needs_evidence_expansion` 或 `needs_deepening`，而不是用通用复盘话术加厚。
+
 ## 状态语义
 
 `material_ready`：软件已生成原材料包，等待 Codex。
@@ -71,7 +79,7 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 
 不要因为完成了一个阶段就汇报“Goal 已完成”。学习笔记、章节思维导图、概念图、复查文件齐备，且 `run_state.stage = learning_notes_ready` 时，只能说生产侧写完。`pipeline_ready` 和最终导入资格由软件 deterministic validator 按 `validation_contract.json` 决定；validator 失败时应保留 `pipeline_ready=false` 并继续修复。
 
-新材料包默认使用 v8.2 strict contract。strict 不要求正文暴露后台证据，但要求旁路证据链完整：学习页计划、候选 source cards、最终 required source cards 和 published claims 都必须能被 validator 读取。旧包如果缺少合同，软件会补 `legacy_compatible`，只用于诊断，不代表新标准通过。
+新材料包默认使用 v8.3 content-specific strict contract。strict 不要求正文暴露后台证据，但要求旁路证据链完整：学习页计划、候选 source cards、最终 required source cards 和 published claims 都必须能被 validator 读取。v8.3 还会检查学生正文是否用通用学习话术、重复复盘模板或跨小节高相似段落来补足长度；这些内容不计入有效医学内容。旧包如果缺少合同，软件会补 `legacy_compatible`，只用于诊断，不代表新标准通过。
 
 ## 学习台呈现策略
 

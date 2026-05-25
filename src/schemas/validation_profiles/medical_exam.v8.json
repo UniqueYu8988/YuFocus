@@ -1,5 +1,5 @@
 {
-  "contract_version": "v8.2",
+  "contract_version": "v8.3",
   "profile": "medical_exam",
   "mode": "strict",
   "capabilities": {
@@ -23,7 +23,16 @@
     "min_chars_per_required_topic": 350,
     "short_h3_threshold": 800,
     "short_h3_ratio_limit": 0.15,
-    "h3_median_floor": 1200
+    "h3_median_floor": 1200,
+    "effective_medical_chars_floor": 30000,
+    "min_effective_medical_chars_per_h3": 850,
+    "h3_median_effective_medical_chars_floor": 1000
+  },
+  "anti_padding_policy": {
+    "max_boilerplate_ratio": 0.12,
+    "max_repeated_sentence_ratio": 0.08,
+    "max_repeated_subheading_coverage": 0.2,
+    "max_boilerplate_phrase_coverage": 0.2
   },
   "h3_policy": {
     "target_range": [20, 35],

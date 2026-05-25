@@ -81,6 +81,8 @@ ready 需要长期拆分为内部三层：`pipeline_ready` 表示 deterministic 
 
 2026-05-25 第五阶段底座开始将规则合同化：新材料包生成 `validation_contract.json`，由项目 profile resolved snapshot 派生；旧包在刷新/验证时自动补 `legacy_compatible` contract。桌面端新增可命令行运行的 validator：`cd desktop && npm run validate:material -- "<材料包路径>"`。validator 按 contract 写 `validation_report.json`，并把 `semantic_status`、`repair_intent`、`blocking_reason_codes` 和 `pipeline_ready` 摘要同步回根目录 `run_state.json`。第二步已把新材料包 profile 升为 `v8.2 strict`：`learning_page_plans`、candidate/required `source_cards`、`published_claims` 都是最终导入门禁；旧包不会被静默升级，只用于 legacy 诊断。
 
+2026-05-25 第五阶段第四步把 profile 升为 `v8.3 content-specific strict`：validator 不再只看正文总字数和旁路证据是否齐备，还会扣除通用学习话术、重复复盘模板和跨学习单位高相似句群，计算 `effective_medical_chars`。如果一个段落换到别的 H3 也基本成立，就不能用来补足长材料厚度；真实修复应回到 dossier/source cards/blocks 增加本节专属医学内容。对应失败应进入 `needs_content_rewrite` 或 `needs_deepening`，而不是把 `learning_notes_ready` 当完成。
+
 2026-05-25 第五阶段第三步开始增强 strict 交叉审计：validator 不只检查证据文件存在，还会把 `learning_page_plans` 和 `published_claims` 的 `target_heading` 与最终 `learning_notes.md` 真实学习单位标题对齐；每个最终学习单位都应有 page plan 和 published claim，claim 使用的 required source card 应出现在同一学习单位的 page plan 中。这是为了防止旁路证据对应旧标题、旧草稿或另一套结构。
 
 2026-05-24 第二阶段底座开始加入旁路追溯：软件在材料包生成时写 `indexes/source_index.jsonl`，Codex 在最终收口时写 `indexes/learning_notes_trace.json` 和 `indexes/chapter_mindmap_trace.json`。学生正文仍保持干净，不暴露 block/source/debug；validator 用 trace map 判断长材料是否具备可审计来源链。

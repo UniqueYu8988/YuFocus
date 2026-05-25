@@ -1034,6 +1034,9 @@ def _build_validation_contract(
             "short_h3_threshold": 400,
             "short_h3_ratio_limit": 0.25,
             "h3_median_floor": 700,
+            "effective_medical_chars_floor": 9_000,
+            "min_effective_medical_chars_per_h3": 500,
+            "h3_median_effective_medical_chars_floor": 600,
         },
         "technical_tutorial": {
             "absolute_floor": 18_000,
@@ -1043,6 +1046,9 @@ def _build_validation_contract(
             "short_h3_threshold": 600,
             "short_h3_ratio_limit": 0.2,
             "h3_median_floor": 900,
+            "effective_medical_chars_floor": 15_000,
+            "min_effective_medical_chars_per_h3": 700,
+            "h3_median_effective_medical_chars_floor": 800,
         },
         "medical_exam": {
             "absolute_floor": 36_000,
@@ -1052,6 +1058,9 @@ def _build_validation_contract(
             "short_h3_threshold": 800,
             "short_h3_ratio_limit": 0.15,
             "h3_median_floor": 1_200,
+            "effective_medical_chars_floor": 30_000,
+            "min_effective_medical_chars_per_h3": 850,
+            "h3_median_effective_medical_chars_floor": 1_000,
         },
     }
     capabilities = {
@@ -1072,7 +1081,7 @@ def _build_validation_contract(
     contract = {
         **profile_payload,
         "schema_version": "shijie.validation-contract.v0.1",
-        "contract_version": str(profile_payload.get("contract_version") or "v8.2"),
+        "contract_version": str(profile_payload.get("contract_version") or "v8.3"),
         "mode": str(profile_payload.get("mode") or "strict"),
         "profile": profile,
         "material_id": material_id,
@@ -1082,10 +1091,18 @@ def _build_validation_contract(
         "capabilities": profile_payload.get("capabilities") if isinstance(profile_payload.get("capabilities"), dict) else capabilities,
         "required_checks": profile_payload.get("required_checks") if isinstance(profile_payload.get("required_checks"), list) else required_checks,
         "length_policy": length_policy,
+        "anti_padding_policy": profile_payload.get("anti_padding_policy")
+        if isinstance(profile_payload.get("anti_padding_policy"), dict)
+        else {
+            "max_boilerplate_ratio": 0.12 if profile == "medical_exam" else 0.14,
+            "max_repeated_sentence_ratio": 0.08 if profile == "medical_exam" else 0.1,
+            "max_repeated_subheading_coverage": 0.2 if profile == "medical_exam" else 0.25,
+            "max_boilerplate_phrase_coverage": 0.2 if profile == "medical_exam" else 0.25,
+        },
         "resolved_rules": {
             "new_material_contract": True,
             "strict_features_required": True,
-            "notes": "v8.2 strict 合同要求 learning_page_plan、candidate/required source_cards 和 published_claims，最终导入前由软件 validator 检查。",
+            "notes": "v8.3 strict 合同要求学习页证据链和反模板化有效内容检查，最终导入前由软件 validator 检查。",
         },
     }
     return contract
@@ -1134,7 +1151,7 @@ def _write_authoring_workspace(material_dir: str, *, course_title: str, material
         "",
         "软件已生成 `indexes/source_index.jsonl`。最终收口时请把正文和导图来源写入 `indexes/learning_notes_trace.json`、`indexes/chapter_mindmap_trace.json`；学生正文保持干净，不写 block/source/debug 信息。",
         "",
-        "本材料包默认按 v8.2 strict contract 生产：最终收口前需要写出 `content_draft/work/learning_page_plans/`、`content_draft/work/source_cards/candidates/`、`content_draft/work/source_cards/required/` 和 `content_draft/work/published_claims/` 的可解析旁路证据，学生正文仍保持干净。",
+        "本材料包默认按 v8.3 content-specific strict contract 生产：最终收口前需要写出 `content_draft/work/learning_page_plans/`、`content_draft/work/source_cards/candidates/`、`content_draft/work/source_cards/required/` 和 `content_draft/work/published_claims/` 的可解析旁路证据；学生正文必须是本节专属医学内容，通用学习话术、重复复盘模板和跨小节高相似段落不能用来补足长度。",
         "",
         "最终收口后请回到项目根目录运行 `cd desktop && npm run validate:material -- \"<本材料包路径>\"`。只有 validator 写入 `pipeline_ready=true` 才能说工程上可导入；如果失败，按 validation_report 的 `repair_intent` 和 `blocking_reason_codes` 继续修复。",
         "",
@@ -1326,7 +1343,7 @@ def _write_handoff_files(
             "4. `coverage_ready`：Codex 按知识树分支回读 blocks，写 `block_reread_ledger.jsonl`、`section_dossiers/*.md` 和 `thinness_review.md`，停在 `dossier_ready`。",
             "5. `dossier_ready` 或 `partial_learning_notes`：Codex 每轮只深写 1-2 个知识树分支，逐步合并 `learning_notes.md`。",
             "6. 全部高价值分支通过结构复查和 thinness review 后，Codex 写入 `chapter_mindmap.md`、trace map，并标记 `learning_notes_ready`。",
-            "7. 回到项目根目录运行 `cd desktop && npm run validate:material -- <材料包路径>` 或刷新工作台；只有 validator 写入 `pipeline_ready=true`，才算工程上可导入学习台。v8.2 strict 新包会检查学习页计划、candidate/required source cards 和 published claims。",
+            "7. 回到项目根目录运行 `cd desktop && npm run validate:material -- <材料包路径>` 或刷新工作台；只有 validator 写入 `pipeline_ready=true`，才算工程上可导入学习台。v8.3 strict 新包会检查学习页计划、candidate/required source cards、published claims、有效医学内容和反模板化指标。",
             "",
             "## 关键文件",
             "",

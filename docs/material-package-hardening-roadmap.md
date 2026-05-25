@@ -39,7 +39,7 @@ material_ready
 - `audit_ready`：只读质量审计没有发现高风险，或人工确认通过。
 - `release_ready`：产品层允许进入正式学习台展示，不能由 Codex 主观设置。
 
-`learning_notes_ready` 以后不应单独等于“可以放心导入”。至少应配合 `pipeline_ready = true`。validator 失败时，根目录 `run_state.json` 只保留 `repair_intent`、`blocking_reason_codes` 和报告指针，完整原因写入 `content_draft/review_exports/validation_report.json`。v8.2 新包默认 strict，除了核心文件和 trace，还要求学习页计划、candidate/required source cards 和 published claims 可解析、可追溯。
+`learning_notes_ready` 以后不应单独等于“可以放心导入”。至少应配合 `pipeline_ready = true`。validator 失败时，根目录 `run_state.json` 只保留 `repair_intent`、`blocking_reason_codes` 和报告指针，完整原因写入 `content_draft/review_exports/validation_report.json`。v8.3 新包默认 content-specific strict，除了核心文件和 trace，还要求学习页计划、candidate/required source cards 和 published claims 可解析、可追溯，并把通用学习话术、重复模板和跨学习单位高相似句群从有效内容中扣除。
 
 ## 目录职责
 
@@ -289,4 +289,5 @@ content_draft/review_exports/quality_audit_report.md
 - 第三阶段开始：标准只读审计产物改为 `content_draft/review_exports/quality_audit_report.md`，用 `audit_result: pass | needs_fix | blocked` 作为机器可读结果；validator 只在 `pipeline_ready=true` 且审计通过时设置 `audit_ready=true`。
 - 第五阶段第二步开始：新材料包的 profile 升到 `v8.2 strict`，`learning_page_plans`、candidate/required `source_cards`、`published_claims` 从预留目录升级为 deterministic gate。旧包缺失合同仍补 legacy，不会被静默升级为 strict。
 - 第五阶段第三步开始：strict gate 增加学习单位交叉审计，要求 page plan、published claims 和最终 Markdown 标题一一对齐；claim 使用的 required source card 也要在同一学习单位的 page plan 中出现。
+- 第五阶段第四步开始：profile 升到 `v8.3 content-specific strict`，新增有效学科内容和反模板填充指标。长材料如果靠每节重复的“复盘抓手、答题路径、考前自问”等通用话术凑够字数，validator 应标记 `needs_content_rewrite`，不允许导入。
 - 第四阶段开始：新增 `src/eval_material_pipeline.py`，生成 30 万字 synthetic 材料包并跑 golden cases，覆盖 valid ready、正文过薄、trace 为空、trace 指向未知 block、审计 needs_fix 等情况。报告写入 `output/evals/synthetic_300k/synthetic_300k_report.json`。

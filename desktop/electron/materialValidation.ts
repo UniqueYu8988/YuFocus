@@ -10,7 +10,7 @@ export type MaterialValidationIssue = {
 }
 
 export type MaterialValidationReport = {
-  schema_version: 'shijie.material-validation.v0.3'
+  schema_version: 'shijie.material-validation.v0.4'
   generated_at: string
   material_id: string
   material_path: string
@@ -38,10 +38,20 @@ export type MaterialValidationReport = {
     warning_count: number
     learning_notes_chars: number
     learning_notes_plain_chars: number
+    effective_medical_chars: number
+    minimum_effective_medical_chars: number
+    boilerplate_chars: number
+    boilerplate_ratio: number
+    repeated_boilerplate_phrase_count: number
+    repeated_subheading_count: number
+    repeated_sentence_count: number
+    repeated_sentence_ratio: number
     chapter_count: number
     section_count: number
     shortest_section_chars: number
     median_section_chars: number
+    shortest_effective_section_chars: number
+    median_effective_section_chars: number
     short_section_count: number
     short_section_ratio: number
     minimum_learning_notes_plain_chars: number
@@ -76,6 +86,15 @@ type ValidationProfile = {
     short_h3_threshold: number
     short_h3_ratio_limit: number
     h3_median_floor: number
+    effective_medical_chars_floor?: number
+    min_effective_medical_chars_per_h3?: number
+    h3_median_effective_medical_chars_floor?: number
+  }
+  anti_padding_policy?: {
+    max_boilerplate_ratio?: number
+    max_repeated_sentence_ratio?: number
+    max_repeated_subheading_coverage?: number
+    max_boilerplate_phrase_coverage?: number
   }
   h3_policy?: {
     target_range?: [number, number]
@@ -102,7 +121,7 @@ const VALIDATION_REPORT_PATH = 'content_draft/review_exports/validation_report.j
 
 const DEFAULT_PROFILES: Record<string, ValidationProfile> = {
   lecture: {
-    contract_version: 'v8.2',
+    contract_version: 'v8.3',
     profile: 'lecture',
     mode: 'strict',
     capabilities: {
@@ -127,10 +146,19 @@ const DEFAULT_PROFILES: Record<string, ValidationProfile> = {
       short_h3_threshold: 400,
       short_h3_ratio_limit: 0.25,
       h3_median_floor: 700,
+      effective_medical_chars_floor: 9_000,
+      min_effective_medical_chars_per_h3: 500,
+      h3_median_effective_medical_chars_floor: 600,
+    },
+    anti_padding_policy: {
+      max_boilerplate_ratio: 0.15,
+      max_repeated_sentence_ratio: 0.1,
+      max_repeated_subheading_coverage: 0.25,
+      max_boilerplate_phrase_coverage: 0.25,
     },
   },
   technical_tutorial: {
-    contract_version: 'v8.2',
+    contract_version: 'v8.3',
     profile: 'technical_tutorial',
     mode: 'strict',
     capabilities: {
@@ -155,10 +183,19 @@ const DEFAULT_PROFILES: Record<string, ValidationProfile> = {
       short_h3_threshold: 600,
       short_h3_ratio_limit: 0.2,
       h3_median_floor: 900,
+      effective_medical_chars_floor: 15_000,
+      min_effective_medical_chars_per_h3: 700,
+      h3_median_effective_medical_chars_floor: 800,
+    },
+    anti_padding_policy: {
+      max_boilerplate_ratio: 0.14,
+      max_repeated_sentence_ratio: 0.09,
+      max_repeated_subheading_coverage: 0.22,
+      max_boilerplate_phrase_coverage: 0.22,
     },
   },
   medical_exam: {
-    contract_version: 'v8.2',
+    contract_version: 'v8.3',
     profile: 'medical_exam',
     mode: 'strict',
     capabilities: {
@@ -183,6 +220,15 @@ const DEFAULT_PROFILES: Record<string, ValidationProfile> = {
       short_h3_threshold: 800,
       short_h3_ratio_limit: 0.15,
       h3_median_floor: 1_200,
+      effective_medical_chars_floor: 30_000,
+      min_effective_medical_chars_per_h3: 850,
+      h3_median_effective_medical_chars_floor: 1_000,
+    },
+    anti_padding_policy: {
+      max_boilerplate_ratio: 0.12,
+      max_repeated_sentence_ratio: 0.08,
+      max_repeated_subheading_coverage: 0.2,
+      max_boilerplate_phrase_coverage: 0.2,
     },
     h3_policy: {
       target_range: [20, 35],
@@ -240,6 +286,18 @@ function stripMarkdownForValidation(markdown: string) {
     .replace(/\s+/gu, '')
 }
 
+function markdownToReadableText(markdown: string) {
+  return markdown
+    .replace(/```[\s\S]*?```/gu, ' ')
+    .replace(/`([^`]+)`/gu, '$1')
+    .replace(/!\[[^\]]*\]\([^)]+\)/gu, ' ')
+    .replace(/\[[^\]]+\]\([^)]+\)/gu, ' ')
+    .replace(/^\s{0,3}#{1,6}\s+/gmu, '')
+    .replace(/[*_>#|`-]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+}
+
 function collectMarkdownHeadings(markdown: string) {
   return Array.from(markdown.matchAll(/^(#{1,6})\s+(.+?)\s*#*\s*$/gmu)).map((match) => ({
     level: match[1].length,
@@ -264,11 +322,172 @@ function collectHeadingBodyLengths(markdown: string, headingLevel: number) {
   })
 }
 
+function collectHeadingSections(markdown: string, headingLevel: number) {
+  const headingPattern = new RegExp(`^#{${headingLevel}}\\s+(.+?)\\s*#*\\s*$`, 'gmu')
+  const headings = Array.from(markdown.matchAll(headingPattern)).map((match) => ({
+    title: match[1].trim(),
+    index: match.index ?? 0,
+  }))
+  return headings.map((heading, index) => {
+    const end = headings[index + 1]?.index ?? markdown.length
+    const markdownBody = markdown.slice(heading.index, end)
+    return {
+      title: heading.title,
+      markdown: markdownBody,
+      plainChars: stripMarkdownForValidation(markdownBody).length,
+      readableText: markdownToReadableText(markdownBody),
+    }
+  })
+}
+
 function median(values: number[]) {
   if (!values.length) return 0
   const sorted = [...values].sort((left, right) => left - right)
   const middle = Math.floor(sorted.length / 2)
   return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2)
+}
+
+const BOILERPLATE_LABELS = [
+  '复盘抓手',
+  '题干信号',
+  '易错边界',
+  '迁移练习',
+  '考前自问',
+  '答题路径',
+  '最后校准',
+  '学习抓手',
+  '快速回顾',
+  '复习建议',
+  '最后复盘',
+]
+
+const BOILERPLATE_PHRASES = [
+  '复习时先把题干改写成一个判断任务',
+  '看到这些词时，不要只做名词匹配',
+  '考试常用一个共同词制造干扰',
+  '做题时可以按“三步走”',
+  '读完这一页后，用 30 秒问自己三件事',
+  '先找定位词，再找限定词，最后找排除词',
+  '若本页内容看似简单',
+  '它到底在问结构位置、形成过程、镜下表现、病变来源，还是分化程度',
+  '定位词告诉你章节',
+  '限定词告诉你层次',
+  '排除词则把最像的错误选项拿掉',
+]
+
+function normalizedSentence(sentence: string) {
+  return sentence
+    .replace(/[0-9０-９]+/gu, '#')
+    .replace(/[^\p{Script=Han}A-Za-z#]+/gu, '')
+    .toLowerCase()
+}
+
+function sentenceCandidates(readableText: string) {
+  return readableText
+    .split(/[。！？!?；;]\s*|\r?\n+/gu)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => normalizedSentence(sentence).length >= 24)
+}
+
+function countOccurrences(haystack: string, needle: string) {
+  if (!needle) return 0
+  let count = 0
+  let index = haystack.indexOf(needle)
+  while (index >= 0) {
+    count += 1
+    index = haystack.indexOf(needle, index + needle.length)
+  }
+  return count
+}
+
+function antiBoilerplateMetrics(
+  sections: Array<{ title: string; markdown: string; plainChars: number; readableText: string }>,
+  policy: NonNullable<ValidationProfile['anti_padding_policy']> = {},
+) {
+  const sectionCount = sections.length
+  const totalPlainChars = sections.reduce((sum, section) => sum + section.plainChars, 0)
+  const phraseCoverageThreshold = Math.max(3, Math.ceil(sectionCount * (policy.max_boilerplate_phrase_coverage ?? 0.2)))
+  const subheadingCoverageThreshold = Math.max(3, Math.ceil(sectionCount * (policy.max_repeated_subheading_coverage ?? 0.2)))
+  const labelCoverage = new Map<string, number>()
+  const phraseCoverage = new Map<string, number>()
+  const sentenceCoverage = new Map<string, Set<number>>()
+  const sentenceText = new Map<string, string>()
+  let boilerplateChars = 0
+
+  const sectionEffectiveChars = sections.map((section, sectionIndex) => {
+    let sectionBoilerplateChars = 0
+    const lines = section.markdown.split(/\r?\n/u)
+    for (const line of lines) {
+      const matchedLabel = BOILERPLATE_LABELS.find((label) => new RegExp(`(?:^|\\*\\*)\\s*${label}\\s*[：:]`, 'u').test(line))
+      if (!matchedLabel) continue
+      labelCoverage.set(matchedLabel, (labelCoverage.get(matchedLabel) ?? 0) + 1)
+      const lineChars = stripMarkdownForValidation(line).length
+      sectionBoilerplateChars += lineChars
+    }
+
+    for (const phrase of BOILERPLATE_PHRASES) {
+      const occurrences = countOccurrences(section.readableText, phrase)
+      if (occurrences > 0) {
+        phraseCoverage.set(phrase, (phraseCoverage.get(phrase) ?? 0) + 1)
+        sectionBoilerplateChars += occurrences * phrase.length
+      }
+    }
+
+    const seenSentences = new Set<string>()
+    for (const sentence of sentenceCandidates(section.readableText)) {
+      const normalized = normalizedSentence(sentence)
+      if (!normalized || seenSentences.has(normalized)) continue
+      seenSentences.add(normalized)
+      const coverage = sentenceCoverage.get(normalized) ?? new Set<number>()
+      coverage.add(sectionIndex)
+      sentenceCoverage.set(normalized, coverage)
+      sentenceText.set(normalized, sentence)
+    }
+
+    boilerplateChars += sectionBoilerplateChars
+    return {
+      title: section.title,
+      plainChars: section.plainChars,
+      initialBoilerplateChars: sectionBoilerplateChars,
+      effectiveChars: Math.max(0, section.plainChars - Math.min(sectionBoilerplateChars, section.plainChars)),
+    }
+  })
+
+  const repeatedLabels = Array.from(labelCoverage.entries()).filter(([, count]) => count >= subheadingCoverageThreshold)
+  const repeatedPhrases = Array.from(phraseCoverage.entries()).filter(([, count]) => count >= phraseCoverageThreshold)
+  let repeatedSentenceChars = 0
+  let repeatedSentenceCount = 0
+  for (const [normalized, coverage] of sentenceCoverage.entries()) {
+    if (coverage.size < subheadingCoverageThreshold) continue
+    repeatedSentenceCount += 1
+    const chars = stripMarkdownForValidation(sentenceText.get(normalized) ?? normalized).length * coverage.size
+    repeatedSentenceChars += chars
+  }
+
+  boilerplateChars = Math.min(totalPlainChars, boilerplateChars + repeatedSentenceChars)
+  const effectiveMedicalChars = Math.max(0, totalPlainChars - boilerplateChars)
+  const repeatedSentenceRatio = totalPlainChars ? Number((repeatedSentenceChars / totalPlainChars).toFixed(3)) : 0
+  const boilerplateRatio = totalPlainChars ? Number((boilerplateChars / totalPlainChars).toFixed(3)) : 0
+  const adjustedSectionEffectiveChars = sectionEffectiveChars.map((section) => {
+    const repeatedPenalty = section.plainChars && totalPlainChars ? Math.round(repeatedSentenceChars * (section.plainChars / totalPlainChars)) : 0
+    return {
+      ...section,
+      effectiveChars: Math.max(0, section.effectiveChars - repeatedPenalty),
+    }
+  })
+
+  return {
+    effectiveMedicalChars,
+    boilerplateChars,
+    boilerplateRatio,
+    repeatedSentenceCount,
+    repeatedSentenceRatio,
+    repeatedBoilerplatePhraseCount: repeatedPhrases.length,
+    repeatedSubheadingCount: repeatedLabels.length,
+    repeatedPhrases,
+    repeatedLabels,
+    sectionEffectiveChars: adjustedSectionEffectiveChars,
+  }
 }
 
 function readSourceIndexSummary(documentPath: string) {
@@ -520,15 +739,38 @@ function normalizeContract(
   const inferredProfile = inferProfile(title, rawLength, blockCount)
 
   if (existing && typeof existing.profile === 'string' && typeof existing.mode === 'string') {
-    const fallback = readProfileFromProject(materialPath, existing.profile).profile
+    const bundledFallback = DEFAULT_PROFILES[sanitizeDisplayText(existing.profile, inferredProfile)] ?? DEFAULT_PROFILES.lecture
+    const projectFallback = readProfileFromProject(materialPath, existing.profile).profile
+    const fallback = {
+      ...bundledFallback,
+      ...projectFallback,
+      capabilities: {
+        ...bundledFallback.capabilities,
+        ...projectFallback.capabilities,
+      },
+      length_policy: {
+        ...bundledFallback.length_policy,
+        ...projectFallback.length_policy,
+      },
+      anti_padding_policy: {
+        ...bundledFallback.anti_padding_policy,
+        ...projectFallback.anti_padding_policy,
+      },
+    }
+    const existingMode = sanitizeDisplayText(existing.mode, 'standard')
+    const existingContractVersion = sanitizeDisplayText(existing.contract_version ?? '')
+    const currentStrictContractVersion = sanitizeDisplayText(bundledFallback.contract_version || fallback.contract_version || existingContractVersion || 'v8.1')
+    const effectiveContractVersion = existingMode === 'legacy_compatible'
+      ? sanitizeDisplayText(existingContractVersion || fallback.contract_version || 'v8.1-legacy')
+      : currentStrictContractVersion
     return {
       ...fallback,
       ...existing,
       schema_version: sanitizeDisplayText(existing.schema_version ?? 'shijie.validation-contract.v0.1'),
-      contract_version: sanitizeDisplayText(existing.contract_version ?? fallback.contract_version ?? 'v8.1'),
+      contract_version: effectiveContractVersion,
       material_id: sanitizeDisplayText(existing.material_id ?? materialId, materialId),
       profile: sanitizeDisplayText(existing.profile, inferredProfile),
-      mode: sanitizeDisplayText(existing.mode, 'standard'),
+      mode: existingMode,
       capabilities: {
         ...fallback.capabilities,
         ...(existing.capabilities && typeof existing.capabilities === 'object' ? existing.capabilities as Record<string, 'optional' | 'required'> : {}),
@@ -537,6 +779,10 @@ function normalizeContract(
       length_policy: {
         ...fallback.length_policy,
         ...(existing.length_policy && typeof existing.length_policy === 'object' ? existing.length_policy as Partial<ValidationProfile['length_policy']> : {}),
+      },
+      anti_padding_policy: {
+        ...fallback.anti_padding_policy,
+        ...(existing.anti_padding_policy && typeof existing.anti_padding_policy === 'object' ? existing.anti_padding_policy as Partial<ValidationProfile['anti_padding_policy']> : {}),
       },
       resolved_at: sanitizeDisplayText(existing.resolved_at ?? new Date().toISOString()),
     }
@@ -592,6 +838,7 @@ function countRequiredTopics(materialPath: string) {
 }
 
 function repairIntentForIssueCodes(codes: string[]) {
+  if (codes.some((code) => /boilerplate|repeated_section_template|effective_medical_chars|effective_chars|cross_h3_repeated/u.test(code))) return 'needs_content_rewrite'
   if (codes.some((code) => /trace|source_index/u.test(code))) return 'needs_trace_repair'
   if (codes.some((code) => /learning_page_plan|target_heading|missing_for_units/u.test(code))) return 'needs_page_plan_repair'
   if (codes.some((code) => /source_cards|evidence|published_claims/u.test(code))) return 'needs_evidence_expansion'
@@ -946,10 +1193,20 @@ export function validateMaterialPackageArtifacts(
 
   let learningNotes = ''
   let learningNotesPlainLength = 0
+  let effectiveMedicalChars = 0
+  let minimumEffectiveMedicalChars = 0
+  let boilerplateChars = 0
+  let boilerplateRatio = 0
+  let repeatedBoilerplatePhraseCount = 0
+  let repeatedSubheadingCount = 0
+  let repeatedSentenceCount = 0
+  let repeatedSentenceRatio = 0
   let h2Count = 0
   let h3Count = 0
   let shortestSectionChars = 0
   let medianSectionChars = 0
+  let shortestEffectiveSectionChars = 0
+  let medianEffectiveSectionChars = 0
   let shortSectionCount = 0
   let shortSectionRatio = 0
   let minimumLearningNotesPlainChars = 0
@@ -985,6 +1242,18 @@ export function validateMaterialPackageArtifacts(
     medianSectionChars = median(h3Lengths)
     shortSectionCount = h3Lengths.filter((chars) => chars < contract.length_policy.short_h3_threshold).length
     shortSectionRatio = h3Lengths.length ? Number((shortSectionCount / h3Lengths.length).toFixed(3)) : 0
+    const learningUnitSections = collectHeadingSections(trimmed, learningUnitHeadingLevel)
+    const antiPadding = antiBoilerplateMetrics(learningUnitSections, contract.anti_padding_policy)
+    effectiveMedicalChars = antiPadding.effectiveMedicalChars
+    boilerplateChars = antiPadding.boilerplateChars
+    boilerplateRatio = antiPadding.boilerplateRatio
+    repeatedBoilerplatePhraseCount = antiPadding.repeatedBoilerplatePhraseCount
+    repeatedSubheadingCount = antiPadding.repeatedSubheadingCount
+    repeatedSentenceCount = antiPadding.repeatedSentenceCount
+    repeatedSentenceRatio = antiPadding.repeatedSentenceRatio
+    const effectiveSectionChars = antiPadding.sectionEffectiveChars.map((section) => section.effectiveChars).filter((chars) => chars > 0)
+    shortestEffectiveSectionChars = effectiveSectionChars.length ? Math.min(...effectiveSectionChars) : 0
+    medianEffectiveSectionChars = median(effectiveSectionChars)
 
     if (/source_refs?|block_\d{3,}|raw offset|raw_offset|debug|字幕证据|制作过程/iu.test(trimmed)) {
       addIssue('error', 'learning_notes_has_debug_refs', 'learning_notes.md 含有 source_ref、block_id 或后台制作词，学生正文不干净。', 'content_draft/learning_notes.md')
@@ -1000,6 +1269,13 @@ export function validateMaterialPackageArtifacts(
         h3Count * contract.length_policy.min_chars_per_h3,
         requiredTopicCount * contract.length_policy.min_chars_per_required_topic,
       ))
+      const minEffectivePerH3 = contract.length_policy.min_effective_medical_chars_per_h3 ?? Math.round(contract.length_policy.min_chars_per_h3 * 0.7)
+      const medianEffectiveFloor = contract.length_policy.h3_median_effective_medical_chars_floor ?? Math.round(contract.length_policy.h3_median_floor * 0.75)
+      minimumEffectiveMedicalChars = Math.round(Math.max(
+        contract.length_policy.effective_medical_chars_floor ?? (minimumLearningNotesPlainChars * 0.75),
+        h3Count * minEffectivePerH3,
+        requiredTopicCount * contract.length_policy.min_chars_per_required_topic * 0.75,
+      ))
       if (learningNotesPlainLength < minimumLearningNotesPlainChars) {
         addIssue(
           'error',
@@ -1008,11 +1284,59 @@ export function validateMaterialPackageArtifacts(
           'content_draft/learning_notes.md',
         )
       }
+      if (effectiveMedicalChars < minimumEffectiveMedicalChars) {
+        addIssue(
+          'error',
+          'effective_medical_chars_too_low',
+          `有效医学内容偏少：扣除通用模板和跨小节重复后约 ${effectiveMedicalChars} 字符，当前 ${contract.profile} 合同建议至少达到约 ${minimumEffectiveMedicalChars} 字符。`,
+          'content_draft/learning_notes.md',
+        )
+      }
+      if (boilerplateRatio > (contract.anti_padding_policy?.max_boilerplate_ratio ?? 0.12)) {
+        addIssue(
+          'error',
+          'boilerplate_ratio_too_high',
+          `通用模板占比过高：约 ${boilerplateRatio}，高于合同上限 ${contract.anti_padding_policy?.max_boilerplate_ratio ?? 0.12}。`,
+          'content_draft/learning_notes.md',
+        )
+      }
+      if (repeatedSubheadingCount > 0) {
+        addIssue(
+          'error',
+          'repeated_section_template_too_high',
+          `检测到 ${repeatedSubheadingCount} 个通用小标题在大量学习单位中重复出现，应改为本节专属医学内容或移到旁路。`,
+          'content_draft/learning_notes.md',
+        )
+      }
+      if (repeatedBoilerplatePhraseCount > 0) {
+        addIssue(
+          'error',
+          'repeated_boilerplate_phrases',
+          `检测到 ${repeatedBoilerplatePhraseCount} 类通用学习话术跨学习单位重复出现，不能计入有效医学内容。`,
+          'content_draft/learning_notes.md',
+        )
+      }
+      if (repeatedSentenceRatio > (contract.anti_padding_policy?.max_repeated_sentence_ratio ?? 0.08)) {
+        addIssue(
+          'error',
+          'cross_h3_repeated_sentence_too_high',
+          `跨学习单位重复句群比例过高：约 ${repeatedSentenceRatio}，高于合同上限 ${contract.anti_padding_policy?.max_repeated_sentence_ratio ?? 0.08}。`,
+          'content_draft/learning_notes.md',
+        )
+      }
       if (h3Count >= 8 && medianSectionChars > 0 && medianSectionChars < contract.length_policy.h3_median_floor) {
         addIssue(
           'error',
           'learning_units_too_short',
           `可打开小节偏短：${h3Count} 个三级小节的中位长度约 ${medianSectionChars} 字符，低于 ${contract.profile} 合同下限 ${contract.length_policy.h3_median_floor}。`,
+          'content_draft/learning_notes.md',
+        )
+      }
+      if (h3Count >= 8 && medianEffectiveSectionChars > 0 && medianEffectiveSectionChars < medianEffectiveFloor) {
+        addIssue(
+          'error',
+          'learning_units_effective_chars_too_low',
+          `可打开小节有效医学内容偏少：${h3Count} 个学习小节的有效中位长度约 ${medianEffectiveSectionChars} 字符，低于 ${contract.profile} 合同下限 ${medianEffectiveFloor}。`,
           'content_draft/learning_notes.md',
         )
       }
@@ -1112,10 +1436,20 @@ export function validateMaterialPackageArtifacts(
     warning_count: warningCount,
     learning_notes_chars: learningNotes.length,
     learning_notes_plain_chars: learningNotesPlainLength,
+    effective_medical_chars: effectiveMedicalChars,
+    minimum_effective_medical_chars: minimumEffectiveMedicalChars,
+    boilerplate_chars: boilerplateChars,
+    boilerplate_ratio: boilerplateRatio,
+    repeated_boilerplate_phrase_count: repeatedBoilerplatePhraseCount,
+    repeated_subheading_count: repeatedSubheadingCount,
+    repeated_sentence_count: repeatedSentenceCount,
+    repeated_sentence_ratio: repeatedSentenceRatio,
     chapter_count: h2Count,
     section_count: h3Count,
     shortest_section_chars: shortestSectionChars,
     median_section_chars: medianSectionChars,
+    shortest_effective_section_chars: shortestEffectiveSectionChars,
+    median_effective_section_chars: medianEffectiveSectionChars,
     short_section_count: shortSectionCount,
     short_section_ratio: shortSectionRatio,
     minimum_learning_notes_plain_chars: minimumLearningNotesPlainChars,
@@ -1175,7 +1509,7 @@ export function validateMaterialPackageArtifacts(
     : new Date().toISOString()
 
   const report: MaterialValidationReport = {
-    schema_version: 'shijie.material-validation.v0.3',
+    schema_version: 'shijie.material-validation.v0.4',
     generated_at: generatedAt,
     material_id: materialId,
     material_path: materialPath,

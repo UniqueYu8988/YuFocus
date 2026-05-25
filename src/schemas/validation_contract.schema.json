@@ -51,7 +51,20 @@
         "min_chars_per_required_topic": { "type": "integer", "minimum": 0 },
         "short_h3_threshold": { "type": "integer", "minimum": 0 },
         "short_h3_ratio_limit": { "type": "number", "minimum": 0, "maximum": 1 },
-        "h3_median_floor": { "type": "integer", "minimum": 0 }
+        "h3_median_floor": { "type": "integer", "minimum": 0 },
+        "effective_medical_chars_floor": { "type": "integer", "minimum": 0 },
+        "min_effective_medical_chars_per_h3": { "type": "integer", "minimum": 0 },
+        "h3_median_effective_medical_chars_floor": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "anti_padding_policy": {
+      "type": "object",
+      "properties": {
+        "max_boilerplate_ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "max_repeated_sentence_ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "max_repeated_subheading_coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "max_boilerplate_phrase_coverage": { "type": "number", "minimum": 0, "maximum": 1 }
       },
       "additionalProperties": false
     },
