@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://shijie-focus.local/schemas/validation_contract.schema.json",
+  "title": "视界专注学习笔记验证合同",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "contract_version",
+    "mode",
+    "profile",
+    "material_id",
+    "capabilities",
+    "required_checks",
+    "length_policy",
+    "resolved_at"
+  ],
+  "properties": {
+    "schema_version": { "const": "shijie.validation-contract.v0.1" },
+    "contract_version": { "type": "string", "minLength": 1 },
+    "mode": { "enum": ["standard", "strict", "legacy_compatible"] },
+    "profile": { "enum": ["lecture", "technical_tutorial", "medical_exam"] },
+    "material_id": { "type": "string", "minLength": 1 },
+    "profile_source": { "type": "string" },
+    "profile_hash": { "type": "string" },
+    "resolved_at": { "type": "string", "minLength": 1 },
+    "upgrade_available": { "type": "boolean" },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": { "enum": ["optional", "required"] }
+    },
+    "required_checks": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "length_policy": {
+      "type": "object",
+      "required": [
+        "absolute_floor",
+        "raw_ratio_floor",
+        "min_chars_per_h3",
+        "min_chars_per_required_topic",
+        "short_h3_threshold",
+        "short_h3_ratio_limit",
+        "h3_median_floor"
+      ],
+      "properties": {
+        "absolute_floor": { "type": "integer", "minimum": 0 },
+        "raw_ratio_floor": { "type": "number", "minimum": 0 },
+        "min_chars_per_h3": { "type": "integer", "minimum": 0 },
+        "min_chars_per_required_topic": { "type": "integer", "minimum": 0 },
+        "short_h3_threshold": { "type": "integer", "minimum": 0 },
+        "short_h3_ratio_limit": { "type": "number", "minimum": 0, "maximum": 1 },
+        "h3_median_floor": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "h3_policy": { "type": "object" },
+    "published_rubric": { "type": "object" },
+    "resolved_rules": { "type": "object" }
+  },
+  "additionalProperties": true
+}

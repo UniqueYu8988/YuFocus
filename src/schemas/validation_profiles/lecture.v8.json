@@ -1,0 +1,37 @@
+{
+  "contract_version": "v8.1",
+  "profile": "lecture",
+  "mode": "standard",
+  "capabilities": {
+    "learning_page_plan": "optional",
+    "candidate_source_cards": "optional",
+    "required_source_cards": "optional",
+    "published_claims": "optional"
+  },
+  "required_checks": [
+    "material_structure",
+    "student_visible_artifacts_exist",
+    "student_text_clean",
+    "long_material_sanity_floor",
+    "learning_units_too_short",
+    "ready_state_layering"
+  ],
+  "length_policy": {
+    "absolute_floor": 12000,
+    "raw_ratio_floor": 0.04,
+    "min_chars_per_h3": 700,
+    "min_chars_per_required_topic": 180,
+    "short_h3_threshold": 400,
+    "short_h3_ratio_limit": 0.25,
+    "h3_median_floor": 700
+  },
+  "published_rubric": {
+    "required_slots": [
+      "definition_or_positioning",
+      "mechanism_or_reasoning",
+      "boundary_or_exception",
+      "example_or_review_question",
+      "traceable"
+    ]
+  }
+}

@@ -1,0 +1,858 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import crypto from 'node:crypto'
+
+export type MaterialValidationIssue = {
+  severity: 'error' | 'warning'
+  code: string
+  message: string
+  path?: string
+}
+
+export type MaterialValidationReport = {
+  schema_version: 'shijie.material-validation.v0.2'
+  generated_at: string
+  material_id: string
+  material_path: string
+  stage: string
+  semantic_status: string
+  validation_status: 'passed' | 'failed' | 'not_ready'
+  contract_version: string
+  contract_mode: string
+  profile: string
+  pipeline_ready: boolean
+  legacy_validation_passed: boolean
+  upgrade_required_for_pipeline_ready: boolean
+  audit_ready: boolean
+  release_ready: boolean
+  repair_intent: string
+  blocking_reasons: Array<{
+    code: string
+    severity: 'blocking'
+    message: string
+    repair_intent: string
+    path?: string
+  }>
+  summary: {
+    error_count: number
+    warning_count: number
+    learning_notes_chars: number
+    learning_notes_plain_chars: number
+    chapter_count: number
+    section_count: number
+    shortest_section_chars: number
+    median_section_chars: number
+    short_section_count: number
+    short_section_ratio: number
+    minimum_learning_notes_plain_chars: number
+    required_topic_count: number
+    long_material: boolean
+    source_index_entries: number
+    learning_notes_trace_links: number
+    chapter_mindmap_trace_links: number
+    quality_audit_report_exists: boolean
+    quality_audit_result: string
+  }
+  issues: MaterialValidationIssue[]
+}
+
+type ValidationProfile = {
+  contract_version: string
+  profile: string
+  mode: string
+  capabilities: Record<string, 'optional' | 'required'>
+  required_checks: string[]
+  length_policy: {
+    absolute_floor: number
+    raw_ratio_floor: number
+    min_chars_per_h3: number
+    min_chars_per_required_topic: number
+    short_h3_threshold: number
+    short_h3_ratio_limit: number
+    h3_median_floor: number
+  }
+  h3_policy?: {
+    target_range?: [number, number]
+    soft_max?: number
+    hard_max?: number
+  }
+  published_rubric?: {
+    required_slots?: string[]
+  }
+}
+
+type ValidationContract = ValidationProfile & {
+  schema_version: string
+  material_id: string
+  profile_source?: string
+  profile_hash?: string
+  resolved_at: string
+  upgrade_available?: boolean
+  resolved_rules?: Record<string, unknown>
+}
+
+const CONTRACT_PATH = 'validation_contract.json'
+const VALIDATION_REPORT_PATH = 'content_draft/review_exports/validation_report.json'
+
+const DEFAULT_PROFILES: Record<string, ValidationProfile> = {
+  lecture: {
+    contract_version: 'v8.1',
+    profile: 'lecture',
+    mode: 'standard',
+    capabilities: {
+      learning_page_plan: 'optional',
+      candidate_source_cards: 'optional',
+      required_source_cards: 'optional',
+      published_claims: 'optional',
+    },
+    required_checks: [
+      'material_structure',
+      'student_visible_artifacts_exist',
+      'student_text_clean',
+      'long_material_sanity_floor',
+      'learning_units_too_short',
+      'ready_state_layering',
+    ],
+    length_policy: {
+      absolute_floor: 12_000,
+      raw_ratio_floor: 0.04,
+      min_chars_per_h3: 700,
+      min_chars_per_required_topic: 180,
+      short_h3_threshold: 400,
+      short_h3_ratio_limit: 0.25,
+      h3_median_floor: 700,
+    },
+  },
+  technical_tutorial: {
+    contract_version: 'v8.1',
+    profile: 'technical_tutorial',
+    mode: 'standard',
+    capabilities: {
+      learning_page_plan: 'optional',
+      candidate_source_cards: 'optional',
+      required_source_cards: 'optional',
+      published_claims: 'optional',
+    },
+    required_checks: [
+      'material_structure',
+      'student_visible_artifacts_exist',
+      'student_text_clean',
+      'long_material_sanity_floor',
+      'learning_units_too_short',
+      'ready_state_layering',
+    ],
+    length_policy: {
+      absolute_floor: 18_000,
+      raw_ratio_floor: 0.06,
+      min_chars_per_h3: 900,
+      min_chars_per_required_topic: 250,
+      short_h3_threshold: 600,
+      short_h3_ratio_limit: 0.2,
+      h3_median_floor: 900,
+    },
+  },
+  medical_exam: {
+    contract_version: 'v8.1',
+    profile: 'medical_exam',
+    mode: 'standard',
+    capabilities: {
+      learning_page_plan: 'optional',
+      candidate_source_cards: 'optional',
+      required_source_cards: 'optional',
+      published_claims: 'optional',
+    },
+    required_checks: [
+      'material_structure',
+      'student_visible_artifacts_exist',
+      'student_text_clean',
+      'long_material_sanity_floor',
+      'learning_units_too_short',
+      'ready_state_layering',
+    ],
+    length_policy: {
+      absolute_floor: 36_000,
+      raw_ratio_floor: 0.1,
+      min_chars_per_h3: 1_200,
+      min_chars_per_required_topic: 350,
+      short_h3_threshold: 800,
+      short_h3_ratio_limit: 0.15,
+      h3_median_floor: 1_200,
+    },
+    h3_policy: {
+      target_range: [20, 35],
+      soft_max: 35,
+      hard_max: 45,
+    },
+    published_rubric: {
+      required_slots: [
+        'definition_or_positioning',
+        'mechanism_or_reasoning',
+        'exam_trigger',
+        'boundary_or_exception',
+        'example_or_review_question',
+        'traceable',
+      ],
+    },
+  },
+}
+
+function sanitizeDisplayText(value: unknown, fallback = '') {
+  const text = typeof value === 'string' ? value : value == null ? '' : String(value)
+  const trimmed = text.replace(/\s+/gu, ' ').trim()
+  return trimmed || fallback
+}
+
+function readJsonDocument(documentPath: string): Record<string, unknown> | null {
+  try {
+    if (!fs.existsSync(documentPath)) return null
+    const parsed = JSON.parse(fs.readFileSync(documentPath, 'utf-8'))
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null
+  } catch {
+    return null
+  }
+}
+
+function writeJsonIfChanged(documentPath: string, payload: unknown) {
+  const nextText = `${JSON.stringify(payload, null, 2)}\n`
+  try {
+    if (fs.existsSync(documentPath) && fs.readFileSync(documentPath, 'utf-8') === nextText) return
+  } catch {
+    // Fall through and rewrite.
+  }
+  fs.mkdirSync(path.dirname(documentPath), { recursive: true })
+  fs.writeFileSync(documentPath, nextText, 'utf-8')
+}
+
+function stripMarkdownForValidation(markdown: string) {
+  return markdown
+    .replace(/```[\s\S]*?```/gu, ' ')
+    .replace(/`([^`]+)`/gu, '$1')
+    .replace(/!\[[^\]]*\]\([^)]+\)/gu, ' ')
+    .replace(/\[[^\]]+\]\([^)]+\)/gu, ' ')
+    .replace(/^\s{0,3}#{1,6}\s+/gmu, '')
+    .replace(/[|*_>#-]/gu, ' ')
+    .replace(/\s+/gu, '')
+}
+
+function collectMarkdownHeadings(markdown: string) {
+  return Array.from(markdown.matchAll(/^(#{1,6})\s+(.+?)\s*#*\s*$/gmu)).map((match) => ({
+    level: match[1].length,
+    title: match[2].trim(),
+    index: match.index ?? 0,
+  }))
+}
+
+function collectHeadingBodyLengths(markdown: string, headingLevel: number) {
+  const headingPattern = new RegExp(`^#{${headingLevel}}\\s+(.+?)\\s*#*\\s*$`, 'gmu')
+  const headings = Array.from(markdown.matchAll(headingPattern)).map((match) => ({
+    title: match[1].trim(),
+    index: match.index ?? 0,
+  }))
+  return headings.map((heading, index) => {
+    const end = headings[index + 1]?.index ?? markdown.length
+    const body = markdown.slice(heading.index, end)
+    return {
+      title: heading.title,
+      chars: stripMarkdownForValidation(body).length,
+    }
+  })
+}
+
+function median(values: number[]) {
+  if (!values.length) return 0
+  const sorted = [...values].sort((left, right) => left - right)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2)
+}
+
+function readSourceIndexSummary(documentPath: string) {
+  const entryIds = new Set<string>()
+  const blockIds = new Set<string>()
+  let invalidLineCount = 0
+  if (!fs.existsSync(documentPath)) return { entryCount: 0, invalidLineCount, entryIds, blockIds }
+  try {
+    const lines = fs.readFileSync(documentPath, 'utf-8').split(/\r?\n/u).filter((line) => line.trim())
+    for (const line of lines) {
+      try {
+        const payload = JSON.parse(line) as Record<string, unknown>
+        const entryId = sanitizeDisplayText(payload.entry_id ?? '')
+        const blockId = sanitizeDisplayText(payload.block_id ?? '')
+        if (entryId) entryIds.add(entryId)
+        if (blockId) blockIds.add(blockId)
+      } catch {
+        invalidLineCount += 1
+      }
+    }
+    return { entryCount: lines.length, invalidLineCount, entryIds, blockIds }
+  } catch {
+    return { entryCount: 0, invalidLineCount: 1, entryIds, blockIds }
+  }
+}
+
+function readTraceMapLinks(documentPath: string) {
+  const payload = readJsonDocument(documentPath)
+  if (!payload || !Array.isArray(payload.links)) return []
+  return payload.links.filter((link): link is Record<string, unknown> => Boolean(link && typeof link === 'object' && !Array.isArray(link)))
+}
+
+function readQualityAuditReportStatus(reportPath: string, legacyReportPath: string) {
+  const resolvedPath = fs.existsSync(reportPath) ? reportPath : legacyReportPath
+  if (!fs.existsSync(resolvedPath)) {
+    return {
+      exists: false,
+      path: reportPath,
+      result: 'missing',
+    }
+  }
+
+  try {
+    const content = fs.readFileSync(resolvedPath, 'utf-8')
+    const explicitResult = content.match(/^\s*audit_result\s*:\s*(pass|needs_fix|blocked|unknown)\s*$/imu)?.[1]?.toLowerCase()
+    if (explicitResult) {
+      return {
+        exists: true,
+        path: resolvedPath,
+        result: explicitResult,
+      }
+    }
+    if (/审计结果\s*[:：]\s*通过|是否通过\s*[:：]\s*通过|结论\s*[:：]\s*通过|质量审计通过/u.test(content)) {
+      return {
+        exists: true,
+        path: resolvedPath,
+        result: 'pass',
+      }
+    }
+    if (/不通过|未通过|高风险|建议回退|需要返工|needs_fix|blocked|假完成/u.test(content)) {
+      return {
+        exists: true,
+        path: resolvedPath,
+        result: 'needs_fix',
+      }
+    }
+    return {
+      exists: true,
+      path: resolvedPath,
+      result: 'unknown',
+    }
+  } catch {
+    return {
+      exists: true,
+      path: resolvedPath,
+      result: 'unknown',
+    }
+  }
+}
+
+function inferProfile(title: string, rawLength: number, blockCount: number) {
+  if (/考试|医学|医师|执业|临床|口腔|病理|药|护理|诊断|治疗/u.test(title)) return 'medical_exam'
+  if (/教程|编程|开发|代码|软件|模型|训练|workflow|API|工程/u.test(title)) return 'technical_tutorial'
+  if (rawLength > 180_000 || blockCount > 12) return 'technical_tutorial'
+  return 'lecture'
+}
+
+function readProfileFromProject(materialPath: string, profileName: string): { profile: ValidationProfile; source?: string; hash?: string } {
+  const candidates = [
+    path.join(materialPath, 'schemas', 'validation_profiles', `${profileName}.v8.json`),
+    path.resolve(materialPath, '..', '..', '..', 'src', 'schemas', 'validation_profiles', `${profileName}.v8.json`),
+    path.resolve(process.cwd(), '..', 'src', 'schemas', 'validation_profiles', `${profileName}.v8.json`),
+    path.resolve(process.cwd(), 'src', 'schemas', 'validation_profiles', `${profileName}.v8.json`),
+  ]
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue
+      const raw = fs.readFileSync(candidate, 'utf-8')
+      const parsed = JSON.parse(raw) as ValidationProfile
+      if (parsed && parsed.profile && parsed.length_policy) {
+        return {
+          profile: parsed,
+          source: candidate,
+          hash: `sha256:${crypto.createHash('sha256').update(raw).digest('hex')}`,
+        }
+      }
+    } catch {
+      // Keep trying fallbacks.
+    }
+  }
+  return { profile: DEFAULT_PROFILES[profileName] ?? DEFAULT_PROFILES.lecture }
+}
+
+function normalizeContract(
+  materialPath: string,
+  manifest: Record<string, unknown>,
+  runState: Record<string, unknown>,
+): ValidationContract {
+  const contractPath = path.join(materialPath, CONTRACT_PATH)
+  const existing = readJsonDocument(contractPath)
+  const source = manifest.source && typeof manifest.source === 'object' ? manifest.source as Record<string, unknown> : {}
+  const title = sanitizeDisplayText(source.title ?? (runState.material && typeof runState.material === 'object' ? (runState.material as Record<string, unknown>).title : '') ?? path.basename(materialPath), '')
+  const materialId = sanitizeDisplayText(manifest.material_id ?? (runState.material && typeof runState.material === 'object' ? (runState.material as Record<string, unknown>).material_id : ''), path.basename(materialPath))
+  const rawLength = Number(manifest.raw_transcript_length ?? manifest.text_length ?? 0) || 0
+  const blockCount = Number(manifest.block_count ?? 0) || 0
+  const inferredProfile = inferProfile(title, rawLength, blockCount)
+
+  if (existing && typeof existing.profile === 'string' && typeof existing.mode === 'string') {
+    const fallback = readProfileFromProject(materialPath, existing.profile).profile
+    return {
+      ...fallback,
+      ...existing,
+      schema_version: sanitizeDisplayText(existing.schema_version ?? 'shijie.validation-contract.v0.1'),
+      contract_version: sanitizeDisplayText(existing.contract_version ?? fallback.contract_version ?? 'v8.1'),
+      material_id: sanitizeDisplayText(existing.material_id ?? materialId, materialId),
+      profile: sanitizeDisplayText(existing.profile, inferredProfile),
+      mode: sanitizeDisplayText(existing.mode, 'standard'),
+      capabilities: {
+        ...fallback.capabilities,
+        ...(existing.capabilities && typeof existing.capabilities === 'object' ? existing.capabilities as Record<string, 'optional' | 'required'> : {}),
+      },
+      required_checks: Array.isArray(existing.required_checks) ? existing.required_checks.map(String) : fallback.required_checks,
+      length_policy: {
+        ...fallback.length_policy,
+        ...(existing.length_policy && typeof existing.length_policy === 'object' ? existing.length_policy as Partial<ValidationProfile['length_policy']> : {}),
+      },
+      resolved_at: sanitizeDisplayText(existing.resolved_at ?? new Date().toISOString()),
+    }
+  }
+
+  const { profile, source: profileSource, hash } = readProfileFromProject(materialPath, inferredProfile)
+  const contract: ValidationContract = {
+    ...profile,
+    schema_version: 'shijie.validation-contract.v0.1',
+    contract_version: 'v8.1-legacy',
+    mode: 'legacy_compatible',
+    material_id: materialId,
+    profile: inferredProfile,
+    profile_source: profileSource ? path.relative(materialPath, profileSource).replace(/\\/gu, '/') : undefined,
+    profile_hash: hash,
+    resolved_at: new Date().toISOString(),
+    upgrade_available: true,
+    capabilities: {
+      learning_page_plan: 'optional',
+      candidate_source_cards: 'optional',
+      required_source_cards: 'optional',
+      published_claims: 'optional',
+    },
+    resolved_rules: {
+      legacy_compatible: true,
+      strict_features_required: false,
+    },
+  }
+  writeJsonIfChanged(contractPath, contract)
+  return contract
+}
+
+function countRequiredTopics(materialPath: string) {
+  const coverageMatrix = readJsonDocument(path.join(materialPath, 'content_draft', 'work', 'coverage_matrix.json'))
+  const topicInventory = readJsonDocument(path.join(materialPath, 'content_draft', 'work', 'topic_inventory.json'))
+  const topicIds = new Set<string>()
+  const collectTopics = (value: unknown) => {
+    if (Array.isArray(value)) {
+      for (const item of value) collectTopics(item)
+      return
+    }
+    if (!value || typeof value !== 'object') return
+    const record = value as Record<string, unknown>
+    const topicId = sanitizeDisplayText(record.topic_id ?? '')
+    const priority = sanitizeDisplayText(record.priority ?? '')
+    if (topicId && (!priority || /high|medium|required|核心|高/u.test(priority))) topicIds.add(topicId)
+    for (const child of Object.values(record)) collectTopics(child)
+  }
+  collectTopics(coverageMatrix?.topics)
+  collectTopics(coverageMatrix?.branches)
+  collectTopics(topicInventory?.topics)
+  return topicIds.size
+}
+
+function repairIntentForIssueCodes(codes: string[]) {
+  if (codes.some((code) => /trace|source_index/u.test(code))) return 'needs_trace_repair'
+  if (codes.some((code) => /source_cards|evidence/u.test(code))) return 'needs_evidence_expansion'
+  if (codes.some((code) => /thin|short|h3|published_topics_under_supported/u.test(code))) return 'needs_deepening'
+  if (codes.some((code) => /state|pipeline_ready|contract/u.test(code))) return 'needs_state_repair'
+  if (codes.some((code) => /missing|invalid|placeholder|debug/u.test(code))) return 'needs_repair'
+  return codes.length ? 'needs_repair' : 'none'
+}
+
+function isProductionWritten(stage: string, runState: Record<string, unknown>) {
+  return stage === 'learning_notes_ready' || sanitizeDisplayText(runState.semantic_status ?? '') === 'learning_notes_written'
+}
+
+function checkRequiredCapability(
+  materialPath: string,
+  contract: ValidationContract,
+  capability: string,
+  relativePath: string,
+  addIssue: (severity: MaterialValidationIssue['severity'], code: string, message: string, relativePath?: string) => void,
+) {
+  if (contract.capabilities?.[capability] !== 'required') return
+  const absolutePath = path.join(materialPath, relativePath)
+  if (!fs.existsSync(absolutePath)) {
+    addIssue('error', `${capability}_missing`, `当前 validation_contract 要求 ${capability}，但缺少 ${relativePath}。`, relativePath)
+    return
+  }
+  try {
+    const stat = fs.statSync(absolutePath)
+    if (stat.isDirectory() && fs.readdirSync(absolutePath).filter((item) => item !== 'README.md').length === 0) {
+      addIssue('error', `${capability}_empty`, `当前 validation_contract 要求 ${capability}，但 ${relativePath} 为空。`, relativePath)
+    }
+  } catch {
+    addIssue('error', `${capability}_unreadable`, `无法读取 ${relativePath}。`, relativePath)
+  }
+}
+
+export function validateMaterialPackageArtifacts(
+  materialPath: string,
+  manifest: Record<string, unknown>,
+  runState: Record<string, unknown>,
+): MaterialValidationReport {
+  const issues: MaterialValidationIssue[] = []
+  const addIssue = (severity: MaterialValidationIssue['severity'], code: string, message: string, relativePath?: string) => {
+    issues.push({ severity, code, message, ...(relativePath ? { path: relativePath } : {}) })
+  }
+
+  const contract = normalizeContract(materialPath, manifest, runState)
+  const source = manifest.source && typeof manifest.source === 'object' ? manifest.source as Record<string, unknown> : {}
+  const title = sanitizeDisplayText(source.title ?? path.basename(materialPath), '')
+  const materialId = sanitizeDisplayText(manifest.material_id ?? (runState.material && typeof runState.material === 'object' ? (runState.material as Record<string, unknown>).material_id : ''), path.basename(materialPath))
+  const stage = sanitizeDisplayText(runState.stage ?? runState.current_stage ?? '')
+  const semanticStatus = isProductionWritten(stage, runState) ? 'learning_notes_written' : sanitizeDisplayText(runState.semantic_status ?? stage, stage)
+  const rawTranscriptPath = path.join(materialPath, 'raw_transcript.txt')
+  const runStatePath = path.join(materialPath, 'run_state.json')
+  const contentDraftDir = path.join(materialPath, 'content_draft')
+  const reviewExportsDir = path.join(contentDraftDir, 'review_exports')
+  const workDir = path.join(contentDraftDir, 'work')
+  const learningNotesPath = path.join(contentDraftDir, 'learning_notes.md')
+  const chapterMindmapPath = path.join(contentDraftDir, 'chapter_mindmap.md')
+  const validationReportPath = path.join(reviewExportsDir, 'validation_report.json')
+  const qualityAuditReportPath = path.join(reviewExportsDir, 'quality_audit_report.md')
+  const legacyReadonlyAuditPath = path.join(reviewExportsDir, 'latest-readonly-audit.md')
+  const coverageMatrixPath = path.join(workDir, 'coverage_matrix.json')
+  const sourceIndexPath = path.join(materialPath, 'indexes', 'source_index.jsonl')
+  const learningNotesTracePath = path.join(materialPath, 'indexes', 'learning_notes_trace.json')
+  const chapterMindmapTracePath = path.join(materialPath, 'indexes', 'chapter_mindmap_trace.json')
+
+  if (!Object.keys(manifest).length) addIssue('error', 'manifest_missing_or_invalid', 'manifest.json 缺失或不是合法 JSON。', 'manifest.json')
+  if (!fs.existsSync(rawTranscriptPath)) addIssue('error', 'raw_transcript_missing', 'raw_transcript.txt 缺失。', 'raw_transcript.txt')
+  if (!Object.keys(runState).length || !fs.existsSync(runStatePath)) addIssue('error', 'run_state_missing_or_invalid', 'run_state.json 缺失或不是合法 JSON。', 'run_state.json')
+
+  const blockCount = Number(manifest.block_count ?? 0) || 0
+  const rawLength = Number(manifest.raw_transcript_length ?? manifest.text_length ?? 0) || (fs.existsSync(rawTranscriptPath) ? fs.statSync(rawTranscriptPath).size : 0)
+  const longMaterial = rawLength > 100_000 || blockCount > 8 || contract.profile !== 'lecture' || /考试|医学|医师|执业|基础精讲|教程|训练/u.test(title)
+  const sourceIndexSummary = readSourceIndexSummary(sourceIndexPath)
+  const learningNotesTraceItems = readTraceMapLinks(learningNotesTracePath)
+  const chapterMindmapTraceItems = readTraceMapLinks(chapterMindmapTracePath)
+  const qualityAuditStatus = readQualityAuditReportStatus(qualityAuditReportPath, legacyReadonlyAuditPath)
+  const sourceIndexEntries = sourceIndexSummary.entryCount
+  const learningNotesTraceLinks = learningNotesTraceItems.length
+  const chapterMindmapTraceLinks = chapterMindmapTraceItems.length
+
+  if (isProductionWritten(stage, runState)) {
+    if (!fs.existsSync(sourceIndexPath)) {
+      addIssue(longMaterial ? 'error' : 'warning', 'source_index_missing', 'indexes/source_index.jsonl 缺失，无法旁路追溯最终正文来源。', 'indexes/source_index.jsonl')
+    } else if (sourceIndexSummary.invalidLineCount > 0) {
+      addIssue('error', 'source_index_invalid_jsonl', `source_index 存在 ${sourceIndexSummary.invalidLineCount} 行无法解析。`, 'indexes/source_index.jsonl')
+    } else if (blockCount > 0 && sourceIndexEntries < blockCount) {
+      addIssue('warning', 'source_index_incomplete', `source_index 条目数 ${sourceIndexEntries} 少于 manifest.block_count ${blockCount}。`, 'indexes/source_index.jsonl')
+    }
+    if (longMaterial && !fs.existsSync(learningNotesTracePath)) {
+      addIssue('error', 'learning_notes_trace_missing', '长材料缺少 indexes/learning_notes_trace.json，无法证明正文覆盖来自哪些 blocks。', 'indexes/learning_notes_trace.json')
+    } else if (longMaterial && learningNotesTraceLinks === 0) {
+      addIssue('error', 'learning_notes_trace_empty', 'learning_notes_trace.json 没有 trace links，正文来源仍不可审计。', 'indexes/learning_notes_trace.json')
+    }
+    if (longMaterial && !fs.existsSync(chapterMindmapTracePath)) {
+      addIssue('error', 'chapter_mindmap_trace_missing', '长材料缺少 indexes/chapter_mindmap_trace.json，章节思维导图来源不可审计。', 'indexes/chapter_mindmap_trace.json')
+    } else if (longMaterial && chapterMindmapTraceLinks === 0) {
+      addIssue('error', 'chapter_mindmap_trace_empty', 'chapter_mindmap_trace.json 没有 trace links，导图来源仍不可审计。', 'indexes/chapter_mindmap_trace.json')
+    }
+    if (sourceIndexSummary.blockIds.size > 0) {
+      for (const [traceName, tracePath, links] of [
+        ['learning_notes_trace', 'indexes/learning_notes_trace.json', learningNotesTraceItems],
+        ['chapter_mindmap_trace', 'indexes/chapter_mindmap_trace.json', chapterMindmapTraceItems],
+      ] as const) {
+        const missingBlockIds = new Set<string>()
+        for (const link of links) {
+          const blockIds = Array.isArray(link.block_ids) ? link.block_ids : []
+          for (const blockId of blockIds) {
+            const normalizedBlockId = sanitizeDisplayText(blockId)
+            if (normalizedBlockId && !sourceIndexSummary.blockIds.has(normalizedBlockId)) {
+              missingBlockIds.add(normalizedBlockId)
+            }
+          }
+        }
+        if (missingBlockIds.size > 0) {
+          addIssue('error', `${traceName}_points_to_unknown_blocks`, `trace map 指向不存在于 source_index 的 blocks：${Array.from(missingBlockIds).slice(0, 8).join(', ')}。`, tracePath)
+        }
+      }
+    }
+    if (qualityAuditStatus.result === 'needs_fix' || qualityAuditStatus.result === 'blocked') {
+      addIssue(
+        'warning',
+        'quality_audit_not_passed',
+        `只读质量审计结果为 ${qualityAuditStatus.result}，不应视为 audit_ready。`,
+        path.relative(materialPath, qualityAuditStatus.path).replace(/\\/gu, '/'),
+      )
+    }
+  }
+
+  let learningNotes = ''
+  let learningNotesPlainLength = 0
+  let h2Count = 0
+  let h3Count = 0
+  let shortestSectionChars = 0
+  let medianSectionChars = 0
+  let shortSectionCount = 0
+  let shortSectionRatio = 0
+  let minimumLearningNotesPlainChars = 0
+  const requiredTopicCount = countRequiredTopics(materialPath)
+
+  if (fs.existsSync(learningNotesPath)) {
+    learningNotes = fs.readFileSync(learningNotesPath, 'utf-8')
+    const trimmed = learningNotes.trim()
+    learningNotesPlainLength = stripMarkdownForValidation(trimmed).length
+    const headings = collectMarkdownHeadings(trimmed)
+    const h1Count = headings.filter((heading) => heading.level === 1).length
+    h2Count = headings.filter((heading) => heading.level === 2).length
+    h3Count = headings.filter((heading) => heading.level === 3).length
+    const h4PlusCount = headings.filter((heading) => heading.level >= 4).length
+    const functionalH3Titles = headings
+      .filter((heading) => heading.level === 3)
+      .filter((heading) => /^(本章抓手|易混点整理|复习建议|总结|补充说明|小结|提示)$/u.test(heading.title.trim()))
+      .map((heading) => heading.title)
+    if (h1Count !== 1) addIssue('error', 'learning_notes_h1_invalid', `learning_notes.md 应只有 1 个一级标题，当前为 ${h1Count} 个。`, 'content_draft/learning_notes.md')
+    if (isProductionWritten(stage, runState) && h2Count === 0) addIssue('error', 'learning_notes_no_chapters', 'learning_notes.md 没有二级章节。', 'content_draft/learning_notes.md')
+    if (h4PlusCount > 0) addIssue('warning', 'learning_notes_too_deep', `learning_notes.md 存在 ${h4PlusCount} 个四级或更深标题，学习台可能不适合展示。`, 'content_draft/learning_notes.md')
+    if (functionalH3Titles.length > 0) {
+      addIssue('error', 'learning_page_functional_h3_titles', `H3 应是可打开学习页，不应使用功能标题：${Array.from(new Set(functionalH3Titles)).join('、')}。`, 'content_draft/learning_notes.md')
+    }
+
+    const h3Lengths = collectHeadingBodyLengths(trimmed, 3).map((section) => section.chars).filter((chars) => chars > 0)
+    shortestSectionChars = h3Lengths.length ? Math.min(...h3Lengths) : 0
+    medianSectionChars = median(h3Lengths)
+    shortSectionCount = h3Lengths.filter((chars) => chars < contract.length_policy.short_h3_threshold).length
+    shortSectionRatio = h3Lengths.length ? Number((shortSectionCount / h3Lengths.length).toFixed(3)) : 0
+
+    if (/source_refs?|block_\d{3,}|raw offset|raw_offset|debug|字幕证据|制作过程/iu.test(trimmed)) {
+      addIssue('error', 'learning_notes_has_debug_refs', 'learning_notes.md 含有 source_ref、block_id 或后台制作词，学生正文不干净。', 'content_draft/learning_notes.md')
+    }
+    if (/TODO|待补充|此处省略|placeholder|TBD/iu.test(trimmed)) {
+      addIssue('error', 'learning_notes_has_placeholder', 'learning_notes.md 含有 TODO、待补充或占位符。', 'content_draft/learning_notes.md')
+    }
+
+    if (longMaterial) {
+      minimumLearningNotesPlainChars = Math.round(Math.max(
+        contract.length_policy.absolute_floor,
+        rawLength * contract.length_policy.raw_ratio_floor,
+        h3Count * contract.length_policy.min_chars_per_h3,
+        requiredTopicCount * contract.length_policy.min_chars_per_required_topic,
+      ))
+      if (learningNotesPlainLength < minimumLearningNotesPlainChars) {
+        addIssue(
+          'error',
+          'learning_notes_too_thin_for_long_material',
+          `长材料正文偏薄：正文约 ${learningNotesPlainLength} 字符，当前 ${contract.profile} 合同建议至少达到约 ${minimumLearningNotesPlainChars} 字符。`,
+          'content_draft/learning_notes.md',
+        )
+      }
+      if (h3Count >= 8 && medianSectionChars > 0 && medianSectionChars < contract.length_policy.h3_median_floor) {
+        addIssue(
+          'error',
+          'learning_units_too_short',
+          `可打开小节偏短：${h3Count} 个三级小节的中位长度约 ${medianSectionChars} 字符，低于 ${contract.profile} 合同下限 ${contract.length_policy.h3_median_floor}。`,
+          'content_draft/learning_notes.md',
+        )
+      }
+      if (h3Count >= 8 && shortSectionRatio > contract.length_policy.short_h3_ratio_limit) {
+        addIssue(
+          'error',
+          'learning_units_short_ratio_too_high',
+          `短 H3 比例过高：${shortSectionCount}/${h3Count} 低于 ${contract.length_policy.short_h3_threshold} 字符，比例 ${shortSectionRatio} 高于合同上限 ${contract.length_policy.short_h3_ratio_limit}。`,
+          'content_draft/learning_notes.md',
+        )
+      }
+    }
+  } else if (isProductionWritten(stage, runState)) {
+    addIssue('error', 'learning_notes_missing', 'run_state 已标记学习笔记写完，但 learning_notes.md 缺失。', 'content_draft/learning_notes.md')
+  }
+
+  if (fs.existsSync(chapterMindmapPath)) {
+    const mindmap = fs.readFileSync(chapterMindmapPath, 'utf-8').trim()
+    if (mindmap.length < 240) addIssue('error', 'chapter_mindmap_too_short', 'chapter_mindmap.md 过短，不像有效章节思维导图。', 'content_draft/chapter_mindmap.md')
+    if (/source_refs?|block_\d{3,}|raw offset|raw_offset|debug|字幕证据|制作过程/iu.test(mindmap)) {
+      addIssue('error', 'chapter_mindmap_has_debug_refs', 'chapter_mindmap.md 含有 source_ref、block_id 或后台制作词。', 'content_draft/chapter_mindmap.md')
+    }
+    if (/TODO|待补充|此处省略|placeholder|TBD/iu.test(mindmap)) {
+      addIssue('error', 'chapter_mindmap_has_placeholder', 'chapter_mindmap.md 含有 TODO、待补充或占位符。', 'content_draft/chapter_mindmap.md')
+    }
+  } else if (isProductionWritten(stage, runState)) {
+    addIssue('error', 'chapter_mindmap_missing', 'run_state 已标记学习笔记写完，但 chapter_mindmap.md 缺失。', 'content_draft/chapter_mindmap.md')
+  }
+
+  for (const [relativePath, code, message] of [
+    ['content_draft/work/knowledge_tree.json', 'knowledge_tree_missing', 'knowledge_tree.json 缺失。'],
+    ['content_draft/work/coverage_matrix.json', 'coverage_matrix_missing', 'coverage_matrix.json 缺失。'],
+    ['content_draft/work/block_reread_ledger.jsonl', 'block_reread_ledger_missing', 'block_reread_ledger.jsonl 缺失。'],
+    ['content_draft/work/self_check.md', 'self_check_missing', 'self_check.md 缺失。'],
+  ] as const) {
+    if (isProductionWritten(stage, runState) && !fs.existsSync(path.join(materialPath, relativePath))) {
+      addIssue('error', code, message, relativePath)
+    }
+  }
+
+  checkRequiredCapability(materialPath, contract, 'learning_page_plan', 'content_draft/work/learning_page_plans', addIssue)
+  checkRequiredCapability(materialPath, contract, 'candidate_source_cards', 'content_draft/work/source_cards/candidates', addIssue)
+  checkRequiredCapability(materialPath, contract, 'required_source_cards', 'content_draft/work/source_cards/required', addIssue)
+  checkRequiredCapability(materialPath, contract, 'published_claims', 'content_draft/work/published_claims', addIssue)
+
+  const coverageMatrix = readJsonDocument(coverageMatrixPath)
+  if (coverageMatrix && longMaterial) {
+    const branches = Array.isArray(coverageMatrix.branches) ? coverageMatrix.branches as Array<Record<string, unknown>> : []
+    const examReviewBranch = branches.find((branch) => /考试|复盘|题干|易混/u.test(sanitizeDisplayText(branch.title ?? '')))
+    if (examReviewBranch) {
+      const draftStatus = sanitizeDisplayText(examReviewBranch.draft_status ?? '')
+      const coverageStatus = sanitizeDisplayText(examReviewBranch.coverage_status ?? '')
+      if (!/published/i.test(draftStatus) && !/published/i.test(coverageStatus)) {
+        addIssue(
+          'error',
+          'exam_review_branch_not_published',
+          '考试/复盘分支没有进入 learning_notes.md。对医学考试材料，这通常意味着复习价值被压缩到导图或索引层。',
+          'content_draft/work/coverage_matrix.json',
+        )
+      }
+    }
+  }
+
+  const errorIssues = issues.filter((issue) => issue.severity === 'error')
+  const errorCount = errorIssues.length
+  const warningCount = issues.filter((issue) => issue.severity === 'warning').length
+  const finalArtifactsExist = fs.existsSync(learningNotesPath) && fs.existsSync(chapterMindmapPath)
+  const contractAllowsPipelineReady = contract.mode !== 'legacy_compatible'
+  const productionWritten = isProductionWritten(stage, runState)
+  const strictReady = productionWritten && finalArtifactsExist && errorCount === 0 && contractAllowsPipelineReady
+  const legacyValidationPassed = productionWritten && finalArtifactsExist && errorCount === 0 && !contractAllowsPipelineReady
+  const pipelineReady = strictReady
+  const auditReady = pipelineReady && (runState.audit_ready === true || qualityAuditStatus.result === 'pass')
+  const releaseReady = auditReady && runState.release_ready === true
+  const repairIntent = repairIntentForIssueCodes(errorIssues.map((issue) => issue.code))
+  const blockingReasons = errorIssues.map((issue) => ({
+    code: issue.code,
+    severity: 'blocking' as const,
+    message: issue.message,
+    repair_intent: repairIntentForIssueCodes([issue.code]),
+    ...(issue.path ? { path: issue.path } : {}),
+  }))
+  const validationStatus: MaterialValidationReport['validation_status'] = pipelineReady || legacyValidationPassed
+    ? 'passed'
+    : productionWritten
+      ? 'failed'
+      : 'not_ready'
+  const summary = {
+    error_count: errorCount,
+    warning_count: warningCount,
+    learning_notes_chars: learningNotes.length,
+    learning_notes_plain_chars: learningNotesPlainLength,
+    chapter_count: h2Count,
+    section_count: h3Count,
+    shortest_section_chars: shortestSectionChars,
+    median_section_chars: medianSectionChars,
+    short_section_count: shortSectionCount,
+    short_section_ratio: shortSectionRatio,
+    minimum_learning_notes_plain_chars: minimumLearningNotesPlainChars,
+    required_topic_count: requiredTopicCount,
+    long_material: longMaterial,
+    source_index_entries: sourceIndexEntries,
+    learning_notes_trace_links: learningNotesTraceLinks,
+    chapter_mindmap_trace_links: chapterMindmapTraceLinks,
+    quality_audit_report_exists: qualityAuditStatus.exists,
+    quality_audit_result: qualityAuditStatus.result,
+  }
+  const comparableReportPayload = {
+    stage,
+    semantic_status: semanticStatus,
+    validation_status: validationStatus,
+    contract_version: contract.contract_version,
+    contract_mode: contract.mode,
+    profile: contract.profile,
+    pipeline_ready: pipelineReady,
+    legacy_validation_passed: legacyValidationPassed,
+    audit_ready: auditReady,
+    release_ready: releaseReady,
+    repair_intent: repairIntent,
+    blocking_reasons: blockingReasons,
+    summary,
+    issues,
+  }
+  const previousReport = readJsonDocument(validationReportPath)
+  const previousComparablePayload = previousReport
+    ? {
+        stage: previousReport.stage,
+        semantic_status: previousReport.semantic_status,
+        validation_status: previousReport.validation_status,
+        contract_version: previousReport.contract_version,
+        contract_mode: previousReport.contract_mode,
+        profile: previousReport.profile,
+        pipeline_ready: previousReport.pipeline_ready,
+        legacy_validation_passed: previousReport.legacy_validation_passed,
+        audit_ready: previousReport.audit_ready,
+        release_ready: previousReport.release_ready,
+        repair_intent: previousReport.repair_intent,
+        blocking_reasons: previousReport.blocking_reasons,
+        summary: previousReport.summary,
+        issues: previousReport.issues,
+      }
+    : null
+  const generatedAt = previousReport &&
+    typeof previousReport.generated_at === 'string' &&
+    JSON.stringify(previousComparablePayload) === JSON.stringify(comparableReportPayload)
+    ? previousReport.generated_at
+    : new Date().toISOString()
+
+  const report: MaterialValidationReport = {
+    schema_version: 'shijie.material-validation.v0.2',
+    generated_at: generatedAt,
+    material_id: materialId,
+    material_path: materialPath,
+    stage,
+    semantic_status: semanticStatus,
+    validation_status: validationStatus,
+    contract_version: contract.contract_version,
+    contract_mode: contract.mode,
+    profile: contract.profile,
+    pipeline_ready: pipelineReady,
+    legacy_validation_passed: legacyValidationPassed,
+    upgrade_required_for_pipeline_ready: legacyValidationPassed || contract.mode === 'legacy_compatible',
+    audit_ready: auditReady,
+    release_ready: releaseReady,
+    repair_intent: repairIntent,
+    blocking_reasons: blockingReasons,
+    summary,
+    issues,
+  }
+
+  writeJsonIfChanged(validationReportPath, report)
+
+  if (fs.existsSync(runStatePath)) {
+    const nextRunState = {
+      ...runState,
+      semantic_status: semanticStatus,
+      pipeline_ready: pipelineReady,
+      legacy_validation_passed: legacyValidationPassed,
+      upgrade_required_for_pipeline_ready: report.upgrade_required_for_pipeline_ready,
+      audit_ready: auditReady,
+      release_ready: releaseReady,
+      repair_intent: repairIntent,
+      needs_deepening: repairIntent === 'needs_deepening',
+      blocking_reason_codes: blockingReasons.map((reason) => reason.code),
+      validation_contract: CONTRACT_PATH,
+      last_validation_report: VALIDATION_REPORT_PATH,
+      validation_report: VALIDATION_REPORT_PATH,
+      importable: pipelineReady,
+    }
+    writeJsonIfChanged(runStatePath, nextRunState)
+  }
+
+  return report
+}
+
+export function validateMaterialPackageAtPath(materialPath: string) {
+  const manifest = readJsonDocument(path.join(materialPath, 'manifest.json')) ?? {}
+  const runState = readJsonDocument(path.join(materialPath, 'run_state.json')) ?? {}
+  return validateMaterialPackageArtifacts(materialPath, manifest, runState)
+}

@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import crypto from 'node:crypto'
+import { validateMaterialPackageArtifacts as validateMaterialPackageArtifactsWithContract } from './materialValidation'
 
 const APP_NAME = '视界专注'
 const APP_ID = 'ShijieFocus'
@@ -1472,7 +1473,7 @@ function importKnowledgeBriefFromMaterial(settings: RuntimeSettings, materialPat
 
   const manifest = readMaterialManifest(resolvedMaterialPath)
   const runState = readJsonDocument(path.join(resolvedMaterialPath, 'run_state.json')) ?? {}
-  const validationReport = validateMaterialPackageArtifacts(resolvedMaterialPath, manifest, runState)
+  const validationReport = validateMaterialPackageArtifactsWithContract(resolvedMaterialPath, manifest, runState)
   if (!validationReport.pipeline_ready) {
     const firstIssue = validationReport.issues.find((issue) => issue.severity === 'error') ?? validationReport.issues[0]
     throw new Error(
@@ -1633,7 +1634,7 @@ function listMaterialPackages(settings: RuntimeSettings) {
     const authoringExists = fs.existsSync(authoringDir)
     const canonicalMaterial = authoringExists && fs.existsSync(runStatePath)
     if (!canonicalMaterial) continue
-    const validationReport = validateMaterialPackageArtifacts(materialPath, manifest, runState)
+    const validationReport = validateMaterialPackageArtifactsWithContract(materialPath, manifest, runState)
     const explicitRunStage = sanitizeDisplayText(runState.stage ?? '')
     const knowledgeTreePath = path.join(workDir, 'knowledge_tree.json')
     const treeOutlinePath = path.join(workDir, 'tree_outline.md')

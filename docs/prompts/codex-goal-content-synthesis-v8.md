@@ -18,7 +18,7 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 
 `partial_learning_notes`：部分知识树分支已深写，仍需继续下一批分支。
 
-`learning_notes_ready`：Codex 已生成最终学习笔记、章节思维导图、概念图和复查文件。它只是生产侧完成，不等于已经通过软件 validator。
+`learning_notes_ready`：兼容旧状态名，实际语义是 `semantic_status = learning_notes_written`：Codex 已生成最终学习笔记、章节思维导图、概念图和复查文件。它只是生产侧写完，不等于已经通过软件 validator。
 
 `needs_restructure`：知识树层级不合理，例如上层过粗、下层过碎、横向关系缺失、正文会天然变成长文章。
 
@@ -30,6 +30,7 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 
 - `manifest.json`
 - 根目录 `run_state.json`
+- 根目录 `validation_contract.json`（如果存在；缺失时软件 validator 会补 legacy contract）
 - `content_draft/work/run_state.json`（如果存在）
 - `HANDOFF.md`
 - `indexes/global_outline.json`
@@ -46,7 +47,7 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 - `dossier_ready` 或 `partial_learning_notes`：执行阶段 4，每轮只深写 1-2 个知识树分支，仍未写完时继续下一轮。
 - `needs_restructure`：先修 `knowledge_tree.json`、`tree_outline.md` 和 `synthesis_plan.json`，不要直接补正文；修完后继续下一轮。
 - `needs_deepening`：先读取 `thinness_review.md`，只修复被标记偏薄的分支；修完后继续下一轮。
-- `learning_notes_ready`：只读检查，不重复生成；确认核心产物齐备后结束生产 Goal，软件 validator 会另行判断 `pipeline_ready`。
+- `learning_notes_ready`：只读检查，不重复生成；确认核心产物齐备后运行或等待软件 validator。只有 `pipeline_ready=true` 才算工程上可导入；如果 validator 写入 `repair_intent` 或 `blocking_reason_codes`，按报告继续返工。
 
 满足任一条件，按长材料处理：
 
@@ -68,7 +69,7 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 
 `learning_notes_ready` 不是自我宣布的完成状态。它必须建立在已有的知识树、coverage、dossier、分支 drafts、薄度复查和具体性复查之上；如果这些证据不足，停在 `partial_learning_notes` 或 `needs_deepening`。
 
-不要因为完成了一个阶段就汇报“Goal 已完成”。只有学习笔记、章节思维导图、概念图、复查文件齐备，且 `run_state.stage = learning_notes_ready` 时，才可以把生产 Goal 视为完成。`pipeline_ready` 和最终导入资格由软件 deterministic validator 决定。
+不要因为完成了一个阶段就汇报“Goal 已完成”。学习笔记、章节思维导图、概念图、复查文件齐备，且 `run_state.stage = learning_notes_ready` 时，只能说生产侧写完。`pipeline_ready` 和最终导入资格由软件 deterministic validator 按 `validation_contract.json` 决定；validator 失败时应保留 `pipeline_ready=false` 并继续修复。
 
 ## 学习台呈现策略
 
@@ -330,10 +331,20 @@ v8 的核心改变：**先搭知识树，再做 topic 覆盖，再写正文。**
 完成后标记：
 
 - `run_state.stage = learning_notes_ready`
+- `semantic_status = learning_notes_written`
 - `importable = false`
 - `pipeline_ready = false`
 
 不要主观设置 `pipeline_ready = true` 或 `release_ready = true`。软件会在工作台刷新时运行 deterministic validator，只有通过后才设置 `pipeline_ready = true` 并允许进入学习台。
+
+如果当前窗口有项目根目录权限，最终收口后运行：
+
+```powershell
+cd desktop
+npm run validate:material -- "<材料包路径>"
+```
+
+validator 会写入 `content_draft/review_exports/validation_report.json`，并把 `repair_intent`、`blocking_reason_codes`、`pipeline_ready` 等摘要同步到根目录 `run_state.json`。若失败，不要把生产 Goal 视为完成；按 `repair_intent` 回到 `needs_deepening`、`needs_trace_repair`、`needs_evidence_expansion` 或其他对应修复路径。
 
 同时把来源追溯写到旁路 trace map：
 

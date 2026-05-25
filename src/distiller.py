@@ -997,6 +997,100 @@ def _write_text_file(file_path: str, lines: list[str]) -> str:
     return file_path
 
 
+def _detect_validation_profile(course_title: str, *, text_length: int, block_count: int) -> str:
+    if re.search(r"考试|医学|医师|执业|临床|口腔|病理|药|护理|诊断|治疗", course_title):
+        return "medical_exam"
+    if re.search(r"教程|编程|开发|代码|软件|模型|训练|workflow|API|工程", course_title, re.IGNORECASE):
+        return "technical_tutorial"
+    if text_length > 180_000 or block_count > 12:
+        return "technical_tutorial"
+    return "lecture"
+
+
+def _build_validation_contract(
+    *,
+    material_dir: str,
+    material_id: str,
+    course_title: str,
+    text_length: int,
+    block_count: int,
+) -> dict[str, Any]:
+    profile = _detect_validation_profile(course_title, text_length=text_length, block_count=block_count)
+    profile_source_path = _project_file("src", "schemas", "validation_profiles", f"{profile}.v8.json")
+    profile_payload: dict[str, Any] = {}
+    profile_hash = ""
+    if os.path.exists(profile_source_path):
+        with open(profile_source_path, "r", encoding="utf-8") as file:
+            profile_raw = file.read()
+        profile_payload = json.loads(profile_raw)
+        profile_hash = "sha256:" + hashlib.sha256(profile_raw.encode("utf-8")).hexdigest()
+
+    fallback_by_profile = {
+        "lecture": {
+            "absolute_floor": 12_000,
+            "raw_ratio_floor": 0.04,
+            "min_chars_per_h3": 700,
+            "min_chars_per_required_topic": 180,
+            "short_h3_threshold": 400,
+            "short_h3_ratio_limit": 0.25,
+            "h3_median_floor": 700,
+        },
+        "technical_tutorial": {
+            "absolute_floor": 18_000,
+            "raw_ratio_floor": 0.06,
+            "min_chars_per_h3": 900,
+            "min_chars_per_required_topic": 250,
+            "short_h3_threshold": 600,
+            "short_h3_ratio_limit": 0.2,
+            "h3_median_floor": 900,
+        },
+        "medical_exam": {
+            "absolute_floor": 36_000,
+            "raw_ratio_floor": 0.1,
+            "min_chars_per_h3": 1_200,
+            "min_chars_per_required_topic": 350,
+            "short_h3_threshold": 800,
+            "short_h3_ratio_limit": 0.15,
+            "h3_median_floor": 1_200,
+        },
+    }
+    capabilities = {
+        "learning_page_plan": "optional",
+        "candidate_source_cards": "optional",
+        "required_source_cards": "optional",
+        "published_claims": "optional",
+    }
+    required_checks = [
+        "material_structure",
+        "student_visible_artifacts_exist",
+        "student_text_clean",
+        "long_material_sanity_floor",
+        "learning_units_too_short",
+        "ready_state_layering",
+    ]
+    length_policy = profile_payload.get("length_policy") if isinstance(profile_payload.get("length_policy"), dict) else fallback_by_profile[profile]
+    contract = {
+        **profile_payload,
+        "schema_version": "shijie.validation-contract.v0.1",
+        "contract_version": str(profile_payload.get("contract_version") or "v8.1"),
+        "mode": str(profile_payload.get("mode") or "standard"),
+        "profile": profile,
+        "material_id": material_id,
+        "profile_source": f"schemas/validation_profiles/{profile}.v8.json",
+        "profile_hash": profile_hash,
+        "resolved_at": datetime.now(timezone.utc).isoformat(),
+        "capabilities": profile_payload.get("capabilities") if isinstance(profile_payload.get("capabilities"), dict) else capabilities,
+        "required_checks": profile_payload.get("required_checks") if isinstance(profile_payload.get("required_checks"), list) else required_checks,
+        "length_policy": length_policy,
+        "resolved_rules": {
+            "new_material_contract": True,
+            "strict_features_required": False,
+            "notes": "v8.1 先强制核心 sanity checks；learning_page_plan、required_source_cards 和 published_claims 在后续 strict 合同中升级为 required。",
+        },
+    }
+    return contract
+
+
 def _write_authoring_workspace(material_dir: str, *, course_title: str, material_id: str) -> dict[str, str]:
     authoring_dir = os.path.join(material_dir, "authoring")
     schemas_dir = os.path.join(material_dir, "schemas")
@@ -1011,6 +1105,12 @@ def _write_authoring_workspace(material_dir: str, *, course_title: str, material
     plan_path = os.path.join(material_dir, "content_draft", "synthesis_plan.json")
 
     _copy_project_file_if_exists(("src", "schemas", "content_synthesis_plan.schema.json"), os.path.join(schemas_dir, "content_synthesis_plan.schema.json"))
+    _copy_project_file_if_exists(("src", "schemas", "validation_contract.schema.json"), os.path.join(schemas_dir, "validation_contract.schema.json"))
+    for profile_name in ("lecture", "technical_tutorial", "medical_exam"):
+        _copy_project_file_if_exists(
+            ("src", "schemas", "validation_profiles", f"{profile_name}.v8.json"),
+            os.path.join(schemas_dir, "validation_profiles", f"{profile_name}.v8.json"),
+        )
     _copy_project_file_if_exists(("docs", "content-synthesis-authoring.md"), authoring_doc_path)
     _copy_project_file_if_exists(("docs", "prompts", "codex-goal-content-synthesis-v8.md"), codex_goal_v8_path)
     _copy_project_file_if_exists(("docs", "prompts", "readonly-synthesis-audit.md"), readonly_audit_doc_path)
@@ -1030,9 +1130,11 @@ def _write_authoring_workspace(material_dir: str, *, course_title: str, material
     codex_copy_text = [
         f"/goal 在 `{material_dir}` 执行 `authoring/codex-goal-content-synthesis-v8.md`，按 v8 知识树优先流水线处理《{course_title}》；目标是产出生产侧完整的学习笔记包。Codex 负责把 `run_state.stage` 推进到 `learning_notes_ready`；`importable`、`pipeline_ready` 和 `release_ready` 保持由软件 validator 接管。",
         "",
-        "先读取根目录 `run_state.json` 和 `content_draft/work/run_state.json`：这是单次复制入口，同一个 Goal 应自动多轮推进；每一轮最多只过一个阶段闸门。`material_ready` 先到 `knowledge_tree_ready`；`knowledge_tree_ready` 再到 `coverage_ready`；`coverage_ready` 再到 `dossier_ready`；`dossier_ready` 或 `partial_learning_notes` 每轮只深写 1-2 个知识树分支，直到 `learning_notes_ready`。阶段完成不是 Goal 完成，不要跳阶段。",
+        "先读取根目录 `run_state.json`、`validation_contract.json` 和 `content_draft/work/run_state.json`：这是单次复制入口，同一个 Goal 应自动多轮推进；每一轮最多只过一个阶段闸门。`material_ready` 先到 `knowledge_tree_ready`；`knowledge_tree_ready` 再到 `coverage_ready`；`coverage_ready` 再到 `dossier_ready`；`dossier_ready` 或 `partial_learning_notes` 每轮只深写 1-2 个知识树分支，直到 `learning_notes_ready`。阶段完成不是 Goal 完成，不要跳阶段。",
         "",
         "软件已生成 `indexes/source_index.jsonl`。最终收口时请把正文和导图来源写入 `indexes/learning_notes_trace.json`、`indexes/chapter_mindmap_trace.json`；学生正文保持干净，不写 block/source/debug 信息。",
+        "",
+        "最终收口后请回到项目根目录运行 `cd desktop && npm run validate:material -- \"<本材料包路径>\"`。只有 validator 写入 `pipeline_ready=true` 才能说工程上可导入；如果失败，按 validation_report 的 `repair_intent` 和 `blocking_reason_codes` 继续修复。",
         "",
         "若材料超过 100000 字、超过 8 blocks，或属于考试/医学/教程等密集材料，即使用户希望直接完成，也只在当前轮推进当前阶段并留下下一轮继续入口；coverage、dossier、draft、导图和 validator 状态分层推进。",
     ]
@@ -1106,6 +1208,7 @@ def _build_run_state(
             "material_dir": material_dir,
             "handoff": os.path.join(material_dir, "HANDOFF.md"),
             "run_state": os.path.join(material_dir, "run_state.json"),
+            "validation_contract": os.path.join(material_dir, "validation_contract.json"),
             "synthesis_plan": os.path.join(material_dir, "content_draft", "synthesis_plan.json"),
             "learning_notes": os.path.join(material_dir, "content_draft", "learning_notes.md"),
             "chapter_mindmap": os.path.join(material_dir, "content_draft", "chapter_mindmap.md"),
@@ -1119,6 +1222,10 @@ def _build_run_state(
             "tree_outline": os.path.join(material_dir, "content_draft", "work", "tree_outline.md"),
             "structure_review": os.path.join(material_dir, "content_draft", "work", "structure_review.md"),
             "block_digest_dir": os.path.join(material_dir, "content_draft", "work", "block_digest"),
+            "candidate_source_cards_dir": os.path.join(material_dir, "content_draft", "work", "source_cards", "candidates"),
+            "required_source_cards_dir": os.path.join(material_dir, "content_draft", "work", "source_cards", "required"),
+            "learning_page_plans_dir": os.path.join(material_dir, "content_draft", "work", "learning_page_plans"),
+            "published_claims_dir": os.path.join(material_dir, "content_draft", "work", "published_claims"),
             "topic_inventory": os.path.join(material_dir, "content_draft", "work", "topic_inventory.json"),
             "coverage_matrix": os.path.join(material_dir, "content_draft", "work", "coverage_matrix.json"),
             "block_reread_ledger": os.path.join(material_dir, "content_draft", "work", "block_reread_ledger.jsonl"),
@@ -1217,11 +1324,12 @@ def _write_handoff_files(
             "4. `coverage_ready`：Codex 按知识树分支回读 blocks，写 `block_reread_ledger.jsonl`、`section_dossiers/*.md` 和 `thinness_review.md`，停在 `dossier_ready`。",
             "5. `dossier_ready` 或 `partial_learning_notes`：Codex 每轮只深写 1-2 个知识树分支，逐步合并 `learning_notes.md`。",
             "6. 全部高价值分支通过结构复查和 thinness review 后，Codex 写入 `chapter_mindmap.md`、trace map，并标记 `learning_notes_ready`。",
-            "7. 回到软件，点击“开始学习”，把结构化资料载入学习台。",
+            "7. 回到项目根目录运行 `cd desktop && npm run validate:material -- <材料包路径>` 或刷新工作台；只有 validator 写入 `pipeline_ready=true`，才算工程上可导入学习台。",
             "",
             "## 关键文件",
             "",
             f"- Codex 总结计划位置：`{plan_path}`",
+            f"- 验证合同：`{os.path.join(material_dir, 'validation_contract.json')}`",
             f"- Codex 学习笔记入口：`{codex_prompt}`",
             f"- Codex Goal v8 流水线：`{goal_v8_prompt}`",
             f"- Codex 只读审计提示：`{audit_prompt}`",
@@ -1265,6 +1373,10 @@ def save_codex_material_package(
     os.makedirs(review_exports_dir, exist_ok=True)
     os.makedirs(os.path.join(work_dir, "writing_packets"), exist_ok=True)
     os.makedirs(os.path.join(work_dir, "source_cards"), exist_ok=True)
+    os.makedirs(os.path.join(work_dir, "source_cards", "candidates"), exist_ok=True)
+    os.makedirs(os.path.join(work_dir, "source_cards", "required"), exist_ok=True)
+    os.makedirs(os.path.join(work_dir, "learning_page_plans"), exist_ok=True)
+    os.makedirs(os.path.join(work_dir, "published_claims"), exist_ok=True)
     os.makedirs(os.path.join(work_dir, "section_dossiers"), exist_ok=True)
     os.makedirs(os.path.join(work_dir, "drafts"), exist_ok=True)
     if os.path.exists(os.path.join(CURRENT_DIR, "schemas", "codex_material_package.schema.json")):
@@ -1277,6 +1389,17 @@ def save_codex_material_package(
             os.path.join(CURRENT_DIR, "schemas", "content_synthesis_plan.schema.json"),
             os.path.join(schemas_dir, "content_synthesis_plan.schema.json"),
         )
+    if os.path.exists(os.path.join(CURRENT_DIR, "schemas", "validation_contract.schema.json")):
+        shutil.copyfile(
+            os.path.join(CURRENT_DIR, "schemas", "validation_contract.schema.json"),
+            os.path.join(schemas_dir, "validation_contract.schema.json"),
+        )
+    for profile_name in ("lecture", "technical_tutorial", "medical_exam"):
+        profile_source = os.path.join(CURRENT_DIR, "schemas", "validation_profiles", f"{profile_name}.v8.json")
+        if os.path.exists(profile_source):
+            profile_target = os.path.join(schemas_dir, "validation_profiles", f"{profile_name}.v8.json")
+            os.makedirs(os.path.dirname(profile_target), exist_ok=True)
+            shutil.copyfile(profile_source, profile_target)
 
     raw_transcript_text = flatten_subtitles_to_text(subtitles)
     raw_content_length = sum(
@@ -1315,6 +1438,7 @@ def save_codex_material_package(
             "raw_tracks": "raw_tracks.json",
             "handoff": "HANDOFF.md",
             "run_state": "run_state.json",
+            "validation_contract": "validation_contract.json",
             "blocks_dir": "blocks",
             "indexes_dir": "indexes",
             "part_index": "indexes/part_index.json",
@@ -1331,6 +1455,7 @@ def save_codex_material_package(
             "codex_readonly_audit_prompt": "authoring/03_readonly_synthesis_audit.md",
             "synthesis_plan": "content_draft/synthesis_plan.json",
             "synthesis_plan_schema": "schemas/content_synthesis_plan.schema.json",
+            "validation_contract_schema": "schemas/validation_contract.schema.json",
             "content_draft_dir": "content_draft",
             "content_work_dir": "content_draft/work",
             "intake_inventory": "content_draft/work/intake_inventory.md",
@@ -1339,6 +1464,10 @@ def save_codex_material_package(
             "structure_review": "content_draft/work/structure_review.md",
             "source_map": "content_draft/work/source_map.json",
             "source_cards_dir": "content_draft/work/source_cards",
+            "candidate_source_cards_dir": "content_draft/work/source_cards/candidates",
+            "required_source_cards_dir": "content_draft/work/source_cards/required",
+            "learning_page_plans_dir": "content_draft/work/learning_page_plans",
+            "published_claims_dir": "content_draft/work/published_claims",
             "block_digest_dir": "content_draft/work/block_digest",
             "topic_inventory": "content_draft/work/topic_inventory.json",
             "evidence_ledger": "content_draft/work/evidence_ledger.jsonl",
@@ -1378,6 +1507,15 @@ def save_codex_material_package(
             "trace_strategy": "source refs、block_id、raw offset 等追溯信息只写入 indexes/source_index.jsonl、indexes/node_contexts/ 和 trace map，学生正文保持干净。",
         },
     }
+
+    validation_contract = _build_validation_contract(
+        material_dir=material_dir,
+        material_id=str(manifest["material_id"]),
+        course_title=str(video_info.get("title") or source.title or bvid),
+        text_length=raw_content_length,
+        block_count=len(plan.chunks),
+    )
+    _save_json_file(os.path.join(material_dir, "validation_contract.json"), validation_contract)
 
     raw_tracks = {"tracks": _subtitle_track_segments(subtitles)}
     _save_json_file(os.path.join(material_dir, "raw_tracks.json"), raw_tracks)

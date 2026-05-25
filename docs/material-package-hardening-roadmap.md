@@ -1,6 +1,6 @@
 # .course_material 底座升级路线
 
-更新时间：2026-05-24
+更新时间：2026-05-25
 
 本文记录 30 万字量级测试后形成的长期架构共识。目标是防止上下文压缩、换窗口或后续调试时重新回到“继续加提示词、继续让 Codex 自己宣布完成”的旧路。
 
@@ -34,12 +34,12 @@ material_ready
 
 建议长期语义：
 
-- `learning_notes_ready`：Codex 已生成最终学习笔记、章节思维导图和必要复查文件。
+- `learning_notes_ready`：兼容旧状态名；新语义按 `semantic_status=learning_notes_written` 理解，即 Codex 已生成最终学习笔记、章节思维导图和必要复查文件，但还没有证明可导入。
 - `pipeline_ready`：deterministic validator 通过，说明材料包工程上不是假完成。
 - `audit_ready`：只读质量审计没有发现高风险，或人工确认通过。
 - `release_ready`：产品层允许进入正式学习台展示，不能由 Codex 主观设置。
 
-`learning_notes_ready` 以后不应单独等于“可以放心导入”。至少应配合 `pipeline_ready = true`。
+`learning_notes_ready` 以后不应单独等于“可以放心导入”。至少应配合 `pipeline_ready = true`。validator 失败时，根目录 `run_state.json` 只保留 `repair_intent`、`blocking_reason_codes` 和报告指针，完整原因写入 `content_draft/review_exports/validation_report.json`。
 
 ## 目录职责
 
@@ -48,6 +48,7 @@ material_ready
 ```text
 <name>.course_material/
   manifest.json
+  validation_contract.json
   raw_transcript.txt
   raw_tracks.json
   run_state.json
@@ -74,6 +75,11 @@ material_ready
       tree_outline.md
       structure_review.md
       coverage_matrix.json
+      learning_page_plans/
+      source_cards/
+        candidates/
+        required/
+      published_claims/
       block_reread_ledger.jsonl
       section_dossiers/
       drafts/

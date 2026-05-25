@@ -13,7 +13,8 @@
     "build": "npm run prepare:release && npm run build:web && electron-builder && npm run package:share",
     "build:portable": "npm run prepare:release && npm run build:web && electron-builder --win portable --publish never && npm run package:share",
     "build:mirror": "npm run prepare:release && npm run build:web && set \"ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/\" && set \"ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/\" && electron-builder && npm run package:share",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "validate:material": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types ./electron/validateMaterialCli.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",

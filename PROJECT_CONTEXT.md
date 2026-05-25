@@ -69,6 +69,7 @@ material_ready
 - `dossier_ready`：按知识树分支回读 blocks，写分支材料包。
 - `partial_learning_notes`：每轮只深写 1-2 个知识树分支，逐步合并到学习笔记。
 - `learning_notes_ready`：生产侧最终学习笔记、章节思维导图、概念图和复查文件齐备。是否可导入学习台要继续看软件 validator 写入的 `pipeline_ready`。
+- `learning_notes_ready` 保留为兼容状态名，但新语义应按 `semantic_status = learning_notes_written` 理解：正文和导图已写出，尚未证明可导入。validator 失败时会写 `repair_intent`、`blocking_reason_codes`、`needs_deepening` 等摘要；完整原因在 `content_draft/review_exports/validation_report.json`。
 
 长材料要阶段化推进。不要在一次 Goal 里吞完整 `raw_transcript.txt` 后草草写完。尤其是超过 8 blocks、超过 100000 字，或属于考试、医学、教程、操作训练、法规、密集攻略等密集材料时，应按 v8 分阶段停靠。
 
@@ -77,6 +78,8 @@ material_ready
 2026-05-24 与外部 GPT 讨论后形成的长期底座共识已保存到 `docs/material-package-hardening-roadmap.md`。定稿方向：`.course_material` 是唯一材料包协议；Codex Goal 只是状态机执行代理；最终学生正文保持干净；source refs、trace map、validator、quality audit 全部旁路化；学习台最终只读取 `content_draft/learning_notes.md` 和 `content_draft/chapter_mindmap.md`。下一轮大更新优先顺序是：validator + ready 分层骨架、source index + trace map、read-only quality audit、golden eval + 300k synthetic test，最后才回到内容提示词优化。
 
 ready 需要长期拆分为内部三层：`pipeline_ready` 表示 deterministic validator 通过，只证明工程上不是假完成；`audit_ready` 表示只读质量审计或人工确认没有高风险；`release_ready` 表示产品层允许正式进入学习台。`learning_notes_ready` 以后不应单独等于“可以放心导入”，至少应配合 `pipeline_ready = true`。
+
+2026-05-25 第五阶段底座开始将规则合同化：新材料包生成 `validation_contract.json`，由项目 profile resolved snapshot 派生；旧包在刷新/验证时自动补 `legacy_compatible` contract。桌面端新增可命令行运行的 validator：`cd desktop && npm run validate:material -- "<材料包路径>"`。validator 按 contract 写 `validation_report.json`，并把 `semantic_status`、`repair_intent`、`blocking_reason_codes` 和 `pipeline_ready` 摘要同步回根目录 `run_state.json`。v8.1 先强制核心 sanity checks；`learning_page_plans`、`required_source_cards`、`published_claims` 后续再升为 strict required。
 
 2026-05-24 第二阶段底座开始加入旁路追溯：软件在材料包生成时写 `indexes/source_index.jsonl`，Codex 在最终收口时写 `indexes/learning_notes_trace.json` 和 `indexes/chapter_mindmap_trace.json`。学生正文仍保持干净，不暴露 block/source/debug；validator 用 trace map 判断长材料是否具备可审计来源链。
 
@@ -99,6 +102,10 @@ content_draft/work/source_map.json
 content_draft/work/block_digest/
 content_draft/work/topic_inventory.json
 content_draft/work/source_cards/
+content_draft/work/source_cards/candidates/
+content_draft/work/source_cards/required/
+content_draft/work/learning_page_plans/
+content_draft/work/published_claims/
 content_draft/work/evidence_ledger.jsonl
 content_draft/work/coverage_matrix.json
 content_draft/work/block_reread_ledger.jsonl
