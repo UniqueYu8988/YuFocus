@@ -35,6 +35,7 @@ class CaseSpec:
     notes_mode: str
     trace_mode: str
     audit_result: str
+    evidence_mode: str
 
 
 def _ensure_inside_output(path: Path) -> Path:
@@ -122,6 +123,69 @@ def _read_trace_links(path: Path) -> list[dict[str, Any]]:
     return [item for item in links if isinstance(item, dict)] if isinstance(links, list) else []
 
 
+def _read_jsonl_records(path: Path) -> tuple[list[dict[str, Any]], int]:
+    records: list[dict[str, Any]] = []
+    invalid_lines = 0
+    if not path.exists():
+        return records, invalid_lines
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except Exception:
+            invalid_lines += 1
+            continue
+        if isinstance(payload, dict):
+            records.append(payload)
+        else:
+            invalid_lines += 1
+    return records, invalid_lines
+
+
+def _structured_records_from_dir(path: Path) -> tuple[list[dict[str, Any]], int]:
+    records: list[dict[str, Any]] = []
+    invalid_count = 0
+    if not path.exists():
+        return records, invalid_count
+    for file_path in path.rglob("*"):
+        if not file_path.is_file() or file_path.suffix.lower() not in {".json", ".jsonl"}:
+            continue
+        if file_path.suffix.lower() == ".jsonl":
+            parsed, invalid_lines = _read_jsonl_records(file_path)
+            records.extend(parsed)
+            invalid_count += invalid_lines
+            continue
+        try:
+            payload = json.loads(file_path.read_text(encoding="utf-8"))
+        except Exception:
+            invalid_count += 1
+            continue
+        if isinstance(payload, list):
+            records.extend(item for item in payload if isinstance(item, dict))
+        elif isinstance(payload, dict):
+            for key in ("pages", "learning_pages", "learning_units", "sections", "units", "cards", "source_cards", "claims"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    records.extend(item for item in value if isinstance(item, dict))
+                    break
+            else:
+                records.append(payload)
+    return records, invalid_count
+
+
+def _list_strings(value: Any) -> list[str]:
+    return [str(item).strip() for item in value] if isinstance(value, list) else []
+
+
+def _first_text(payload: dict[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _audit_result(path: Path) -> str:
     if not path.exists():
         return "missing"
@@ -130,6 +194,78 @@ def _audit_result(path: Path) -> str:
     if match:
         return match.group(1).lower()
     return "unknown"
+
+
+def _validate_strict_evidence(
+    material_path: Path,
+    *,
+    learning_unit_count: int,
+    required_topic_count: int,
+    source_entry_ids: set[str],
+    source_block_ids: set[str],
+    error,
+) -> None:
+    contract = _read_json(material_path / "validation_contract.json")
+    capabilities = contract.get("capabilities") if isinstance(contract.get("capabilities"), dict) else {}
+    if not any(value == "required" for value in capabilities.values()):
+        return
+
+    plan_records, plan_invalid = _structured_records_from_dir(material_path / "content_draft" / "work" / "learning_page_plans")
+    candidate_records, candidate_invalid = _structured_records_from_dir(material_path / "content_draft" / "work" / "source_cards" / "candidates")
+    required_records, required_invalid = _structured_records_from_dir(material_path / "content_draft" / "work" / "source_cards" / "required")
+    claim_records, claim_invalid = _structured_records_from_dir(material_path / "content_draft" / "work" / "published_claims")
+
+    if capabilities.get("learning_page_plan") == "required":
+        if plan_invalid:
+            error("learning_page_plan_invalid", "learning page plan has invalid JSON/JSONL")
+        if len(plan_records) < learning_unit_count:
+            error("learning_page_plan_incomplete", f"plan records {len(plan_records)} < learning units {learning_unit_count}")
+    if capabilities.get("candidate_source_cards") == "required":
+        if candidate_invalid:
+            error("candidate_source_cards_invalid", "candidate source cards have invalid JSON/JSONL")
+        if not candidate_records:
+            error("candidate_source_cards_empty", "candidate source cards are empty")
+    if capabilities.get("required_source_cards") == "required":
+        if required_invalid:
+            error("required_source_cards_invalid", "required source cards have invalid JSON/JSONL")
+        if not required_records:
+            error("required_source_cards_empty", "required source cards are empty")
+
+    required_card_ids: set[str] = set()
+    for record in required_records:
+        card_id = _first_text(record, ("card_id", "source_card_id", "id"))
+        if not card_id:
+            error("required_source_cards_missing_id", "required source card missing id")
+        else:
+            required_card_ids.add(card_id)
+        entry_ids = _list_strings(record.get("source_index_entry_ids") or record.get("source_entry_ids"))
+        block_ids = _list_strings(record.get("block_ids") or record.get("blocks"))
+        if not entry_ids and not block_ids:
+            error("required_source_cards_missing_source_refs", "required source card missing source refs")
+        if not _first_text(record, ("excerpt", "source_excerpt", "quote", "text")) and not _first_text(record, ("lock_snapshot_hash", "source_snapshot_hash")):
+            error("required_source_cards_missing_snapshot", "required source card missing excerpt or lock hash")
+        unknown_entries = [entry_id for entry_id in entry_ids if source_entry_ids and entry_id not in source_entry_ids]
+        unknown_blocks = [block_id for block_id in block_ids if source_block_ids and block_id not in source_block_ids]
+        if unknown_entries:
+            error("required_source_cards_unknown_source_entries", ", ".join(unknown_entries[:8]))
+        if unknown_blocks:
+            error("required_source_cards_unknown_blocks", ", ".join(unknown_blocks[:8]))
+
+    if capabilities.get("published_claims") == "required":
+        if claim_invalid:
+            error("published_claims_invalid", "published claims have invalid JSON/JSONL")
+        minimum_claims = max(learning_unit_count, min(required_topic_count, learning_unit_count * 3))
+        if len(claim_records) < minimum_claims:
+            error("published_claims_too_few", f"claims {len(claim_records)} < {minimum_claims}")
+    for record in claim_records:
+        if not _first_text(record, ("claim", "text", "statement")):
+            error("published_claims_missing_text", "published claim missing text")
+        refs = _list_strings(record.get("required_source_card_ids") or record.get("source_card_ids") or record.get("card_ids"))
+        if not refs:
+            error("published_claims_missing_source_cards", "published claim missing source card refs")
+        unknown_refs = [card_id for card_id in refs if required_card_ids and card_id not in required_card_ids]
+        if unknown_refs:
+            error("published_claims_unknown_source_cards", ", ".join(unknown_refs[:8]))
 
 
 def _evaluate_package(material_path: Path) -> dict[str, Any]:
@@ -170,6 +306,9 @@ def _evaluate_package(material_path: Path) -> dict[str, Any]:
         plain = _plain_length(notes)
         h1_count = len(re.findall(r"^#\s+", notes, flags=re.MULTILINE))
         h3_lengths = _heading_body_lengths(notes, 3)
+        h2_count = len(re.findall(r"^##\s+", notes, flags=re.MULTILINE))
+        h3_count = len(h3_lengths)
+        learning_unit_count = h3_count if h3_count else h2_count
         median_h3 = _median(h3_lengths)
         if h1_count != 1:
             error("learning_notes_h1_invalid", f"expected one h1, got {h1_count}")
@@ -210,6 +349,21 @@ def _evaluate_package(material_path: Path) -> dict[str, Any]:
         }
         if missing_blocks:
             error(f"{trace_name}_points_to_unknown_blocks", ", ".join(sorted(missing_blocks)[:8]))
+
+    if stage == "learning_notes_ready":
+        learning_unit_count = len(_heading_body_lengths(notes, 3)) if notes else 0
+        required_topic_count = 0
+        coverage = _read_json(material_path / "content_draft" / "work" / "coverage_matrix.json")
+        topics = coverage.get("topics") if isinstance(coverage.get("topics"), list) else []
+        required_topic_count = len([item for item in topics if isinstance(item, dict)])
+        _validate_strict_evidence(
+            material_path,
+            learning_unit_count=learning_unit_count,
+            required_topic_count=required_topic_count,
+            source_entry_ids=source_entry_ids,
+            source_block_ids=source_block_ids,
+            error=error,
+        )
 
     pipeline_ready = stage == "learning_notes_ready" and learning_notes_path.exists() and mindmap_path.exists() and not issues
     audit_status = _audit_result(audit_path)
@@ -384,6 +538,88 @@ def _make_trace(material_id: str, artifact: str, block_ids: list[str], mode: str
     }
 
 
+def _write_strict_evidence(material_path: Path, block_ids: list[str]) -> None:
+    work_dir = material_path / "content_draft" / "work"
+    page_plan_dir = work_dir / "learning_page_plans"
+    candidate_dir = work_dir / "source_cards" / "candidates"
+    required_dir = work_dir / "source_cards" / "required"
+    claims_dir = work_dir / "published_claims"
+    usable_blocks = block_ids[:12] or ["block_001"]
+
+    learning_pages: list[dict[str, Any]] = []
+    candidate_lines: list[str] = []
+    required_lines: list[str] = []
+    claim_lines: list[str] = []
+
+    for index, block_id in enumerate(usable_blocks, start=1):
+        candidate_id = f"candidate_{index:03d}"
+        card_id = f"card_{index:03d}"
+        heading = f"### Synthetic learning unit {index}"
+        excerpt = (
+            f"Synthetic source excerpt for block {block_id}. It includes mechanism, boundary, "
+            "example, misconception, and review hook evidence for protocol testing."
+        )
+        learning_pages.append(
+            {
+                "page_id": f"page_{index:03d}",
+                "target_heading": heading,
+                "node_ids": [f"node_{index:03d}"],
+                "required_source_card_ids": [card_id],
+                "content_slots": [
+                    "definition_or_positioning",
+                    "mechanism_or_reasoning",
+                    "boundary_or_exception",
+                    "example_or_review_question",
+                ],
+            }
+        )
+        candidate_lines.append(
+            json.dumps(
+                {
+                    "card_id": candidate_id,
+                    "source_index_entry_ids": [f"src_{block_id}"],
+                    "block_ids": [block_id],
+                    "excerpt": excerpt,
+                    "topic_ids": [f"topic_{index:03d}"],
+                    "why_candidate": "Synthetic candidate evidence for strict validator testing.",
+                },
+                ensure_ascii=False,
+            )
+        )
+        required_lines.append(
+            json.dumps(
+                {
+                    "card_id": card_id,
+                    "candidate_card_id": candidate_id,
+                    "branch_id": "branch_001",
+                    "source_index_entry_ids": [f"src_{block_id}"],
+                    "block_ids": [block_id],
+                    "excerpt": excerpt,
+                    "supports": ["mechanism", "boundary", "example"],
+                    "risk_note": "Synthetic locked evidence; no real factual claim.",
+                },
+                ensure_ascii=False,
+            )
+        )
+        claim_lines.append(
+            json.dumps(
+                {
+                    "claim_id": f"claim_{index:03d}",
+                    "target_heading": heading,
+                    "claim": f"Synthetic learning unit {index} explains a mechanism, boundary, and review hook.",
+                    "required_source_card_ids": [card_id],
+                    "coverage_role": "published_learning_unit",
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    _write_json(page_plan_dir / "manifest.json", {"schema_version": "shijie.learning-page-plan.v0.1", "learning_pages": learning_pages})
+    _write_text(candidate_dir / "candidates.jsonl", "\n".join(candidate_lines))
+    _write_text(required_dir / "required.jsonl", "\n".join(required_lines))
+    _write_text(claims_dir / "all_claims.jsonl", "\n".join(claim_lines))
+
+
 def _write_ready_case(material_path: Path, spec: CaseSpec) -> None:
     manifest = _read_json(material_path / "manifest.json")
     material_id = str(manifest.get("material_id") or "synthetic_eval")
@@ -415,6 +651,8 @@ def _write_ready_case(material_path: Path, spec: CaseSpec) -> None:
     _write_text(material_path / "content_draft" / "chapter_mindmap.md", _make_mindmap())
     _write_json(indexes_dir / "learning_notes_trace.json", _make_trace(material_id, "learning_notes.md", block_ids, spec.trace_mode))
     _write_json(indexes_dir / "chapter_mindmap_trace.json", _make_trace(material_id, "chapter_mindmap.md", block_ids, spec.trace_mode))
+    if spec.evidence_mode == "valid":
+        _write_strict_evidence(material_path, block_ids)
     _write_text(
         review_dir / "quality_audit_report.md",
         "\n".join(
@@ -458,11 +696,12 @@ def run_eval(output_dir: Path, target_chars: int) -> dict[str, Any]:
     cases_root.mkdir(parents=True, exist_ok=True)
 
     cases = [
-        CaseSpec("valid_ready", True, True, "adequate", "valid", "pass"),
-        CaseSpec("fake_ready_thin", False, False, "thin", "valid", "pass"),
-        CaseSpec("fake_ready_empty_trace", False, False, "adequate", "empty", "pass"),
-        CaseSpec("fake_ready_unknown_trace", False, False, "adequate", "unknown_block", "pass"),
-        CaseSpec("audit_needs_fix", True, False, "adequate", "valid", "needs_fix"),
+        CaseSpec("valid_ready", True, True, "adequate", "valid", "pass", "valid"),
+        CaseSpec("fake_ready_thin", False, False, "thin", "valid", "pass", "valid"),
+        CaseSpec("fake_ready_empty_trace", False, False, "adequate", "empty", "pass", "valid"),
+        CaseSpec("fake_ready_unknown_trace", False, False, "adequate", "unknown_block", "pass", "valid"),
+        CaseSpec("fake_ready_missing_strict_evidence", False, False, "adequate", "valid", "pass", "missing"),
+        CaseSpec("audit_needs_fix", True, False, "adequate", "valid", "needs_fix", "valid"),
     ]
 
     results: list[dict[str, Any]] = []

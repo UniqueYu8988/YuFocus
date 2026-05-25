@@ -1,12 +1,12 @@
 {
-  "contract_version": "v8.1",
+  "contract_version": "v8.2",
   "profile": "lecture",
-  "mode": "standard",
+  "mode": "strict",
   "capabilities": {
-    "learning_page_plan": "optional",
-    "candidate_source_cards": "optional",
-    "required_source_cards": "optional",
-    "published_claims": "optional"
+    "learning_page_plan": "required",
+    "candidate_source_cards": "required",
+    "required_source_cards": "required",
+    "published_claims": "required"
   },
   "required_checks": [
     "material_structure",

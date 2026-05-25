@@ -1055,10 +1055,10 @@ def _build_validation_contract(
         },
     }
     capabilities = {
-        "learning_page_plan": "optional",
-        "candidate_source_cards": "optional",
-        "required_source_cards": "optional",
-        "published_claims": "optional",
+        "learning_page_plan": "required",
+        "candidate_source_cards": "required",
+        "required_source_cards": "required",
+        "published_claims": "required",
     }
     required_checks = [
         "material_structure",
@@ -1072,8 +1072,8 @@ def _build_validation_contract(
     contract = {
         **profile_payload,
         "schema_version": "shijie.validation-contract.v0.1",
-        "contract_version": str(profile_payload.get("contract_version") or "v8.1"),
-        "mode": str(profile_payload.get("mode") or "standard"),
+        "contract_version": str(profile_payload.get("contract_version") or "v8.2"),
+        "mode": str(profile_payload.get("mode") or "strict"),
         "profile": profile,
         "material_id": material_id,
         "profile_source": f"schemas/validation_profiles/{profile}.v8.json",
@@ -1084,8 +1084,8 @@ def _build_validation_contract(
         "length_policy": length_policy,
         "resolved_rules": {
             "new_material_contract": True,
-            "strict_features_required": False,
-            "notes": "v8.1 先强制核心 sanity checks；learning_page_plan、required_source_cards 和 published_claims 在后续 strict 合同中升级为 required。",
+            "strict_features_required": True,
+            "notes": "v8.2 strict 合同要求 learning_page_plan、candidate/required source_cards 和 published_claims，最终导入前由软件 validator 检查。",
         },
     }
     return contract
@@ -1133,6 +1133,8 @@ def _write_authoring_workspace(material_dir: str, *, course_title: str, material
         "先读取根目录 `run_state.json`、`validation_contract.json` 和 `content_draft/work/run_state.json`：这是单次复制入口，同一个 Goal 应自动多轮推进；每一轮最多只过一个阶段闸门。`material_ready` 先到 `knowledge_tree_ready`；`knowledge_tree_ready` 再到 `coverage_ready`；`coverage_ready` 再到 `dossier_ready`；`dossier_ready` 或 `partial_learning_notes` 每轮只深写 1-2 个知识树分支，直到 `learning_notes_ready`。阶段完成不是 Goal 完成，不要跳阶段。",
         "",
         "软件已生成 `indexes/source_index.jsonl`。最终收口时请把正文和导图来源写入 `indexes/learning_notes_trace.json`、`indexes/chapter_mindmap_trace.json`；学生正文保持干净，不写 block/source/debug 信息。",
+        "",
+        "本材料包默认按 v8.2 strict contract 生产：最终收口前需要写出 `content_draft/work/learning_page_plans/`、`content_draft/work/source_cards/candidates/`、`content_draft/work/source_cards/required/` 和 `content_draft/work/published_claims/` 的可解析旁路证据，学生正文仍保持干净。",
         "",
         "最终收口后请回到项目根目录运行 `cd desktop && npm run validate:material -- \"<本材料包路径>\"`。只有 validator 写入 `pipeline_ready=true` 才能说工程上可导入；如果失败，按 validation_report 的 `repair_intent` 和 `blocking_reason_codes` 继续修复。",
         "",
@@ -1324,7 +1326,7 @@ def _write_handoff_files(
             "4. `coverage_ready`：Codex 按知识树分支回读 blocks，写 `block_reread_ledger.jsonl`、`section_dossiers/*.md` 和 `thinness_review.md`，停在 `dossier_ready`。",
             "5. `dossier_ready` 或 `partial_learning_notes`：Codex 每轮只深写 1-2 个知识树分支，逐步合并 `learning_notes.md`。",
             "6. 全部高价值分支通过结构复查和 thinness review 后，Codex 写入 `chapter_mindmap.md`、trace map，并标记 `learning_notes_ready`。",
-            "7. 回到项目根目录运行 `cd desktop && npm run validate:material -- <材料包路径>` 或刷新工作台；只有 validator 写入 `pipeline_ready=true`，才算工程上可导入学习台。",
+            "7. 回到项目根目录运行 `cd desktop && npm run validate:material -- <材料包路径>` 或刷新工作台；只有 validator 写入 `pipeline_ready=true`，才算工程上可导入学习台。v8.2 strict 新包会检查学习页计划、candidate/required source cards 和 published claims。",
             "",
             "## 关键文件",
             "",

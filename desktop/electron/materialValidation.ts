@@ -50,6 +50,10 @@ export type MaterialValidationReport = {
     source_index_entries: number
     learning_notes_trace_links: number
     chapter_mindmap_trace_links: number
+    learning_page_plan_units: number
+    candidate_source_card_count: number
+    required_source_card_count: number
+    published_claim_count: number
     quality_audit_report_exists: boolean
     quality_audit_result: string
   }
@@ -96,14 +100,14 @@ const VALIDATION_REPORT_PATH = 'content_draft/review_exports/validation_report.j
 
 const DEFAULT_PROFILES: Record<string, ValidationProfile> = {
   lecture: {
-    contract_version: 'v8.1',
+    contract_version: 'v8.2',
     profile: 'lecture',
-    mode: 'standard',
+    mode: 'strict',
     capabilities: {
-      learning_page_plan: 'optional',
-      candidate_source_cards: 'optional',
-      required_source_cards: 'optional',
-      published_claims: 'optional',
+      learning_page_plan: 'required',
+      candidate_source_cards: 'required',
+      required_source_cards: 'required',
+      published_claims: 'required',
     },
     required_checks: [
       'material_structure',
@@ -124,14 +128,14 @@ const DEFAULT_PROFILES: Record<string, ValidationProfile> = {
     },
   },
   technical_tutorial: {
-    contract_version: 'v8.1',
+    contract_version: 'v8.2',
     profile: 'technical_tutorial',
-    mode: 'standard',
+    mode: 'strict',
     capabilities: {
-      learning_page_plan: 'optional',
-      candidate_source_cards: 'optional',
-      required_source_cards: 'optional',
-      published_claims: 'optional',
+      learning_page_plan: 'required',
+      candidate_source_cards: 'required',
+      required_source_cards: 'required',
+      published_claims: 'required',
     },
     required_checks: [
       'material_structure',
@@ -152,14 +156,14 @@ const DEFAULT_PROFILES: Record<string, ValidationProfile> = {
     },
   },
   medical_exam: {
-    contract_version: 'v8.1',
+    contract_version: 'v8.2',
     profile: 'medical_exam',
-    mode: 'standard',
+    mode: 'strict',
     capabilities: {
-      learning_page_plan: 'optional',
-      candidate_source_cards: 'optional',
-      required_source_cards: 'optional',
-      published_claims: 'optional',
+      learning_page_plan: 'required',
+      candidate_source_cards: 'required',
+      required_source_cards: 'required',
+      published_claims: 'required',
     },
     required_checks: [
       'material_structure',
@@ -293,6 +297,109 @@ function readTraceMapLinks(documentPath: string) {
   const payload = readJsonDocument(documentPath)
   if (!payload || !Array.isArray(payload.links)) return []
   return payload.links.filter((link): link is Record<string, unknown> => Boolean(link && typeof link === 'object' && !Array.isArray(link)))
+}
+
+function listFilesRecursive(directoryPath: string, extensions: string[]) {
+  const files: string[] = []
+  if (!fs.existsSync(directoryPath)) return files
+  const normalizedExtensions = new Set(extensions.map((extension) => extension.toLowerCase()))
+  const visit = (currentPath: string) => {
+    let entries: Array<{ name: string; isDirectory: () => boolean; isFile: () => boolean }> = []
+    try {
+      entries = fs.readdirSync(currentPath, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const nextPath = path.join(currentPath, entry.name)
+      if (entry.isDirectory()) {
+        visit(nextPath)
+        continue
+      }
+      if (entry.isFile() && normalizedExtensions.has(path.extname(entry.name).toLowerCase())) files.push(nextPath)
+    }
+  }
+  visit(directoryPath)
+  return files
+}
+
+function asRecordArray(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+  }
+  return []
+}
+
+function collectStructuredRecords(value: unknown): Record<string, unknown>[] {
+  if (!value || typeof value !== 'object') return []
+  if (Array.isArray(value)) return asRecordArray(value)
+  const record = value as Record<string, unknown>
+  const directCollections = [
+    record.pages,
+    record.learning_pages,
+    record.learning_units,
+    record.sections,
+    record.units,
+    record.cards,
+    record.source_cards,
+    record.claims,
+  ]
+  for (const collection of directCollections) {
+    const records = asRecordArray(collection)
+    if (records.length > 0) return records
+  }
+  return [record]
+}
+
+function readJsonlRecords(filePath: string) {
+  const records: Record<string, unknown>[] = []
+  let invalidLineCount = 0
+  try {
+    const lines = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/u)
+    for (const line of lines) {
+      if (!line.trim()) continue
+      try {
+        const parsed = JSON.parse(line)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          records.push(parsed as Record<string, unknown>)
+        } else {
+          invalidLineCount += 1
+        }
+      } catch {
+        invalidLineCount += 1
+      }
+    }
+  } catch {
+    invalidLineCount += 1
+  }
+  return { records, invalidLineCount }
+}
+
+function readStructuredRecordsFromDirectory(directoryPath: string, extensions: string[]) {
+  const files = listFilesRecursive(directoryPath, extensions)
+  const records: Record<string, unknown>[] = []
+  let invalidFileCount = 0
+  let invalidLineCount = 0
+  for (const filePath of files) {
+    try {
+      if (filePath.toLowerCase().endsWith('.jsonl')) {
+        const parsed = readJsonlRecords(filePath)
+        records.push(...parsed.records)
+        invalidLineCount += parsed.invalidLineCount
+        continue
+      }
+      const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+      records.push(...collectStructuredRecords(parsed))
+    } catch {
+      invalidFileCount += 1
+    }
+  }
+  return { files, records, invalidFileCount, invalidLineCount }
+}
+
+function arrayOfStrings(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => sanitizeDisplayText(item)).filter(Boolean)
 }
 
 function readQualityAuditReportStatus(reportPath: string, legacyReportPath: string) {
@@ -464,7 +571,8 @@ function countRequiredTopics(materialPath: string) {
 
 function repairIntentForIssueCodes(codes: string[]) {
   if (codes.some((code) => /trace|source_index/u.test(code))) return 'needs_trace_repair'
-  if (codes.some((code) => /source_cards|evidence/u.test(code))) return 'needs_evidence_expansion'
+  if (codes.some((code) => /source_cards|evidence|published_claims/u.test(code))) return 'needs_evidence_expansion'
+  if (codes.some((code) => /learning_page_plan/u.test(code))) return 'needs_page_plan_repair'
   if (codes.some((code) => /thin|short|h3|published_topics_under_supported/u.test(code))) return 'needs_deepening'
   if (codes.some((code) => /state|pipeline_ready|contract/u.test(code))) return 'needs_state_repair'
   if (codes.some((code) => /missing|invalid|placeholder|debug/u.test(code))) return 'needs_repair'
@@ -475,26 +583,181 @@ function isProductionWritten(stage: string, runState: Record<string, unknown>) {
   return stage === 'learning_notes_ready' || sanitizeDisplayText(runState.semantic_status ?? '') === 'learning_notes_written'
 }
 
-function checkRequiredCapability(
+function capabilityRequired(contract: ValidationContract, capability: string) {
+  return contract.capabilities?.[capability] === 'required'
+}
+
+function recordId(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = sanitizeDisplayText(record[key] ?? '')
+    if (value) return value
+  }
+  return ''
+}
+
+function sourceEntryRefs(record: Record<string, unknown>) {
+  return arrayOfStrings(record.source_index_entry_ids ?? record.source_entry_ids ?? record.entry_ids)
+}
+
+function blockRefs(record: Record<string, unknown>) {
+  return arrayOfStrings(record.block_ids ?? record.blocks)
+}
+
+function sourceCardRefs(record: Record<string, unknown>) {
+  return arrayOfStrings(
+    record.required_source_card_ids ??
+      record.source_card_ids ??
+      record.source_cards ??
+      record.required_cards ??
+      record.card_ids,
+  )
+}
+
+function hasLockedEvidenceSnapshot(record: Record<string, unknown>) {
+  const excerpt = sanitizeDisplayText(record.excerpt ?? record.source_excerpt ?? record.quote ?? record.text ?? '')
+  const snapshotHash = sanitizeDisplayText(record.lock_snapshot_hash ?? record.source_snapshot_hash ?? '')
+  return excerpt.length >= 20 || snapshotHash.length >= 8
+}
+
+function validateSourceRefs(
+  records: Record<string, unknown>[],
+  sourceIndexSummary: ReturnType<typeof readSourceIndexSummary>,
+) {
+  const unknownEntries = new Set<string>()
+  const unknownBlocks = new Set<string>()
+  for (const record of records) {
+    for (const entryId of sourceEntryRefs(record)) {
+      if (sourceIndexSummary.entryIds.size > 0 && !sourceIndexSummary.entryIds.has(entryId)) unknownEntries.add(entryId)
+    }
+    for (const blockId of blockRefs(record)) {
+      if (sourceIndexSummary.blockIds.size > 0 && !sourceIndexSummary.blockIds.has(blockId)) unknownBlocks.add(blockId)
+    }
+  }
+  return { unknownEntries, unknownBlocks }
+}
+
+function checkStrictEvidenceCapabilities(
   materialPath: string,
   contract: ValidationContract,
-  capability: string,
-  relativePath: string,
+  productionWritten: boolean,
+  learningUnitCount: number,
+  requiredTopicCount: number,
+  sourceIndexSummary: ReturnType<typeof readSourceIndexSummary>,
   addIssue: (severity: MaterialValidationIssue['severity'], code: string, message: string, relativePath?: string) => void,
 ) {
-  if (contract.capabilities?.[capability] !== 'required') return
-  const absolutePath = path.join(materialPath, relativePath)
-  if (!fs.existsSync(absolutePath)) {
-    addIssue('error', `${capability}_missing`, `当前 validation_contract 要求 ${capability}，但缺少 ${relativePath}。`, relativePath)
-    return
+  const emptyCounts = {
+    learningPagePlanUnits: 0,
+    candidateSourceCardCount: 0,
+    requiredSourceCardCount: 0,
+    publishedClaimCount: 0,
   }
-  try {
-    const stat = fs.statSync(absolutePath)
-    if (stat.isDirectory() && fs.readdirSync(absolutePath).filter((item) => item !== 'README.md').length === 0) {
-      addIssue('error', `${capability}_empty`, `当前 validation_contract 要求 ${capability}，但 ${relativePath} 为空。`, relativePath)
+  if (!productionWritten) return emptyCounts
+
+  const learningPagePlanPath = 'content_draft/work/learning_page_plans'
+  const candidateCardsPath = 'content_draft/work/source_cards/candidates'
+  const requiredCardsPath = 'content_draft/work/source_cards/required'
+  const publishedClaimsPath = 'content_draft/work/published_claims'
+
+  const learningPlans = readStructuredRecordsFromDirectory(path.join(materialPath, learningPagePlanPath), ['.json', '.jsonl'])
+  const candidateCards = readStructuredRecordsFromDirectory(path.join(materialPath, candidateCardsPath), ['.json', '.jsonl'])
+  const requiredCards = readStructuredRecordsFromDirectory(path.join(materialPath, requiredCardsPath), ['.json', '.jsonl'])
+  const publishedClaims = readStructuredRecordsFromDirectory(path.join(materialPath, publishedClaimsPath), ['.json', '.jsonl'])
+
+  if (capabilityRequired(contract, 'learning_page_plan')) {
+    if (learningPlans.files.length === 0) {
+      addIssue('error', 'learning_page_plan_missing', 'strict 合同要求 learning_page_plans，但未找到 .json 或 .jsonl 计划文件。', learningPagePlanPath)
+    } else if (learningPlans.invalidFileCount || learningPlans.invalidLineCount) {
+      addIssue('error', 'learning_page_plan_invalid', 'learning_page_plans 存在无法解析的 JSON/JSONL。', learningPagePlanPath)
+    } else if (learningPlans.records.length === 0) {
+      addIssue('error', 'learning_page_plan_empty', 'learning_page_plans 没有可识别的学习页计划记录。', learningPagePlanPath)
+    } else if (learningUnitCount > 0 && learningPlans.records.length < learningUnitCount) {
+      addIssue(
+        'error',
+        'learning_page_plan_incomplete',
+        `学习页计划数量 ${learningPlans.records.length} 少于最终学习单位 ${learningUnitCount}。`,
+        learningPagePlanPath,
+      )
     }
-  } catch {
-    addIssue('error', `${capability}_unreadable`, `无法读取 ${relativePath}。`, relativePath)
+  }
+
+  if (capabilityRequired(contract, 'candidate_source_cards')) {
+    if (candidateCards.files.length === 0) {
+      addIssue('error', 'candidate_source_cards_missing', 'strict 合同要求 candidate source cards，但候选卡目录没有 .json/.jsonl。', candidateCardsPath)
+    } else if (candidateCards.invalidFileCount || candidateCards.invalidLineCount) {
+      addIssue('error', 'candidate_source_cards_invalid', 'candidate source cards 存在无法解析的 JSON/JSONL。', candidateCardsPath)
+    } else if (candidateCards.records.length === 0) {
+      addIssue('error', 'candidate_source_cards_empty', 'candidate source cards 没有可识别记录。', candidateCardsPath)
+    }
+  }
+
+  const requiredCardIds = new Set<string>()
+  if (capabilityRequired(contract, 'required_source_cards')) {
+    if (requiredCards.files.length === 0) {
+      addIssue('error', 'required_source_cards_missing', 'strict 合同要求 required source cards，但 required 目录没有 .json/.jsonl。', requiredCardsPath)
+    } else if (requiredCards.invalidFileCount || requiredCards.invalidLineCount) {
+      addIssue('error', 'required_source_cards_invalid', 'required source cards 存在无法解析的 JSON/JSONL。', requiredCardsPath)
+    } else if (requiredCards.records.length === 0) {
+      addIssue('error', 'required_source_cards_empty', 'required source cards 没有可识别记录。', requiredCardsPath)
+    }
+
+    const cardsWithoutId = requiredCards.records.filter((record) => !recordId(record, ['card_id', 'source_card_id', 'id']))
+    const cardsWithoutSource = requiredCards.records.filter((record) => sourceEntryRefs(record).length === 0 && blockRefs(record).length === 0)
+    const cardsWithoutSnapshot = requiredCards.records.filter((record) => !hasLockedEvidenceSnapshot(record))
+    for (const record of requiredCards.records) {
+      const id = recordId(record, ['card_id', 'source_card_id', 'id'])
+      if (id) requiredCardIds.add(id)
+    }
+    const sourceRefValidation = validateSourceRefs(requiredCards.records, sourceIndexSummary)
+    if (cardsWithoutId.length > 0) addIssue('error', 'required_source_cards_missing_id', `${cardsWithoutId.length} 条 required source card 缺少 card_id/source_card_id。`, requiredCardsPath)
+    if (cardsWithoutSource.length > 0) addIssue('error', 'required_source_cards_missing_source_refs', `${cardsWithoutSource.length} 条 required source card 缺少 source_index_entry_ids 或 block_ids。`, requiredCardsPath)
+    if (cardsWithoutSnapshot.length > 0) addIssue('error', 'required_source_cards_missing_snapshot', `${cardsWithoutSnapshot.length} 条 required source card 缺少 excerpt 或 lock_snapshot_hash。`, requiredCardsPath)
+    if (sourceRefValidation.unknownEntries.size > 0) {
+      addIssue('error', 'required_source_cards_unknown_source_entries', `required source cards 指向未知 source_index_entry_ids：${Array.from(sourceRefValidation.unknownEntries).slice(0, 8).join(', ')}。`, requiredCardsPath)
+    }
+    if (sourceRefValidation.unknownBlocks.size > 0) {
+      addIssue('error', 'required_source_cards_unknown_blocks', `required source cards 指向未知 block_ids：${Array.from(sourceRefValidation.unknownBlocks).slice(0, 8).join(', ')}。`, requiredCardsPath)
+    }
+  }
+
+  if (capabilityRequired(contract, 'published_claims')) {
+    if (publishedClaims.files.length === 0) {
+      addIssue('error', 'published_claims_missing', 'strict 合同要求 published_claims，但未找到 .json 或 .jsonl。', publishedClaimsPath)
+    } else if (publishedClaims.invalidFileCount || publishedClaims.invalidLineCount) {
+      addIssue('error', 'published_claims_invalid', 'published_claims 存在无法解析的 JSON/JSONL。', publishedClaimsPath)
+    } else if (publishedClaims.records.length === 0) {
+      addIssue('error', 'published_claims_empty', 'published_claims 没有可识别记录。', publishedClaimsPath)
+    }
+
+    const minimumClaims = Math.max(learningUnitCount, Math.min(requiredTopicCount, learningUnitCount * 3))
+    if (minimumClaims > 0 && publishedClaims.records.length < minimumClaims) {
+      addIssue(
+        'error',
+        'published_claims_too_few',
+        `published_claims 数量 ${publishedClaims.records.length} 少于当前学习单位/重点 topic 的最低审计量 ${minimumClaims}。`,
+        publishedClaimsPath,
+      )
+    }
+
+    const claimsWithoutText = publishedClaims.records.filter((record) => !sanitizeDisplayText(record.claim ?? record.text ?? record.statement ?? ''))
+    const claimsWithoutCards = publishedClaims.records.filter((record) => sourceCardRefs(record).length === 0)
+    const unknownCardRefs = new Set<string>()
+    for (const record of publishedClaims.records) {
+      for (const cardId of sourceCardRefs(record)) {
+        if (requiredCardIds.size > 0 && !requiredCardIds.has(cardId)) unknownCardRefs.add(cardId)
+      }
+    }
+    if (claimsWithoutText.length > 0) addIssue('error', 'published_claims_missing_text', `${claimsWithoutText.length} 条 published claim 缺少 claim/text/statement。`, publishedClaimsPath)
+    if (claimsWithoutCards.length > 0) addIssue('error', 'published_claims_missing_source_cards', `${claimsWithoutCards.length} 条 published claim 缺少 required_source_card_ids/source_card_ids。`, publishedClaimsPath)
+    if (unknownCardRefs.size > 0) {
+      addIssue('error', 'published_claims_unknown_source_cards', `published claims 指向未知 required source cards：${Array.from(unknownCardRefs).slice(0, 8).join(', ')}。`, publishedClaimsPath)
+    }
+  }
+
+  return {
+    learningPagePlanUnits: learningPlans.records.length,
+    candidateSourceCardCount: candidateCards.records.length,
+    requiredSourceCardCount: requiredCards.records.length,
+    publishedClaimCount: publishedClaims.records.length,
   }
 }
 
@@ -696,10 +959,16 @@ export function validateMaterialPackageArtifacts(
     }
   }
 
-  checkRequiredCapability(materialPath, contract, 'learning_page_plan', 'content_draft/work/learning_page_plans', addIssue)
-  checkRequiredCapability(materialPath, contract, 'candidate_source_cards', 'content_draft/work/source_cards/candidates', addIssue)
-  checkRequiredCapability(materialPath, contract, 'required_source_cards', 'content_draft/work/source_cards/required', addIssue)
-  checkRequiredCapability(materialPath, contract, 'published_claims', 'content_draft/work/published_claims', addIssue)
+  const learningUnitCount = h3Count > 0 ? h3Count : h2Count
+  const strictEvidenceSummary = checkStrictEvidenceCapabilities(
+    materialPath,
+    contract,
+    isProductionWritten(stage, runState),
+    learningUnitCount,
+    requiredTopicCount,
+    sourceIndexSummary,
+    addIssue,
+  )
 
   const coverageMatrix = readJsonDocument(coverageMatrixPath)
   if (coverageMatrix && longMaterial) {
@@ -760,6 +1029,10 @@ export function validateMaterialPackageArtifacts(
     source_index_entries: sourceIndexEntries,
     learning_notes_trace_links: learningNotesTraceLinks,
     chapter_mindmap_trace_links: chapterMindmapTraceLinks,
+    learning_page_plan_units: strictEvidenceSummary.learningPagePlanUnits,
+    candidate_source_card_count: strictEvidenceSummary.candidateSourceCardCount,
+    required_source_card_count: strictEvidenceSummary.requiredSourceCardCount,
+    published_claim_count: strictEvidenceSummary.publishedClaimCount,
     quality_audit_report_exists: qualityAuditStatus.exists,
     quality_audit_result: qualityAuditStatus.result,
   }

@@ -79,7 +79,7 @@ material_ready
 
 ready 需要长期拆分为内部三层：`pipeline_ready` 表示 deterministic validator 通过，只证明工程上不是假完成；`audit_ready` 表示只读质量审计或人工确认没有高风险；`release_ready` 表示产品层允许正式进入学习台。`learning_notes_ready` 以后不应单独等于“可以放心导入”，至少应配合 `pipeline_ready = true`。
 
-2026-05-25 第五阶段底座开始将规则合同化：新材料包生成 `validation_contract.json`，由项目 profile resolved snapshot 派生；旧包在刷新/验证时自动补 `legacy_compatible` contract。桌面端新增可命令行运行的 validator：`cd desktop && npm run validate:material -- "<材料包路径>"`。validator 按 contract 写 `validation_report.json`，并把 `semantic_status`、`repair_intent`、`blocking_reason_codes` 和 `pipeline_ready` 摘要同步回根目录 `run_state.json`。v8.1 先强制核心 sanity checks；`learning_page_plans`、`required_source_cards`、`published_claims` 后续再升为 strict required。
+2026-05-25 第五阶段底座开始将规则合同化：新材料包生成 `validation_contract.json`，由项目 profile resolved snapshot 派生；旧包在刷新/验证时自动补 `legacy_compatible` contract。桌面端新增可命令行运行的 validator：`cd desktop && npm run validate:material -- "<材料包路径>"`。validator 按 contract 写 `validation_report.json`，并把 `semantic_status`、`repair_intent`、`blocking_reason_codes` 和 `pipeline_ready` 摘要同步回根目录 `run_state.json`。第二步已把新材料包 profile 升为 `v8.2 strict`：`learning_page_plans`、candidate/required `source_cards`、`published_claims` 都是最终导入门禁；旧包不会被静默升级，只用于 legacy 诊断。
 
 2026-05-24 第二阶段底座开始加入旁路追溯：软件在材料包生成时写 `indexes/source_index.jsonl`，Codex 在最终收口时写 `indexes/learning_notes_trace.json` 和 `indexes/chapter_mindmap_trace.json`。学生正文仍保持干净，不暴露 block/source/debug；validator 用 trace map 判断长材料是否具备可审计来源链。
 

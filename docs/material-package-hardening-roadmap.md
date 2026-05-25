@@ -39,7 +39,7 @@ material_ready
 - `audit_ready`：只读质量审计没有发现高风险，或人工确认通过。
 - `release_ready`：产品层允许进入正式学习台展示，不能由 Codex 主观设置。
 
-`learning_notes_ready` 以后不应单独等于“可以放心导入”。至少应配合 `pipeline_ready = true`。validator 失败时，根目录 `run_state.json` 只保留 `repair_intent`、`blocking_reason_codes` 和报告指针，完整原因写入 `content_draft/review_exports/validation_report.json`。
+`learning_notes_ready` 以后不应单独等于“可以放心导入”。至少应配合 `pipeline_ready = true`。validator 失败时，根目录 `run_state.json` 只保留 `repair_intent`、`blocking_reason_codes` 和报告指针，完整原因写入 `content_draft/review_exports/validation_report.json`。v8.2 新包默认 strict，除了核心文件和 trace，还要求学习页计划、candidate/required source cards 和 published claims 可解析、可追溯。
 
 ## 目录职责
 
@@ -100,6 +100,8 @@ material_ready
 - `content_draft/work/`：知识树、coverage、dossier、章节草稿、复查文件等制作中间物。
 - `content_draft/review_exports/`：validator、只读审计、golden eval、压力测试报告。
 - `learning_notes.md` / `chapter_mindmap.md`：学习台最终读取的干净正文。
+
+strict 证据目录不是面向学生的内容，也不是提示词模板。它们只回答三个工程问题：最终每个可打开学习单位是否先有计划；关键判断是否有冻结的原文证据；正文里已经发布的 claim 是否能回指到这些证据。
 
 ## 旁路追溯规则
 
@@ -285,4 +287,5 @@ content_draft/review_exports/quality_audit_report.md
 - 第一阶段已完成：`learning_notes_ready` 拆为生产侧完成；`pipeline_ready`、`audit_ready`、`release_ready` 由软件侧 validator、审计和发布层接管。
 - 第二阶段开始：软件生成 `indexes/source_index.jsonl`，提供 block 级 source entry；Codex 最终收口时填写 `indexes/learning_notes_trace.json` 与 `indexes/chapter_mindmap_trace.json`。validator 对长材料检查 trace map，避免“正文看似完整但来源链不可审计”。
 - 第三阶段开始：标准只读审计产物改为 `content_draft/review_exports/quality_audit_report.md`，用 `audit_result: pass | needs_fix | blocked` 作为机器可读结果；validator 只在 `pipeline_ready=true` 且审计通过时设置 `audit_ready=true`。
+- 第五阶段第二步开始：新材料包的 profile 升到 `v8.2 strict`，`learning_page_plans`、candidate/required `source_cards`、`published_claims` 从预留目录升级为 deterministic gate。旧包缺失合同仍补 legacy，不会被静默升级为 strict。
 - 第四阶段开始：新增 `src/eval_material_pipeline.py`，生成 30 万字 synthetic 材料包并跑 golden cases，覆盖 valid ready、正文过薄、trace 为空、trace 指向未知 block、审计 needs_fix 等情况。报告写入 `output/evals/synthetic_300k/synthetic_300k_report.json`。
