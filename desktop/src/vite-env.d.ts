@@ -17,6 +17,8 @@ type RuntimeSettings = {
   minimax_tts_volume: number
   minimax_tts_pitch: number
   mimo_api_key: string
+  mimo_text_endpoint: string
+  mimo_text_model: string
   mimo_tts_endpoint: string
   mimo_tts_model: string
   mimo_tts_voice_id: string
@@ -28,6 +30,17 @@ type RuntimeSettings = {
   local_transcription_device: string
   local_transcription_language: string
   resource_mode: string
+  background_automation_enabled: boolean
+  background_check_interval_minutes: number
+  email_push_enabled: boolean
+  email_smtp_host: string
+  email_smtp_port: number
+  email_smtp_secure: boolean
+  email_smtp_user: string
+  email_smtp_password: string
+  email_from: string
+  email_to: string
+  workbench_queue_concurrency: number
 }
 
 type SettingsStatus = {
@@ -119,14 +132,72 @@ type DistillProgressPayload = {
   outlinePreview?: DistillOutlinePreview
 }
 
+type BackgroundAutomationStatus = {
+  enabled: boolean
+  paused: boolean
+  running: boolean
+  lastCheckAt: number | null
+  nextCheckAt: number | null
+  lastResult: string
+  lastError: string | null
+  checkIntervalMinutes: number
+}
+
+type EmailSendResult = {
+  ok: boolean
+  mode: 'smtp'
+  message: string
+  configured: boolean
+  recipientCount: number
+}
+
+type WorkbenchQueueClearResult = {
+  clearedCount: number
+  archivedCount: number
+  deletedMaterialCount: number
+  deletedPaths: string[]
+  skippedPaths: string[]
+}
+
 type MaterialPackageSummary = {
   name: string
   path: string
   title: string
   sourceId: string
+  sourceType: string
+  sourceUrl: string
+  creator: string
+  textSourceType: string
   blockCount: number
   textLength: number
+  byteSize: number
+  rawTranscriptTextLength: number
+  notebooklmTextLength: number
+  editorialSummaryTextLength: number
+  editorialSummaryHtmlBytes: number
+  metricsPath: string
+  metricsExists: boolean
+  metricsElapsedSeconds: number
+  metricsInputTokens: number
+  metricsOutputTokens: number
+  metricsTotalTokens: number
+  emailPushedAt: number
   updatedAt: number
+  notebooklmPath: string
+  notebooklmExists: boolean
+  editorialSummaryStatus: string
+  editorialSummaryPath: string
+  editorialSummaryExists: boolean
+  editorialSummaryHtmlPath: string
+  editorialSummaryHtmlExists: boolean
+  editorialCardsPath: string
+  editorialCardsExists: boolean
+  editorialReviewPath: string
+  editorialReviewExists: boolean
+  rawTranscriptPath: string
+  rawTranscriptExists: boolean
+  sourceIndexPath: string
+  sourceIndexExists: boolean
   handoffPath: string
   handoffExists: boolean
   runStatePath: string
@@ -137,34 +208,73 @@ type MaterialPackageSummary = {
   workflowStageLabel: string
   nextActionLabel: string
   pipelineReady: boolean
-  auditReady: boolean
-  releaseReady: boolean
-  validationReportPath: string
-  validationReportExists: boolean
-  validationErrorCount: number
-  validationWarningCount: number
-  qualityAuditReportPath: string
-  qualityAuditReportExists: boolean
-  qualityAuditResult: string
-  authoringDir: string
-  codexCoursePlanPath: string
-  codexCoursePlanExists: boolean
-  synthesisPlanPath: string
-  synthesisPlanExists: boolean
-  knowledgeBriefPath: string
-  knowledgeBriefExists: boolean
-  chapterMapPath: string
-  chapterMapExists: boolean
-  knowledgeRecordPath: string
-  knowledgeImported: boolean
-  codexGoalPromptPath: string
-  readonlyAuditPromptPath: string
-  finalCoursePath: string
-  finalCourseExists: boolean
-  publishedCoursePath: string
-  publishedCourseExists: boolean
-  importReadyCoursePath: string
-  importReadyCourseExists: boolean
+}
+
+type BilibiliFollowSourcesPayload = {
+  provider: 'bilibili'
+  configured: boolean
+  authenticated: boolean
+  accountName: string
+  accountId: string
+  message: string
+  nextAction: string
+  items: Array<{
+    mid: string
+    name: string
+    face: string
+    sign: string
+    mtime: number
+    officialTitle: string
+    latestCount?: number
+  }>
+}
+
+type BilibiliSourceVideosPayload = {
+  provider: 'bilibili'
+  fetchedAt: number
+  totalVideos: number
+  sources: Array<{
+    mid: string
+    name: string
+    error: string
+    videos: Array<{
+      bvid: string
+      aid: string
+      title: string
+      authorMid: string
+      authorName: string
+      pic: string
+      description: string
+      durationText: string
+      durationSeconds: number
+      pubdate: number
+      statView: number
+      url: string
+    }>
+  }>
+}
+
+type WorkbenchQueueItem = BilibiliSourceVideosPayload['sources'][number]['videos'][number] & {
+  queueId: string
+  sourceName?: string
+  queueSource?: 'manual' | 'follow_source'
+  editorialMode?: 'auto' | 'force' | 'off'
+  status: 'queued' | 'processing' | 'done' | 'failed'
+  materialPath?: string
+  lastError?: string
+  queuedAt?: number
+  updatedAt?: number
+}
+
+type BilibiliVideoMetadata = BilibiliSourceVideosPayload['sources'][number]['videos'][number]
+
+type PinnedBilibiliSource = {
+  mid: string
+  name: string
+  face: string
+  sign: string
+  officialTitle: string
+  pinnedAt: number
 }
 
 type KnowledgeImportResult = {
@@ -193,6 +303,17 @@ type KnowledgeLibraryPayload = {
   records: KnowledgeLibrarySummary[]
 }
 
+type WorkflowDocumentKey = 'project_context' | 'editorial_pipeline' | 'system_optimization_audit' | 'cleanup_baseline' | 'email_contract' | 'distiller_core'
+
+type WorkflowDocumentPayload = {
+  key: WorkflowDocumentKey
+  title: string
+  relativePath: string
+  path: string
+  updatedAt: number
+  content: string
+}
+
   interface Window {
     desktopAPI: {
       isElectron: boolean
@@ -202,6 +323,10 @@ type KnowledgeLibraryPayload = {
       loadSettings: () => Promise<RuntimeSettings>
       saveSettings: (payload: RuntimeSettings) => Promise<RuntimeSettings>
       loadSettingsStatus: () => Promise<SettingsStatus>
+      getAutomationStatus: () => Promise<BackgroundAutomationStatus>
+      runAutomationCheckNow: () => Promise<BackgroundAutomationStatus>
+      setAutomationPaused: (paused: boolean) => Promise<BackgroundAutomationStatus>
+      testEmailPush: () => Promise<EmailSendResult>
       copyText: (text: string) => Promise<void>
       pickDirectory: () => Promise<string | null>
       pickMediaFile: () => Promise<{ path: string; name: string } | null>
@@ -209,8 +334,7 @@ type KnowledgeLibraryPayload = {
       importCoursePackage: () => Promise<{ path: string; text: string } | null>
       readCoursePackage: (targetPath: string) => Promise<{ path: string; text: string }>
       copyTextFile: (targetPath: string) => Promise<{ path: string; length: number }>
-      attachCourseVisualMap: (payload: { targetPath: string; imagePath: string }) => Promise<{ path: string; text: string; assetPath: string; syncedRecordCount: number }>
-      runDistillation: (payload: { video?: string; sourceKind?: 'bilibili' | 'local_media'; mediaPath?: string }) => Promise<{
+      runDistillation: (payload: { video?: string; sourceKind?: 'bilibili' | 'local_media'; mediaPath?: string; editorialMode?: 'auto' | 'force' | 'off' }) => Promise<{
         packagePath: string
         packageId: string
         title: string
@@ -233,11 +357,25 @@ type KnowledgeLibraryPayload = {
       }>
       listMaterialPackages: () => Promise<{
         rootDir: string
-        coursePackageRootDir: string
         records: MaterialPackageSummary[]
       }>
       deleteMaterialPackage: (materialPath: string) => Promise<{ deletedPaths: string[]; skippedPaths?: string[] }>
-      importKnowledgeBrief: (materialPath: string) => Promise<KnowledgeImportResult>
+      summarizeMaterialPackage: (payload: { materialPath: string; editorialMode?: 'auto' | 'force' | 'off' }) => Promise<{
+        materialPath: string
+        editorialArticlePath: string
+        editorialHtmlPath?: string
+        editorialCardsPath?: string
+        editorialReviewPath?: string
+        editorialSummary?: Record<string, unknown>
+      }>
+      loadWorkbenchQueue: () => Promise<WorkbenchQueueItem[]>
+      saveWorkbenchQueue: (items: WorkbenchQueueItem[]) => Promise<WorkbenchQueueItem[]>
+      clearWorkbenchQueue: () => Promise<WorkbenchQueueClearResult>
+      loadPinnedBilibiliSources: () => Promise<PinnedBilibiliSource[]>
+      savePinnedBilibiliSources: (items: PinnedBilibiliSource[]) => Promise<PinnedBilibiliSource[]>
+      listBilibiliFollowSources: () => Promise<BilibiliFollowSourcesPayload>
+      listBilibiliSourceVideos: (payload: { sources: Array<{ mid: string; name?: string }>; pageSize?: number }) => Promise<BilibiliSourceVideosPayload>
+      getBilibiliVideoMetadata: (payload: { video: string }) => Promise<BilibiliVideoMetadata>
       listKnowledgeLibrary: () => Promise<KnowledgeLibraryPayload>
       loadLearningLibrary: () => Promise<LearningLibraryPayload>
       openLearningRecord: (recordId: string) => Promise<LearningRecord>
@@ -249,10 +387,13 @@ type KnowledgeLibraryPayload = {
       synthesizeSpeech: (payload: { text: string; nodeId?: string | null }) => Promise<TtsSynthesizeResult>
       checkSpeechCache: (payload: { text: string; nodeId?: string | null }) => Promise<TtsCacheStatusResult>
       readTextFile: (targetPath: string) => Promise<string>
+      readWorkflowDocument: (documentKey: WorkflowDocumentKey) => Promise<WorkflowDocumentPayload>
       openPath: (targetPath: string) => Promise<void>
       showItem: (targetPath: string) => Promise<void>
       openExternal: (targetUrl: string) => Promise<void>
       onDistillProgress: (callback: (payload: DistillProgressPayload) => void) => () => void
+      onAutomationStatus: (callback: (payload: BackgroundAutomationStatus) => void) => () => void
+      onWorkbenchQueueChanged: (callback: (items: WorkbenchQueueItem[]) => void) => () => void
       onWindowFocusChanged: (callback: (payload: { focused: boolean }) => void) => () => void
       onWindowMaximizedChanged: (callback: (payload: { maximized: boolean }) => void) => () => void
       onDeepLinkOpen: (callback: (payload: { packageId: string; nodeId: string | null }) => void) => () => void

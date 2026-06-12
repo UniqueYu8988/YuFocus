@@ -11,7 +11,7 @@ __pycache__/
 .shijie-focus.local.json
 .shijie-focus.window.json
 .shijie-focus-runtime.log
-.onboard-tts-cache/
+.shijie-tts-cache/
 output/
 tmp-obsidian-vault/
 tmp-obsidian-vault-2/

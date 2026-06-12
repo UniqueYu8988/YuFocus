@@ -5,8 +5,12 @@ export async function copyTextToClipboard(text: string) {
   }
 
   if (window.desktopAPI?.copyText) {
-    await window.desktopAPI.copyText(content)
-    return
+    try {
+      await window.desktopAPI.copyText(content)
+      return
+    } catch {
+      // Fall back to renderer-side copy when an older preload exposes a broken clipboard bridge.
+    }
   }
 
   if (navigator.clipboard?.writeText) {

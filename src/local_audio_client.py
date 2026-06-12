@@ -15,8 +15,8 @@ from typing import Any, Callable
 import config
 
 
-RESULT_PREFIX = "__ONBOARD_LOCAL_TRANSCRIBE__="
-RESULT_ITEM_PREFIX = "__ONBOARD_LOCAL_TRANSCRIBE_ITEM__="
+RESULT_PREFIX = "__SHIJIE_LOCAL_TRANSCRIBE__="
+RESULT_ITEM_PREFIX = "__SHIJIE_LOCAL_TRANSCRIBE_ITEM__="
 
 
 def _resolve_root() -> Path | None:

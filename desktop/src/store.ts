@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { makeCoachMessages, makeMessage } from './lib/coachMessages'
-import { getNextNodeId, getNextSequentialNodeId, getUnlockedNodeIds, isStudyNode } from './lib/courseTree'
+import { getNextNodeId, getNextSequentialNodeId, getUnlockedNodeIds, isStudyNode } from './lib/studyTree'
 import {
   buildAchievementBadgesSummary,
   buildCourseState,
@@ -14,7 +14,6 @@ import {
 import { buildCompletionCelebrationPayload } from './lib/learningProgression'
 import {
   buildDistillProgressSnapshot,
-  formatDistillTimingSummary,
   type DistillProgressSnapshot,
 } from './lib/distillProgress'
 import { buildFallbackCoachTurn, resolveTrackedQuestion } from './lib/learningTurn'
@@ -55,6 +54,14 @@ type LearningMomentumSnapshot = {
 const DISTILL_UI_TIMEOUT_MS = 1_860_000
 const TOAST_LIFETIME_MS = 3200
 let toastTimer: ReturnType<typeof globalThis.setTimeout> | null = null
+
+function makeInitialCoachMessages(node: FlatCourseNode, content: string) {
+  const displayHints = node.teacher_ready_content?.display_hints ?? []
+  if (displayHints.includes('article_reading')) {
+    return [makeMessage('coach', content, node.id)]
+  }
+  return makeCoachMessages(content, node.id)
+}
 
 type LearningStore = {
   bootState: BootState
@@ -99,7 +106,7 @@ type LearningStore = {
   clearActiveCourse: () => void
   importCoursePackage: () => Promise<void>
   setVideoInput: (value: string) => void
-  distillCourseFromVideo: (payload?: { sourceKind?: MaterialSourceKind; mediaPath?: string }) => Promise<void>
+  distillCourseFromVideo: (payload?: { sourceKind?: MaterialSourceKind; video?: string; mediaPath?: string; editorialMode?: 'auto' | 'force' | 'off' }) => Promise<void>
   setCurrentNode: (nodeId: string) => void
   openNodeSession: (nodeId: string, options?: { forceRestart?: boolean }) => Promise<void>
   submitUserAnswer: (answer: string) => Promise<void>
@@ -159,7 +166,6 @@ function normalizeWritableStudyPackagePath(importedPath?: string | null) {
   const normalized = String(importedPath ?? '').trim()
   if (!normalized) return null
   if (!/\.json$/iu.test(normalized)) return null
-  if (/learning_notes\.md$/iu.test(normalized)) return null
   return normalized
 }
 
@@ -353,7 +359,7 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
     }
 
     if (!targetRecord) {
-      get().pushToast('找不到这门课程', '这条回跳链接对应的课程还没有出现在本地学习档案里。', 'error')
+      get().pushToast('找不到这份资料', '这条回跳链接对应的资料还没有出现在本地档案里。', 'error')
       return
     }
 
@@ -365,18 +371,18 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
 
     const state = get()
     if (!nodeId) {
-      get().pushToast('已回到课程', `已打开《${targetRecord.title}》`, 'success')
+      get().pushToast('已恢复资料', `已打开《${targetRecord.title}》`, 'success')
       return
     }
 
     const node = state.nodeMap[nodeId]
     if (!node) {
-      get().pushToast('已回到课程', `已打开《${targetRecord.title}》，但没有找到对应节点。`, 'info')
+      get().pushToast('已恢复资料', `已打开《${targetRecord.title}》，但没有找到对应小节。`, 'info')
       return
     }
 
     if (!state.isStudyNode(nodeId)) {
-      get().pushToast('已回到课程', `已打开《${targetRecord.title}》，该链接对应的是目录节点。`, 'info')
+      get().pushToast('已恢复资料', `已打开《${targetRecord.title}》，该链接对应的是目录节点。`, 'info')
       return
     }
 
@@ -411,7 +417,7 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
         activeRecordId: null,
       })
     }
-    get().pushToast('学习记录已删除', record ? `《${record.title}》已从本地档案柜移除` : '本地记录已移除', 'success')
+    get().pushToast('资料记录已删除', record ? `《${record.title}》已从本地档案移除` : '本地记录已移除', 'success')
   },
 
   clearActiveCourse: () => {
@@ -425,9 +431,9 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
     await get().refreshLibrary()
     try {
       const parsed = JSON.parse(result.text) as CoursePackage
-      get().pushToast('课程包已导入', `已载入《${parsed.course.title}》`, 'success')
+      get().pushToast('资料包已导入', `已载入《${parsed.course.title}》`, 'success')
     } catch {
-      get().pushToast('课程包已导入', result.path, 'success')
+      get().pushToast('资料包已导入', result.path, 'success')
     }
   },
 
@@ -444,7 +450,7 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
 
   distillCourseFromVideo: async (payload = {}) => {
     const sourceKind = payload.sourceKind === 'local_media' ? 'local_media' : 'bilibili'
-    const videoInput = (sourceKind === 'local_media' ? payload.mediaPath || get().videoInput : get().videoInput).trim()
+    const videoInput = (sourceKind === 'local_media' ? payload.mediaPath || get().videoInput : payload.video || get().videoInput).trim()
     if (!videoInput) {
       set({
         distillRequestState: 'error',
@@ -456,14 +462,14 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
     set({
       distillRequestState: 'loading',
       distillProgressPercent: 3,
-      distillStatusMessage: '正在整理 Codex 原材料包，请稍候…',
+      distillStatusMessage: '正在整理资料包，请稍候…',
       distillError: null,
       distillOutlinePreview: null,
       lastMaterialResult: null,
       distillProgressSnapshot: {
         stage: 'unknown',
         stageLabel: '准备启动',
-        message: '正在整理 Codex 原材料包，请稍候…',
+        message: '正在整理资料包，请稍候…',
         cacheHint: null,
         audioCompleted: 0,
         audioTotal: 0,
@@ -477,7 +483,7 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
       const snapshot = buildDistillProgressSnapshot(payload)
       set({
         distillProgressPercent: Number(payload.percent || 0),
-        distillStatusMessage: payload.message || '正在整理 Codex 原材料包，请稍候…',
+        distillStatusMessage: payload.message || '正在整理资料包，请稍候…',
         distillOutlinePreview: payload.outlinePreview ?? get().distillOutlinePreview,
         distillProgressSnapshot: snapshot,
       })
@@ -489,10 +495,11 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
           video: sourceKind === 'bilibili' ? videoInput : undefined,
           mediaPath: sourceKind === 'local_media' ? videoInput : undefined,
           sourceKind,
+          editorialMode: payload.editorialMode,
         }),
         new Promise<never>((_, reject) => {
           globalThis.setTimeout(() => {
-            reject(new Error(`原材料整理等待超时（>${Math.floor(DISTILL_UI_TIMEOUT_MS / 1000)} 秒）。`))
+            reject(new Error(`资料整理等待超时（>${Math.floor(DISTILL_UI_TIMEOUT_MS / 1000)} 秒）。`))
           }, DISTILL_UI_TIMEOUT_MS)
         }),
       ])
@@ -505,14 +512,8 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
         distillProgressSnapshot: null,
         lastMaterialResult: result,
       })
-      const timingSummary = formatDistillTimingSummary(result.stageTimings)
-      get().pushToast(
-        '原材料包已生成',
-        timingSummary ? `《${result.title}》已写入本地 · ${timingSummary}` : `《${result.title}》已写入本地`,
-        'success',
-      )
     } catch (error) {
-      const message = error instanceof Error ? error.message : '原材料整理失败'
+      const message = error instanceof Error ? error.message : '资料整理失败'
       set({
         distillRequestState: 'error',
         distillProgressPercent: 0,
@@ -559,7 +560,7 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
       return
     }
 
-    const nextMessages = [makeMessage('system', `本地学习台：${node.title}`, nodeId)]
+    const nextMessages = [makeMessage('system', `本地专注页：${node.title}`, nodeId)]
     const nextNodeId = getNextSequentialNodeId(state.orderedStudyNodeIds, nodeId)
     const nextNode = nextNodeId ? state.nodeMap[nextNodeId] ?? null : null
     const localTurn = buildFallbackCoachTurn({
@@ -580,7 +581,7 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
         ...latestState.nodeSessions,
         [nodeId]: {
           ...createEmptySession(nodeId),
-          messages: [...nextMessages, ...makeCoachMessages(localTurn.reply, nodeId)],
+          messages: [...nextMessages, ...makeInitialCoachMessages(node, localTurn.reply)],
           learningStatus: localTurn.learningStatus,
           activeQuestion: localTurn.learningStatus === 'quizzing' ? trackedQuestion : null,
           requestState: 'idle',
@@ -772,7 +773,7 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
     })
     await get().refreshLibrary()
     if (!wasArchived && progressPercent >= 100) {
-      get().pushToast('课程已归档', `《${state.courseData.course.title}》已完成并收录到归档区`, 'success')
+      get().pushToast('资料已归档', `《${state.courseData.course.title}》已完成并收录到归档区`, 'success')
     }
   },
 
@@ -829,12 +830,12 @@ export const useLearningStore = create<LearningStore>((set, get) => ({
           : currentStreak >= 3
             ? `当前正处在连过 ${currentStreak} 关的节奏里`
         : todayCompletedCount >= 4
-          ? `今天已经连续拿下 ${todayCompletedCount} 个小关`
+          ? `今天已经连续读完 ${todayCompletedCount} 个小节`
           : todayCompletedCount > 0
             ? '今天正在稳定推进'
             : recentMilestoneCount > 0
               ? '最近 24 小时还在持续推进'
-              : '这门课还在起步阶段'
+              : '这份资料还在起步阶段'
 
     return {
       todayCompletedCount,

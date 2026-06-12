@@ -1,10 +1,11 @@
-import { useEffect, useId, useState, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
 type HeadingBlock = { type: 'heading'; level: number; text: string }
 
 type Block =
   | HeadingBlock
+  | { type: 'article-heading'; level: number; text: string }
   | { type: 'paragraph'; text: string }
   | { type: 'blockquote'; text: string }
   | { type: 'list'; items: string[] }
@@ -36,6 +37,7 @@ type MarkdownRendererProps = {
   hideLeadHeading?: boolean
   shellUntitledSections?: boolean
   plainFlow?: boolean
+  articleMode?: boolean
   highlightQuery?: string
   headingIdPrefix?: string
 }
@@ -274,98 +276,7 @@ function normalizeGeneratedMarkdown(markdown: string) {
   return text
 }
 
-export function MermaidDiagram({
-  code,
-  index,
-  className,
-}: {
-  code: string
-  index: number
-  className?: string
-}) {
-  const reactId = useId()
-  const diagramId = `shijie-mermaid-${reactId.replace(/[^a-zA-Z0-9_-]/g, '')}-${index}`
-  const [svg, setSvg] = useState('')
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    let active = true
-
-    async function renderDiagram() {
-      const diagram = code.trim()
-      if (!diagram) return
-
-      setError('')
-      setSvg('')
-
-      try {
-        const mermaid = (await import('mermaid')).default
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: 'strict',
-          theme: 'base',
-          flowchart: {
-            curve: 'basis',
-            htmlLabels: true,
-            nodeSpacing: 58,
-            rankSpacing: 92,
-            padding: 18,
-          },
-          themeVariables: {
-            background: 'transparent',
-            mainBkg: '#17201d',
-            secondBkg: '#1f1f28',
-            tertiaryBkg: '#1b2230',
-            primaryColor: '#15352e',
-            primaryBorderColor: '#3fd8b4',
-            primaryTextColor: '#f4f7fb',
-            lineColor: '#7dd3fc',
-            textColor: '#f4f7fb',
-            fontFamily: 'inherit',
-            fontSize: '18px',
-          },
-        })
-        const result = await mermaid.render(diagramId, diagram)
-        const normalizedSvg = result.svg.replace(/max-width:[^;"']+;?/g, '')
-        if (active) setSvg(normalizedSvg)
-      } catch (reason) {
-        if (active) setError(reason instanceof Error ? reason.message : String(reason))
-      }
-    }
-
-    void renderDiagram()
-
-    return () => {
-      active = false
-    }
-  }, [code, diagramId])
-
-  if (error) {
-    return (
-      <div className={cn('rounded-2xl border border-amber-300/14 bg-[#1f1d19] p-4', className)}>
-        <div className="mb-2 text-xs font-medium text-amber-100/80">Mermaid 图表渲染失败，已显示原始代码。</div>
-        <pre className="overflow-x-auto rounded-xl border border-white/8 bg-[#171717] p-3">
-          <code className="font-mono text-[12px] leading-6 text-foreground/82">{code}</code>
-        </pre>
-      </div>
-    )
-  }
-
-  return (
-    <div className={cn('overflow-x-auto rounded-2xl border border-emerald-300/14 bg-[#131917] p-4', className)}>
-      {svg ? (
-        <div
-          className="h-full w-full [&_svg]:mx-auto [&_svg]:block [&_svg]:h-auto [&_svg]:!w-full [&_svg]:!max-w-none [&_.edgeLabel]:rounded-md [&_.edgeLabel]:bg-[#101115]/80 [&_.nodeLabel]:font-semibold"
-          dangerouslySetInnerHTML={{ __html: svg }}
-        />
-      ) : (
-        <div className="text-sm text-muted-foreground">正在渲染图表...</div>
-      )}
-    </div>
-  )
-}
-
-function parseMarkdown(markdown: string) {
+function parseMarkdown(markdown: string, articleMode = false) {
   const lines = normalizeGeneratedMarkdown(markdown).split('\n')
   const blocks: Block[] = []
   let index = 0
@@ -397,7 +308,13 @@ function parseMarkdown(markdown: string) {
 
     const headingMatch = line.match(/^(#{1,6})\s+(.*)$/)
     if (headingMatch) {
-      blocks.push({ type: 'heading', level: headingMatch[1].length, text: headingMatch[2].trim() })
+      const level = headingMatch[1].length
+      const text = headingMatch[2].trim()
+      if (articleMode && level > 1) {
+        blocks.push({ type: 'article-heading', level, text })
+      } else {
+        blocks.push({ type: 'heading', level, text })
+      }
       index += 1
       continue
     }
@@ -634,6 +551,7 @@ function normalizeTableRows(headers: string[], rows: string[][]) {
 }
 
 function hasMeaningfulBlock(block: Exclude<Block, { type: 'heading' }>) {
+  if (block.type === 'article-heading') return block.text.trim().length > 0
   if (block.type === 'paragraph') return block.text.trim().length > 0
   if (block.type === 'blockquote') return block.text.trim().length > 0
   if (block.type === 'list' || block.type === 'ordered-list') return block.items.some((item) => item.trim().length > 0)
@@ -674,6 +592,27 @@ function renderBlock(
   const bubbleClass = shouldBubble
     ? cn('rounded-[18px] border px-4 py-3', toneClasses.block)
     : ''
+
+  if (block.type === 'article-heading') {
+    const isMajorHeading = block.level <= 2
+    return (
+      <div
+        key={`ah-${index}`}
+        className={cn(
+          'flex items-center gap-2 tracking-tight text-foreground',
+          index > 0 && isMajorHeading && 'mt-5 border-t border-white/[0.07] pt-5',
+          isMajorHeading ? 'text-[17px] font-semibold leading-7' : 'mt-3 text-[13px] font-semibold leading-6 text-foreground/88',
+        )}
+      >
+        {getHeadingEmoji(block.text, block.level) ? (
+          <span aria-hidden className={cn(isMajorHeading ? 'text-[15px]' : 'text-[12px]', 'opacity-85')}>
+            {getHeadingEmoji(block.text, block.level)}
+          </span>
+        ) : null}
+        <span>{renderInline(block.text, options)}</span>
+      </div>
+    )
+  }
 
   if (block.type === 'paragraph') {
     const orderedItems = splitInlineOrderedItems(block.text)
@@ -785,10 +724,6 @@ function renderBlock(
     )
   }
 
-  if (block.type === 'code' && block.lang.trim().toLowerCase() === 'mermaid') {
-    return <MermaidDiagram key={`m-${index}`} code={block.text} index={index} />
-  }
-
   return (
     <pre key={`c-${index}`} className="overflow-x-auto rounded-2xl border border-white/8 bg-[#1a1a1a] p-4">
       <code className="font-mono text-[13px] leading-6 text-foreground/88" data-lang={block.lang || undefined}>
@@ -861,10 +796,11 @@ export function MarkdownRenderer({
   hideLeadHeading = false,
   shellUntitledSections = false,
   plainFlow = false,
+  articleMode = false,
   highlightQuery = '',
   headingIdPrefix = 'markdown-heading',
 }: MarkdownRendererProps) {
-  const blocks = parseMarkdown(content)
+  const blocks = parseMarkdown(content, articleMode)
   const { leadHeading, sections } = buildSections(blocks)
   const titleHeading = hideLeadHeading ? null : leadHeading
   const visibleSections = sections.filter((section) => section.blocks.some(hasMeaningfulBlock))
@@ -878,9 +814,15 @@ export function MarkdownRenderer({
   }
 
   return (
-    <div className={cn('space-y-3 text-sm leading-7 text-foreground/92', className)}>
+    <div className={cn(articleMode ? 'space-y-5 text-sm leading-7 text-foreground/92' : 'space-y-3 text-sm leading-7 text-foreground/92', className)}>
       {titleHeading ? (
-        <div id={getNextHeadingId(titleHeading.text)} className="flex items-center gap-2 px-1 text-[17px] font-semibold tracking-tight text-foreground">
+        <div
+          id={getNextHeadingId(titleHeading.text)}
+          className={cn(
+            'flex items-center gap-2 px-1 font-semibold tracking-tight text-foreground',
+            articleMode ? 'text-[22px] leading-tight' : 'text-[17px]',
+          )}
+        >
           <span aria-hidden className="text-[15px] opacity-90">
             {getHeadingEmoji(titleHeading.text, titleHeading.level)}
           </span>
@@ -894,6 +836,44 @@ export function MarkdownRenderer({
         const toneClasses = getSectionToneClasses(tone)
         const shouldBubbleBlocks = false
         const showSectionShell = Boolean(sectionHeading) || shellUntitledSections
+
+        if (articleMode) {
+          const headingLevel = sectionHeading?.level ?? 0
+          const isMajorSection = headingLevel > 0 && headingLevel <= 2
+          const isMinorSection = headingLevel >= 3
+          return (
+            <section
+              key={`section-${sectionIndex}`}
+              className={cn(
+                'space-y-3',
+                !sectionHeading && 'rounded-[18px] border border-white/[0.055] bg-white/[0.018] px-5 py-4',
+                isMajorSection && 'rounded-[18px] border border-white/[0.06] bg-white/[0.018] px-5 py-4',
+                isMinorSection && 'ml-3 border-l border-white/[0.08] pl-4',
+              )}
+            >
+              {sectionHeading ? (
+                <div
+                  id={getNextHeadingId(sectionHeading.text)}
+                  className={cn(
+                    'flex items-center gap-2 tracking-tight text-foreground',
+                    isMajorSection ? 'text-[17px] font-semibold leading-7' : 'text-[13px] font-semibold leading-6 text-foreground/88',
+                  )}
+                >
+                  {getHeadingEmoji(sectionHeading.text, sectionHeading.level) ? (
+                    <span aria-hidden className={cn(isMajorSection ? 'text-[15px]' : 'text-[12px]', 'opacity-85')}>
+                      {getHeadingEmoji(sectionHeading.text, sectionHeading.level)}
+                    </span>
+                  ) : null}
+                  <span>{renderInline(sectionHeading.text, { highlightQuery })}</span>
+                </div>
+              ) : null}
+
+              <div className={cn('space-y-2.5', isMinorSection && 'text-foreground/86')}>
+                {renderSectionBlocks(section, tone, shouldBubbleBlocks, { highlightQuery })}
+              </div>
+            </section>
+          )
+        }
 
         if (plainFlow) {
           return (

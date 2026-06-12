@@ -5,6 +5,7 @@ export type DistillStage =
   | 'audio'
   | 'chunking'
   | 'material_ready'
+  | 'editorial_summary'
   | 'complete'
   | 'unknown'
 
@@ -46,6 +47,8 @@ function normalizeDistillStage(stage?: string): DistillStage {
       return 'chunking'
     case 'material_ready':
       return 'material_ready'
+    case 'editorial_summary':
+      return 'editorial_summary'
     case 'complete':
       return 'complete'
     default:
@@ -54,7 +57,7 @@ function normalizeDistillStage(stage?: string): DistillStage {
 }
 
 function formatDistillStageLabel(stage: DistillStage, cacheHint?: string | null) {
-  if (cacheHint === 'material_package') return '复用原材料'
+  if (cacheHint === 'material_package') return '复用资料包'
   switch (stage) {
     case 'metadata':
       return '解析视频'
@@ -65,11 +68,13 @@ function formatDistillStageLabel(stage: DistillStage, cacheHint?: string | null)
     case 'audio':
       return '音频补全'
     case 'chunking':
-      return '材料切片'
+      return '文本分段'
     case 'material_ready':
-      return '材料就绪'
+      return '资料就绪'
+    case 'editorial_summary':
+      return '视频编稿'
     case 'complete':
-      return '材料完成'
+      return '资料完成'
     default:
       return '处理中'
   }
@@ -81,7 +86,7 @@ export function buildDistillProgressSnapshot(payload: DistillProgressPayload): D
   return {
     stage,
     stageLabel: formatDistillStageLabel(stage, cacheHint),
-    message: payload.message || '正在整理 Codex 原材料包，请稍候…',
+    message: payload.message || '正在整理资料包，请稍候…',
     cacheHint,
     audioCompleted: Number(payload.audioCompleted ?? 0) || 0,
     audioTotal: Number(payload.audioTotal ?? 0) || 0,

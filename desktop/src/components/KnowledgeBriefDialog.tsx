@@ -91,7 +91,7 @@ export function KnowledgeBriefDialog({
   error,
   onCopy,
   onReveal,
-  dialogTitle = '学习笔记',
+  dialogTitle = '资料正文',
   outlineLabel = '目录',
   searchPlaceholder = '搜索正文中的关键词',
   contentTransform,
@@ -264,7 +264,7 @@ export function KnowledgeBriefDialog({
                   </div>
                 ) : (
                   <div className="rounded-[14px] border border-dashed border-white/10 px-3 py-4 text-[12px] leading-6 text-muted-foreground">
-                    这篇学习笔记暂时没有标题结构。
+                    这篇资料暂时没有标题结构。
                   </div>
                 )}
               </div>
@@ -274,7 +274,7 @@ export function KnowledgeBriefDialog({
               {loading ? (
                 <div className="flex h-full min-h-[320px] items-center justify-center gap-2 text-[12px] text-muted-foreground">
                   <LoaderCircle className="size-4 animate-spin" />
-                  正在读取学习笔记
+                  正在读取资料
                 </div>
               ) : error ? (
                 <div className="rounded-[18px] border border-destructive/20 bg-destructive/10 px-4 py-3 text-[12px] leading-6 text-destructive-foreground">
@@ -298,7 +298,7 @@ export function KnowledgeBriefDialog({
               ) : (
                 <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 text-center text-muted-foreground">
                   <FileText className="size-7 opacity-70" />
-                  <div className="text-[12px] leading-6">还没有可阅读的学习笔记。</div>
+                  <div className="text-[12px] leading-6">还没有可阅读的资料。</div>
                 </div>
               )}
             </main>

@@ -19,6 +19,8 @@ const defaultRuntimeSettings: RuntimeSettingsShape = {
   minimax_tts_volume: 1,
   minimax_tts_pitch: 0,
   mimo_api_key: '',
+  mimo_text_endpoint: 'https://token-plan-cn.xiaomimimo.com/v1/chat/completions',
+  mimo_text_model: 'mimo-v2.5-pro',
   mimo_tts_endpoint: 'https://api.xiaomimimo.com/v1/chat/completions',
   mimo_tts_model: 'mimo-v2.5-tts',
   mimo_tts_voice_id: '茉莉',
@@ -30,6 +32,28 @@ const defaultRuntimeSettings: RuntimeSettingsShape = {
   local_transcription_device: '',
   local_transcription_language: '',
   resource_mode: 'balanced',
+  background_automation_enabled: true,
+  background_check_interval_minutes: 360,
+  email_push_enabled: false,
+  email_smtp_host: '',
+  email_smtp_port: 465,
+  email_smtp_secure: true,
+  email_smtp_user: '',
+  email_smtp_password: '',
+  email_from: '',
+  email_to: '',
+  workbench_queue_concurrency: 3,
+}
+
+const defaultAutomationStatus = {
+  enabled: true,
+  paused: false,
+  running: false,
+  lastCheckAt: null,
+  nextCheckAt: null,
+  lastResult: '浏览器预览模式不运行后台任务。',
+  lastError: null,
+  checkIntervalMinutes: 360,
 }
 
 function loadBrowserSettings() {
@@ -94,22 +118,68 @@ export function ensureDesktopApiFallback() {
     }
     window.desktopAPI.pickMediaFile ??= async () => null
     window.desktopAPI.pickImageFile ??= async () => null
+    window.desktopAPI.getAutomationStatus ??= async () => defaultAutomationStatus
+    window.desktopAPI.runAutomationCheckNow ??= async () => defaultAutomationStatus
+    window.desktopAPI.setAutomationPaused ??= async (paused) => ({ ...defaultAutomationStatus, paused })
+    window.desktopAPI.testEmailPush ??= async () => ({
+      ok: false,
+      mode: 'smtp',
+      configured: false,
+      recipientCount: 0,
+      message: '浏览器预览模式不测试邮件推送。',
+    })
     window.desktopAPI.listMaterialPackages ??= async () => ({
       rootDir: '',
-      coursePackageRootDir: '',
       records: [],
     })
     window.desktopAPI.deleteMaterialPackage ??= async () => ({
       deletedPaths: [],
     })
-    window.desktopAPI.importKnowledgeBrief ??= async () => {
-      throw unavailable('学习笔记入库')
+    window.desktopAPI.loadWorkbenchQueue ??= async () => []
+    window.desktopAPI.saveWorkbenchQueue ??= async (items) => items
+    window.desktopAPI.clearWorkbenchQueue ??= async () => ({
+      clearedCount: 0,
+      archivedCount: 0,
+      deletedMaterialCount: 0,
+      deletedPaths: [],
+      skippedPaths: [],
+    })
+    window.desktopAPI.loadPinnedBilibiliSources ??= async () => []
+    window.desktopAPI.savePinnedBilibiliSources ??= async (items) => items
+    window.desktopAPI.listBilibiliFollowSources ??= async () => ({
+      provider: 'bilibili',
+      configured: false,
+      authenticated: false,
+      accountName: '',
+      accountId: '',
+      message: '浏览器预览模式暂不读取关注源。',
+      nextAction: '请在桌面端使用关注源',
+      items: [],
+    })
+    window.desktopAPI.listBilibiliSourceVideos ??= async () => ({
+      provider: 'bilibili',
+      fetchedAt: Date.now(),
+      totalVideos: 0,
+      sources: [],
+    })
+    window.desktopAPI.getBilibiliVideoMetadata ??= async () => {
+      throw unavailable('读取视频信息')
     }
+    window.desktopAPI.readWorkflowDocument ??= async (documentKey) => ({
+      key: documentKey,
+      title: '浏览器预览',
+      relativePath: '',
+      path: '',
+      updatedAt: Date.now(),
+      content: '浏览器预览模式不能读取桌面端白名单文件。请在 Electron 桌面端查看真实流程文件。',
+    })
     window.desktopAPI.listKnowledgeLibrary ??= async () => ({
       rootDir: '',
       libraryPath: '',
       records: [],
     })
+    window.desktopAPI.onAutomationStatus ??= unsubscribe
+    window.desktopAPI.onWorkbenchQueueChanged ??= unsubscribe
     return
   }
 
@@ -128,6 +198,16 @@ export function ensureDesktopApiFallback() {
         accountId: '',
         message: '浏览器预览模式暂不连接 B 站账号。',
       },
+    }),
+    getAutomationStatus: async () => defaultAutomationStatus,
+    runAutomationCheckNow: async () => defaultAutomationStatus,
+    setAutomationPaused: async (paused) => ({ ...defaultAutomationStatus, paused }),
+    testEmailPush: async () => ({
+      ok: false,
+      mode: 'smtp',
+      configured: false,
+      recipientCount: 0,
+      message: '浏览器预览模式不测试邮件推送。',
     }),
     copyTextFile: async () => {
       throw unavailable('复制文件文本')
@@ -162,29 +242,55 @@ export function ensureDesktopApiFallback() {
     readCoursePackage: async (targetPath) => {
       const response = await fetch(toViteFileUrl(targetPath), { cache: 'no-store' })
       if (!response.ok) {
-        throw new Error(`读取课程包失败：${response.status} ${response.statusText}`)
+        throw new Error(`读取资料包失败：${response.status} ${response.statusText}`)
       }
       return {
         path: targetPath,
         text: await response.text(),
       }
     },
-    attachCourseVisualMap: async () => {
-      throw unavailable('导入全局学习地图')
-    },
     runDistillation: async () => {
-      throw unavailable('原材料整理')
+      throw unavailable('资料整理')
     },
     listMaterialPackages: async () => ({
       rootDir: '',
-      coursePackageRootDir: '',
       records: [],
     }),
     deleteMaterialPackage: async () => ({
       deletedPaths: [],
     }),
-    importKnowledgeBrief: async () => {
-      throw unavailable('学习笔记入库')
+    summarizeMaterialPackage: async () => {
+      throw unavailable('视频编稿')
+    },
+    loadWorkbenchQueue: async () => [],
+    saveWorkbenchQueue: async (items) => items,
+    clearWorkbenchQueue: async () => ({
+      clearedCount: 0,
+      archivedCount: 0,
+      deletedMaterialCount: 0,
+      deletedPaths: [],
+      skippedPaths: [],
+    }),
+    loadPinnedBilibiliSources: async () => [],
+    savePinnedBilibiliSources: async (items) => items,
+    listBilibiliFollowSources: async () => ({
+      provider: 'bilibili',
+      configured: false,
+      authenticated: false,
+      accountName: '',
+      accountId: '',
+      message: '浏览器预览模式暂不读取关注源。',
+      nextAction: '请在桌面端使用关注源',
+      items: [],
+    }),
+    listBilibiliSourceVideos: async () => ({
+      provider: 'bilibili',
+      fetchedAt: Date.now(),
+      totalVideos: 0,
+      sources: [],
+    }),
+    getBilibiliVideoMetadata: async () => {
+      throw unavailable('读取视频信息')
     },
     listKnowledgeLibrary: async () => ({
       rootDir: '',
@@ -196,7 +302,7 @@ export function ensureDesktopApiFallback() {
       records: [],
     }),
     openLearningRecord: async () => {
-      throw unavailable('打开学习记录')
+      throw unavailable('打开资料记录')
     },
     refreshLearningLibraryStructure: async () => ({
       library: {
@@ -237,12 +343,22 @@ export function ensureDesktopApiFallback() {
     readTextFile: async () => {
       throw unavailable('读取本地文本文件')
     },
+    readWorkflowDocument: async (documentKey) => ({
+      key: documentKey,
+      title: '浏览器预览',
+      relativePath: '',
+      path: '',
+      updatedAt: Date.now(),
+      content: '浏览器预览模式不能读取桌面端白名单文件。请在 Electron 桌面端查看真实流程文件。',
+    }),
     openPath: async () => undefined,
     showItem: async () => undefined,
     openExternal: async (targetUrl) => {
       globalThis.open(targetUrl, '_blank', 'noopener,noreferrer')
     },
     onDistillProgress: unsubscribe,
+    onAutomationStatus: unsubscribe,
+    onWorkbenchQueueChanged: unsubscribe,
     onWindowFocusChanged: unsubscribe,
     onWindowMaximizedChanged: unsubscribe,
     onDeepLinkOpen: unsubscribe,

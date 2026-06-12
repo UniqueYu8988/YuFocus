@@ -1,23 +1,22 @@
 # -*- coding: utf-8 -*-
-"""Local material organizer for Codex learning-note making.
+"""Local video/source organizer for 视界专注.
 
-This module is being kept as the local-first material pipeline: it fetches
-subtitles/transcripts, cleans and chunks them, and prepares a Codex 原材料包.
-It must not be treated as the runtime teacher or the final source of learning
-quality. High-quality learning notes are produced later by Codex, then imported
-into the desktop learning desk.
+This module is the local-first material pipeline: it fetches subtitles or
+transcripts, cleans and chunks them, exports NotebookLM-ready sources, and
+optionally creates short-video editorial articles through the configured API.
 """
 
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import html
 import json
 import math
 import os
-import shutil
 from time import perf_counter
 import re
 import sys
@@ -26,17 +25,24 @@ import zipfile
 
 import bilibili_api
 import config
+import requests
 
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 CJK_CHAR_PATTERN = re.compile(r"[\u3400-\u9fff]")
 WORD_PATTERN = re.compile(r"[A-Za-z0-9_]+")
 CACHE_DIR_NAME = "cache"
-MATERIAL_BLOCK_TARGET_CHARS = max(10_000, int(os.getenv("ONBOARD_MATERIAL_BLOCK_TARGET_CHARS", "20000") or "20000"))
-MATERIAL_BLOCK_MIN_CHARS = max(4_000, int(os.getenv("ONBOARD_MATERIAL_BLOCK_MIN_CHARS", "10000") or "10000"))
+
+
+def _env(name: str, legacy_name: str, default: str) -> str:
+    return os.getenv(name, "").strip() or os.getenv(legacy_name, "").strip() or default
+
+
+MATERIAL_BLOCK_TARGET_CHARS = max(10_000, int(_env("SHIJIE_MATERIAL_BLOCK_TARGET_CHARS", "ONBOARD_MATERIAL_BLOCK_TARGET_CHARS", "20000") or "20000"))
+MATERIAL_BLOCK_MIN_CHARS = max(4_000, int(_env("SHIJIE_MATERIAL_BLOCK_MIN_CHARS", "ONBOARD_MATERIAL_BLOCK_MIN_CHARS", "10000") or "10000"))
 MATERIAL_BLOCK_MAX_CHARS = max(
     MATERIAL_BLOCK_TARGET_CHARS,
-    int(os.getenv("ONBOARD_MATERIAL_BLOCK_MAX_CHARS", "30000") or "30000"),
+    int(_env("SHIJIE_MATERIAL_BLOCK_MAX_CHARS", "ONBOARD_MATERIAL_BLOCK_MAX_CHARS", "30000") or "30000"),
 )
 MATERIAL_TERM_STOPWORDS = {
     "这个",
@@ -133,6 +139,9 @@ MATERIAL_VERSION_SENSITIVE_TERMS = (
     "node",
 )
 RUN_MANIFEST_VERSION = "material-resume.v2"
+CONTENT_CLEANING_VERSION = "shijie.content-cleaning.v0.8"
+EDITORIAL_SUMMARY_VERSION = "shijie.editorial-summary.v0.1"
+PRODUCTION_METRICS_VERSION = "shijie.production-metrics.v0.1"
 
 
 @dataclass(slots=True)
@@ -180,6 +189,18 @@ class ChunkPlan:
     units: list[TextUnit]
     chunks: list[TextChunk]
     text_length: int
+
+
+@dataclass(slots=True)
+class CleaningChunk:
+    index: int
+    chunk_id: str
+    text: str
+    page_labels: list[str]
+    start_time: float | None = None
+    end_time: float | None = None
+    previous_tail: str = ""
+    next_head: str = ""
 
 
 class DistillationError(RuntimeError):
@@ -458,6 +479,77 @@ def _save_json_file(file_path: str, payload: dict[str, Any]) -> str:
     return file_path
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _file_size(path_value: str) -> int:
+    try:
+        return os.path.getsize(path_value) if path_value and os.path.isfile(path_value) else 0
+    except OSError:
+        return 0
+
+
+def _text_file_chars(path_value: str) -> int:
+    try:
+        if not path_value or not os.path.isfile(path_value):
+            return 0
+        with open(path_value, "r", encoding="utf-8") as file:
+            return len(file.read().strip())
+    except OSError:
+        return 0
+
+
+def _summarize_usage_tokens(value: Any) -> dict[str, int]:
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+    }
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            input_value = item.get("prompt_tokens", item.get("input_tokens"))
+            output_value = item.get("completion_tokens", item.get("output_tokens"))
+            total_value = item.get("total_tokens")
+            if isinstance(input_value, (int, float)):
+                totals["input_tokens"] += int(input_value)
+            if isinstance(output_value, (int, float)):
+                totals["output_tokens"] += int(output_value)
+            if isinstance(total_value, (int, float)):
+                totals["total_tokens"] += int(total_value)
+            for child in item.values():
+                if isinstance(child, (dict, list)):
+                    visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    if not totals["total_tokens"] and (totals["input_tokens"] or totals["output_tokens"]):
+        totals["total_tokens"] = totals["input_tokens"] + totals["output_tokens"]
+    return totals
+
+
+def _write_material_metrics(material_dir: str, *, stage_name: str, stage_payload: dict[str, Any]) -> dict[str, Any]:
+    metrics_path = os.path.join(material_dir, "metrics.json")
+    payload = _load_json_file(metrics_path) or {}
+    stages = payload.get("stages") if isinstance(payload.get("stages"), dict) else {}
+    stages[stage_name] = {
+        **(stages.get(stage_name) if isinstance(stages.get(stage_name), dict) else {}),
+        **stage_payload,
+    }
+    payload = {
+        **payload,
+        "schema_version": PRODUCTION_METRICS_VERSION,
+        "updated_at": _utc_now_iso(),
+        "stages": stages,
+    }
+    payload["totals"] = _summarize_usage_tokens(stages)
+    _save_json_file(metrics_path, payload)
+    return payload
+
+
 def _save_jsonl_file(file_path: str, items: list[dict[str, Any]]) -> str:
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     with open(file_path, "w", encoding="utf-8") as file:
@@ -728,7 +820,7 @@ def _build_part_index(subtitles: list[dict[str, Any]], material_blocks: list[dic
 
     return {
         "schema_version": "shijie.part-index.v0.1",
-        "purpose": "给 Codex 的分 P 导航层：先看这里判断主题、操作密度、噪音和建议合并方式，再按需回读 blocks/raw_transcript。",
+        "purpose": "分 P 导航层：用于判断主题、操作密度、噪音和建议合并方式，并按需回读 blocks/raw_transcript。",
         "items": items,
         "recommended_merge_groups": _build_recommended_merge_groups(items),
     }
@@ -751,7 +843,7 @@ def _build_recommended_merge_groups(part_items: list[dict[str, Any]]) -> list[di
                     "part_ids": [str(item.get("part_id") or "") for item in current],
                     "labels": [str(item.get("label") or "") for item in current],
                     "suggested_learning_role": role,
-                    "reason": "相邻分 P 主题/课型接近，适合由 Codex 判断是否合并为同一章节或连续学习小节。",
+                    "reason": "相邻分 P 主题/课型接近，适合在清洗稿或精读稿中合并处理。",
                     "key_terms": _take_unique_texts(
                         [term for item in current for term in (item.get("terms") or [])],
                         limit=12,
@@ -806,7 +898,7 @@ def _build_term_normalization_index(part_index: dict[str, Any], concept_index: d
                 record["blocks"].append(str(block_id))
             if any(marker in key for marker in MATERIAL_VERSION_SENSITIVE_TERMS):
                 record["needs_verification"] = True
-                record["reason"] = "工具、模型、平台、API 或版本相关术语，写学习笔记时应保守表述或核验官方文档。"
+                record["reason"] = "工具、模型、平台、API 或版本相关术语，编稿时应保守表述或核验官方文档。"
 
     for term, block_ids in concept_index.items():
         key = str(term).casefold()
@@ -818,7 +910,7 @@ def _build_term_normalization_index(part_index: dict[str, Any], concept_index: d
                 "parts": [],
                 "blocks": list(dict.fromkeys(block_ids)),
                 "needs_verification": any(marker in key for marker in MATERIAL_VERSION_SENSITIVE_TERMS),
-                "reason": "来自概念索引；如为工具/API/平台名，写学习笔记时需注意版本敏感。",
+                "reason": "来自概念索引；如为工具/API/平台名，编稿时需注意版本敏感。",
             }
 
     terms = sorted(
@@ -831,7 +923,7 @@ def _build_term_normalization_index(part_index: dict[str, Any], concept_index: d
         item["blocks"] = list(dict.fromkeys(item.get("blocks") or []))[:24]
     return {
         "schema_version": "shijie.term-normalization.v0.1",
-        "purpose": "给 GPT/Codex 的术语导航层。它不是权威词典，只提示高频术语、疑似版本敏感词和需要核验的工具/API 名称。",
+        "purpose": "术语导航层。它不是权威词典，只提示高频术语、疑似版本敏感词和需要核验的工具/API 名称。",
         "terms": terms[:160],
         "verification_candidates": [item for item in terms if item.get("needs_verification")][:60],
     }
@@ -840,14 +932,14 @@ def _build_term_normalization_index(part_index: dict[str, Any], concept_index: d
 def _build_noise_segments_index(part_index: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": "shijie.noise-segments.v0.1",
-        "purpose": "提示 GPT/Codex 写学习笔记时可降权或跳过的片头片尾、互动话术、推广话术和低信息价值片段。",
+        "purpose": "提示清洗和编稿时可降权或跳过的片头片尾、互动话术、推广话术和低信息价值片段。",
         "items": [
             {
                 "part_id": item.get("part_id"),
                 "label": item.get("label"),
                 "noise_level": item.get("noise_level"),
                 "noise_reasons": item.get("noise_reasons") or [],
-                "suggestion": "学习笔记可降权处理；除非这些内容承载真实观点、步骤或案例，否则不要单独展开。",
+                "suggestion": "清洗稿保留必要信息，精读稿可降权处理；除非这些内容承载真实观点、步骤或案例，否则不要单独展开。",
             }
             for item in part_index.get("items") or []
             if item.get("noise_level") in {"medium", "high"}
@@ -862,7 +954,7 @@ def _build_teaching_map(part_index: dict[str, Any]) -> dict[str, Any]:
     ]
     return {
         "schema_version": "shijie.teaching-map.v0.1",
-        "purpose": "粗粒度学习笔记导航。Codex 可以用它快速判断哪些分 P 更适合展开、哪些适合合并、哪些只作为素材证据。",
+        "purpose": "粗粒度资料导航。用于判断哪些分 P 更适合展开、哪些适合合并、哪些只作为素材证据。",
         "high_value_parts": [
             {
                 "part_id": item.get("part_id"),
@@ -875,17 +967,6 @@ def _build_teaching_map(part_index: dict[str, Any]) -> dict[str, Any]:
             for item in high_value_items
         ],
         "recommended_merge_groups": part_index.get("recommended_merge_groups") or [],
-    }
-
-
-def _build_initial_trace_map(*, material_id: str, artifact: str) -> dict[str, Any]:
-    return {
-        "schema_version": "shijie.trace-map.v0.1",
-        "material_id": material_id,
-        "artifact": artifact,
-        "status": "pending_codex_trace",
-        "purpose": "旁路追溯表：把最终学习产物的可见章节/节点映射回 source_index 与 blocks；不要写入学生正文。",
-        "links": [],
     }
 
 
@@ -977,19 +1058,6 @@ def _build_material_blocks(chunks: list[TextChunk]) -> list[dict[str, Any]]:
     return blocks
 
 
-def _project_file(*parts: str) -> str:
-    return os.path.join(config.PROJECT_ROOT, *parts)
-
-
-def _copy_project_file_if_exists(source_parts: tuple[str, ...], target_path: str) -> bool:
-    source_path = _project_file(*source_parts)
-    if not os.path.exists(source_path):
-        return False
-    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-    shutil.copyfile(source_path, target_path)
-    return True
-
-
 def _write_text_file(file_path: str, lines: list[str]) -> str:
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     with open(file_path, "w", encoding="utf-8") as file:
@@ -997,199 +1065,1818 @@ def _write_text_file(file_path: str, lines: list[str]) -> str:
     return file_path
 
 
-def _detect_validation_profile(course_title: str, *, text_length: int, block_count: int) -> str:
-    if re.search(r"考试|医学|医师|执业|临床|口腔|病理|药|护理|诊断|治疗", course_title):
-        return "medical_exam"
-    if re.search(r"教程|编程|开发|代码|软件|模型|训练|workflow|API|工程", course_title, re.IGNORECASE):
-        return "technical_tutorial"
-    if text_length > 180_000 or block_count > 12:
-        return "technical_tutorial"
-    return "lecture"
+def _write_text_blob(file_path: str, text: str) -> str:
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, "w", encoding="utf-8") as file:
+        file.write(text.rstrip() + "\n")
+    return file_path
 
 
-def _build_validation_contract(
+def _resolve_mimo_chat_endpoint() -> str:
+    api_key = (os.getenv("SHIJIE_MIMO_API_KEY") or "").strip()
+    endpoint = (
+        os.getenv("SHIJIE_MIMO_CLEANING_ENDPOINT")
+        or os.getenv("SHIJIE_MIMO_ENDPOINT")
+        or os.getenv("SHIJIE_MIMO_TTS_ENDPOINT")
+        or ""
+    ).strip()
+    if not endpoint:
+        endpoint = "https://token-plan-cn.xiaomimimo.com/v1/chat/completions" if api_key.startswith("tp-") else "https://api.xiaomimimo.com/v1/chat/completions"
+    if api_key.startswith("tp-") and "api.xiaomimimo.com" in endpoint:
+        endpoint = "https://token-plan-cn.xiaomimimo.com/v1/chat/completions"
+    endpoint = endpoint.rstrip("/")
+    if endpoint.lower().endswith("/anthropic"):
+        endpoint = re.sub(r"/anthropic$", "/v1/chat/completions", endpoint, flags=re.IGNORECASE)
+    if endpoint.lower().endswith("/v1"):
+        return f"{endpoint}/chat/completions"
+    if endpoint.lower().endswith("/v1/chat/completions"):
+        return endpoint
+    if re.match(r"^https?://[^/]+/?$", endpoint):
+        return endpoint.rstrip("/") + "/v1/chat/completions"
+    return endpoint
+
+
+def _resolve_mimo_cleaning_model() -> str:
+    explicit_model = (os.getenv("SHIJIE_MIMO_CLEANING_MODEL") or "").strip()
+    if explicit_model:
+        return explicit_model
+    raw_model = (os.getenv("SHIJIE_MIMO_MODEL") or os.getenv("SHIJIE_MIMO_TTS_MODEL") or "mimo-v2.5").strip()
+    return re.sub(r"-tts$", "", raw_model, flags=re.IGNORECASE) or "mimo-v2.5"
+
+
+def _mimo_cleaning_available() -> bool:
+    return bool((os.getenv("SHIJIE_MIMO_API_KEY") or "").strip())
+
+
+def _extract_critical_numeric_terms(text: str) -> list[str]:
+    patterns = (
+        r"(?<!\d)(?:19|20)\d{2}年?",
+        r"(?<!\d)\d{1,2}月\d{1,2}日",
+        r"(?<!\d)\d+(?:\.\d+)?%",
+        r"(?<!\d)\d+(?:\.\d+)?(?:万|亿)?美元",
+        r"(?<!\d)\d+(?:\.\d+)?(?:万|亿)人",
+    )
+    terms: list[str] = []
+    seen: set[str] = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, text or ""):
+            term = match.group(0)
+            key = term.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            terms.append(term)
+    return terms
+
+
+def _missing_critical_numeric_terms(source_text: str, cleaned_text: str) -> list[str]:
+    cleaned = cleaned_text or ""
+    return [term for term in _extract_critical_numeric_terms(source_text) if term not in cleaned]
+
+
+def _extract_full_year_terms(text: str) -> list[str]:
+    years: list[str] = []
+    seen: set[str] = set()
+    for match in re.finditer(r"(?<!\d)(?:19|20)\d{2}年?", text or ""):
+        term = match.group(0)
+        key = term.rstrip("年")
+        if key in seen:
+            continue
+        seen.add(key)
+        years.append(term)
+    return years
+
+
+def _unsupported_full_year_terms(source_text: str, cleaned_text: str) -> list[str]:
+    source = source_text or ""
+    unsupported: list[str] = []
+    for term in _extract_full_year_terms(cleaned_text):
+        year = term.rstrip("年")
+        if year in source:
+            continue
+        # Local ASR often drops the leading 1 in years such as 1938 -> 938.
+        if len(year) == 4 and f"{year[1:]}年" in source:
+            continue
+        unsupported.append(term)
+    return unsupported
+
+
+def _soften_unsupported_full_years(source_text: str, cleaned_text: str) -> tuple[str, list[str]]:
+    unsupported = _unsupported_full_year_terms(source_text, cleaned_text)
+    softened = cleaned_text
+    for term in unsupported:
+        year = term.rstrip("年")
+        # Keep month/day if the model invented only the year around a visible date.
+        softened = re.sub(
+            rf"{re.escape(year)}年(\d{{1,2}}月\d{{1,2}}日)(?:星期[一二三四五六日天])?",
+            r"\1",
+            softened,
+        )
+        softened = re.sub(rf"{re.escape(year)}年", "当时", softened)
+        softened = re.sub(rf"(?<!\d){re.escape(year)}(?!\d)", "当时", softened)
+    return softened, unsupported
+
+
+def _extract_time_markers(text: str) -> list[str]:
+    markers: list[str] = []
+    seen: set[str] = set()
+    for match in re.finditer(r"\[(?:\d{1,2}:)?\d{2}:\d{2}-(?:\d{1,2}:)?\d{2}:\d{2}\]", text or ""):
+        marker = match.group(0)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        markers.append(marker)
+    return markers
+
+
+def _missing_time_markers(source_text: str, cleaned_text: str) -> list[str]:
+    cleaned = cleaned_text or ""
+    source_markers = _extract_time_markers(source_text)
+    if len(source_markers) < 2:
+        return []
+    return [marker for marker in source_markers if marker not in cleaned]
+
+
+def _read_int_env(*names: str, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
+    value = default
+    for name in names:
+        raw_value = os.getenv(name)
+        if raw_value is None or not str(raw_value).strip():
+            continue
+        fallback_error = ""
+        try:
+            value = int(str(raw_value).strip())
+            break
+        except ValueError:
+            value = default
+            break
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def _rule_clean_transcript_text(text: str) -> str:
+    normalized = text.replace("\u3000", " ")
+    normalized = re.sub(r"[ \t]+", " ", normalized)
+    normalized = re.sub(r"\s+([，。！？；：、,.!?;:])", r"\1", normalized)
+    normalized = re.sub(r"([，。！？；：、,.!?;:])\s+", r"\1", normalized)
+    normalized = re.sub(r"\b(嗯|呃|啊|额)\b[，,、 ]*", "", normalized)
+    lines: list[str] = []
+    previous = ""
+    for raw_line in normalized.splitlines():
+        line = raw_line.strip()
+        if not line:
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        if line == previous:
+            continue
+        lines.append(line)
+        previous = line
+    return "\n".join(lines).strip()
+
+
+def _format_seconds_for_markdown(value: float | None) -> str:
+    if value is None:
+        return ""
+    seconds = max(0, int(value))
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _chunk_units_for_cleaning(units: list[TextUnit], *, target_chars: int = 7000) -> list[CleaningChunk]:
+    groups: list[dict[str, Any]] = []
+    current_units: list[TextUnit] = []
+    current_length = 0
+
+    def flush() -> None:
+        nonlocal current_units, current_length
+        if not current_units:
+            return
+        page_labels = list(dict.fromkeys(unit.page_label for unit in current_units if unit.page_label))
+        starts = [unit.start_time for unit in current_units if unit.start_time is not None]
+        ends = [unit.end_time for unit in current_units if unit.end_time is not None]
+        body_lines: list[str] = []
+        active_label = ""
+        for unit in current_units:
+            if unit.page_label != active_label:
+                active_label = unit.page_label
+                if active_label:
+                    body_lines.extend(["", f"## {active_label}"])
+            time_label = ""
+            start_label = _format_seconds_for_markdown(unit.start_time)
+            end_label = _format_seconds_for_markdown(unit.end_time)
+            if start_label or end_label:
+                time_label = f"[{start_label or '?'}-{end_label or '?'}] "
+            body_lines.append(f"{time_label}{unit.text}".strip())
+        groups.append(
+            {
+                "text": "\n".join(body_lines).strip(),
+                "page_labels": page_labels,
+                "start_time": min(starts) if starts else None,
+                "end_time": max(ends) if ends else None,
+            }
+        )
+        current_units = []
+        current_length = 0
+
+    for unit in units:
+        unit_length = len(unit.text)
+        if current_units and current_length + unit_length > target_chars:
+            flush()
+        current_units.append(unit)
+        current_length += unit_length
+    flush()
+
+    chunks: list[CleaningChunk] = []
+    for index, group in enumerate(groups, start=1):
+        previous_tail = str(groups[index - 2]["text"])[-700:] if index > 1 else ""
+        next_head = str(groups[index]["text"])[:700] if index < len(groups) else ""
+        chunks.append(
+            CleaningChunk(
+                index=index,
+                chunk_id=f"clean_chunk_{index:03d}",
+                text=str(group["text"]),
+                page_labels=list(group["page_labels"]),
+                start_time=group["start_time"],
+                end_time=group["end_time"],
+                previous_tail=previous_tail,
+                next_head=next_head,
+            )
+        )
+    return chunks
+
+
+def _build_cleaning_prompt(
+    chunk: CleaningChunk,
+    *,
+    title: str,
+    previous_output: str = "",
+    repair_notes: list[str] | None = None,
+) -> list[dict[str, str]]:
+    system_prompt = (
+        "你是字幕清稿助手。你的任务是把机器字幕或口语转写整理成忠实、通顺、适合阅读和导入 NotebookLM 的资料稿。"
+        "只清理表达，不总结、不扩写、不改变观点、不删除有效信息。"
+        "原字幕是唯一依据；不要使用外部记忆修正事实。年份、日期、数字、金额、比例、姓名、机构名和术语必须忠实于原片段。"
+    )
+    critical_terms = _extract_critical_numeric_terms(chunk.text)
+    critical_terms_text = "、".join(critical_terms[:80]) if critical_terms else "无"
+    time_markers = _extract_time_markers(chunk.text)
+    time_markers_text = "、".join(time_markers[:80]) if time_markers else "无"
+    if previous_output:
+        notes = "；".join(repair_notes or [])
+        user_prompt = f"""请修订 previous_output，使它忠实对应 current_chunk。
+
+要求：
+- 只输出修订后的完整清稿正文，不输出说明。
+- 不要重新总结，不要新增原片段没有的结论。
+- 优先修复数字、年份、日期、金额、比例、姓名、机构名和术语错误。
+- 如果原片段没有清楚给出完整年份，不要补成 `20xx年` 或 `19xx年`；可以保留较模糊的原文表达。
+- current_chunk 中的关键数字/日期项必须保留：{critical_terms_text}
+- 如果 current_chunk 含有时间戳，必须保留每个时间戳，并在对应时间戳后清洗同一时间段内容：{time_markers_text}
+- 已发现的问题：{notes or "上一版存在关键事实不一致"}
+
+视频标题：{title}
+
+current_chunk：
+{chunk.text}
+
+previous_output：
+{previous_output}
+"""
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+    user_prompt = f"""请清洗下面的 current_chunk。
+
+要求：
+- 只输出 current_chunk 的清洗结果，不输出说明。
+- 保留事实、例子、数字、专有名词、判断方向和原视频的信息顺序。
+- 修正明显断句、标点、重复口癖和识别错词；不确定的术语保持原文。
+- 不要把内容压缩成摘要，不要新增原文没有的结论。
+- 不要凭常识或外部知识改写年份、日期、数字、金额、比例、姓名、机构名和术语。
+- 如果原片段没有清楚给出完整年份，不要补成 `20xx年` 或 `19xx年`；可以写成“当时”“这一年”，或保留原片段的模糊表达。
+- 如果原文有 `[mm:ss-mm:ss]` 时间戳，必须保留每个时间戳；每个时间戳后只清洗该时间段的内容，不要跨时间戳合并或改写顺序。
+- current_chunk 中的关键数字/日期项必须保留：{critical_terms_text}
+- current_chunk 中的时间戳必须保留：{time_markers_text}
+- 可以用自然段和少量二级标题；不要写 source/block/debug 信息。
+
+视频标题：{title}
+
+previous_tail 仅作上下文，不要输出：
+{chunk.previous_tail or "无"}
+
+current_chunk：
+{chunk.text}
+
+next_head 仅作上下文，不要输出：
+{chunk.next_head or "无"}
+"""
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def _request_mimo_cleaning(
+    chunk: CleaningChunk,
+    *,
+    title: str,
+    timeout: int = 120,
+    previous_output: str = "",
+    repair_notes: list[str] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    api_key = (os.getenv("SHIJIE_MIMO_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("未配置 MiMo API Key")
+    endpoint = _resolve_mimo_chat_endpoint()
+    model = _resolve_mimo_cleaning_model()
+    payload = {
+        "model": model,
+        "messages": _build_cleaning_prompt(
+            chunk,
+            title=title,
+            previous_output=previous_output,
+            repair_notes=repair_notes,
+        ),
+        "temperature": 0.2,
+    }
+    response = requests.post(
+        endpoint,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "api-key": api_key,
+        },
+        json=payload,
+        timeout=timeout,
+    )
+    response_text = response.text
+    try:
+        result = response.json()
+    except Exception as exc:
+        raise RuntimeError(f"MiMo 返回非 JSON：HTTP {response.status_code} {response_text[:180]}") from exc
+    if not response.ok:
+        message = result.get("error", {}).get("message") if isinstance(result.get("error"), dict) else response_text
+        raise RuntimeError(f"MiMo 清稿失败：HTTP {response.status_code} {message}")
+    if isinstance(result.get("error"), dict):
+        raise RuntimeError(f"MiMo 清稿失败：{result['error'].get('message') or result['error']}")
+    choices = result.get("choices") if isinstance(result, dict) else None
+    message = choices[0].get("message", {}) if isinstance(choices, list) and choices else {}
+    content = message.get("content") if isinstance(message, dict) else ""
+    if isinstance(content, list):
+        content = "\n".join(str(part.get("text") if isinstance(part, dict) else part) for part in content)
+    cleaned = str(content or "").strip()
+    if not cleaned:
+        raise RuntimeError("MiMo 未返回清稿文本")
+    usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+    return cleaned, {
+        "endpoint": endpoint,
+        "model": model,
+        "usage": usage,
+    }
+
+
+def _resolve_mimo_editorial_model() -> str:
+    explicit_model = (os.getenv("SHIJIE_MIMO_EDITORIAL_MODEL") or "").strip()
+    if explicit_model:
+        return explicit_model
+    return _resolve_mimo_cleaning_model()
+
+
+def _mimo_editorial_available() -> bool:
+    return bool((os.getenv("SHIJIE_MIMO_API_KEY") or "").strip())
+
+
+def _strip_markdown_code_fence(text: str) -> str:
+    cleaned = str(text or "").strip()
+    match = re.match(r"^```(?:json|markdown|md)?\s*(.*?)\s*```$", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    return match.group(1).strip() if match else cleaned
+
+
+def _extract_json_document(text: str) -> dict[str, Any]:
+    cleaned = _strip_markdown_code_fence(text)
+    try:
+        parsed = json.loads(cleaned)
+        return parsed if isinstance(parsed, dict) else {"items": parsed}
+    except Exception:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                parsed = json.loads(cleaned[start : end + 1])
+                return parsed if isinstance(parsed, dict) else {"items": parsed}
+            except Exception:
+                pass
+    return {"raw": cleaned}
+
+
+def _request_mimo_editorial(
+    *,
+    task_id: str,
+    messages: list[dict[str, str]],
+    temperature: float = 0.25,
+    timeout: int = 180,
+) -> tuple[str, dict[str, Any]]:
+    api_key = (os.getenv("SHIJIE_MIMO_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("未配置 MiMo API Key")
+    endpoint = _resolve_mimo_chat_endpoint()
+    model = _resolve_mimo_editorial_model()
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    response = requests.post(
+        endpoint,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "api-key": api_key,
+        },
+        json=payload,
+        timeout=timeout,
+    )
+    response_text = response.text
+    try:
+        result = response.json()
+    except Exception as exc:
+        raise RuntimeError(f"MiMo 编稿返回非 JSON：HTTP {response.status_code} {response_text[:180]}") from exc
+    if not response.ok:
+        message = result.get("error", {}).get("message") if isinstance(result.get("error"), dict) else response_text
+        raise RuntimeError(f"MiMo 编稿失败：HTTP {response.status_code} {message}")
+    if isinstance(result.get("error"), dict):
+        raise RuntimeError(f"MiMo 编稿失败：{result['error'].get('message') or result['error']}")
+    choices = result.get("choices") if isinstance(result, dict) else None
+    message = choices[0].get("message", {}) if isinstance(choices, list) and choices else {}
+    content = message.get("content") if isinstance(message, dict) else ""
+    if isinstance(content, list):
+        content = "\n".join(str(part.get("text") if isinstance(part, dict) else part) for part in content)
+    output = str(content or "").strip()
+    if not output:
+        raise RuntimeError(f"MiMo 编稿任务 {task_id} 未返回内容")
+    if _is_rejected_editorial_output(output):
+        raise RuntimeError(f"MiMo 编稿任务 {task_id} 被安全策略拒绝，没有生成可用正文。")
+    usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+    return _strip_markdown_code_fence(output), {
+        "task_id": task_id,
+        "endpoint": endpoint,
+        "model": model,
+        "usage": usage,
+    }
+
+
+def _editorial_summary_mode() -> str:
+    return (os.getenv("SHIJIE_EDITORIAL_SUMMARY_MODE") or "auto").strip().lower()
+
+
+def _is_rejected_editorial_output(text: str) -> bool:
+    lowered_output = str(text or "").strip().lower()
+    return (
+        "the request was rejected" in lowered_output
+        or "considered high risk" in lowered_output
+        or "content policy" in lowered_output
+        or "safety policy" in lowered_output
+    )
+
+
+def _read_text_blob_if_exists(file_path: str) -> str:
+    if not os.path.exists(file_path):
+        return ""
+    try:
+        with open(file_path, "r", encoding="utf-8") as file:
+            return file.read().strip()
+    except Exception:
+        return ""
+
+
+def _read_editorial_work_json(work_dir: str, name: str) -> dict[str, Any]:
+    file_path = os.path.join(work_dir, name)
+    payload = _load_json_file(file_path)
+    if payload is not None:
+        return payload
+    raw = _read_text_blob_if_exists(file_path)
+    return _extract_json_document(raw) if raw else {}
+
+
+def _strip_editorial_time_marker(value: str) -> str:
+    text = _to_clean_text(value)
+    text = re.sub(
+        r"^\[\s*\d{1,2}:\d{2}(?::\d{2})?(?:\s*[-–—]\s*\d{1,2}:\d{2}(?::\d{2})?)?\s*\]\s*",
+        "",
+        text,
+    )
+    text = re.sub(
+        r"^\(?\d{1,2}:\d{2}(?::\d{2})?(?:\s*[-–—]\s*\d{1,2}:\d{2}(?::\d{2})?)?\)?\s*[：:\-–—]\s*",
+        "",
+        text,
+    )
+    return text.strip()
+
+
+def _coerce_editorial_items(value: Any, *, limit: int = 8) -> list[str]:
+    if isinstance(value, dict):
+        candidates: list[Any] = []
+        for key in ("items", "points", "facts", "claims", "arguments", "examples", "notes"):
+            if isinstance(value.get(key), list):
+                candidates.extend(value[key])
+        if not candidates:
+            candidates.extend(value.values())
+        value = candidates
+    if not isinstance(value, list):
+        value = [value] if value else []
+
+    items: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if isinstance(item, dict):
+            parts = [
+                item.get("time") or item.get("timestamp") or item.get("source") or "",
+                item.get("title") or item.get("label") or "",
+                item.get("text") or item.get("content") or item.get("summary") or item.get("claim") or item.get("fact") or "",
+            ]
+            text = " ".join(_to_clean_text(part) for part in parts if _to_clean_text(part))
+        else:
+            text = _to_clean_text(item)
+        if not text:
+            continue
+        marker = re.sub(r"\s+", "", text).casefold()
+        if marker in seen:
+            continue
+        seen.add(marker)
+        items.append(text)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _append_editorial_bullets(lines: list[str], items: list[str], *, keep_time: bool = True) -> None:
+    for item in items:
+        text = item if keep_time else _strip_editorial_time_marker(item)
+        if text:
+            lines.append(f"- {text}")
+
+
+def _normalize_editorial_heading(text: str, level: int) -> str:
+    raw = _to_clean_text(text).strip().strip("#").strip()
+    raw = re.sub(r"^[\ufe0f\s]+", "", raw)
+    if re.match(r"^[\U0001F300-\U0001FAFF\u2600-\u27BF]", raw):
+        return raw
+
+    normalized = re.sub(r"[\s：:、，,]+", "", raw)
+    h2_map = {
+        "先说结论": "核心判断",
+        "开篇判断": "核心判断",
+        "一句话抓住": "核心判断",
+        "核心判断": "核心判断",
+        "这条视频真正讨论的问题": "🧭 核心线索",
+        "问题线索": "🧭 核心线索",
+        "核心线索": "🧭 核心线索",
+        "这条视频的主线": "🧭 叙事主线",
+        "主线脉络": "🧭 叙事主线",
+        "问题拆解": "🔎 问题拆解",
+        "关键内容拆解": "🔎 问题拆解",
+        "关键事实与判断": "🔎 问题拆解",
+        "核心拆解": "🔎 问题拆解",
+        "需要读懂的概念和例子": "🧱 细节与案例",
+        "概念与案例": "🧱 细节与案例",
+        "细节与案例": "🧱 细节与案例",
+        "普通摘要容易漏掉的细节": "🧱 细节与案例",
+        "事实观点与推测": "背景与边界",
+        "事实观点与边界": "背景与边界",
+        "事实判断与边界": "背景与边界",
+        "值得回看的片段": "💬 关键原话",
+        "值得保留的原话": "💬 关键原话",
+        "关键原话": "💬 关键原话",
+        "一句话带走": "核心判断",
+    }
+    h3_map = {
+        "事实骨架": "事实底稿",
+        "视频使用的例子": "案例现场",
+        "概念解释": "概念解释",
+        "论证链条": "论证链条",
+        "作者判断": "作者判断",
+    }
+    if level == 2:
+        if normalized.startswith("问题线索") or normalized.startswith("核心线索"):
+            return "🧭 核心线索"
+        if normalized.startswith("核心拆解") or normalized.startswith("问题拆解") or normalized.startswith("关键内容拆解"):
+            return "🔎 问题拆解"
+        return h2_map.get(normalized, raw)
+    if level == 3:
+        return h3_map.get(normalized, raw)
+    return raw
+
+
+def _strip_editorial_time_markers_from_line(line: str) -> str:
+    bullet_match = re.match(r"^(\s*(?:[-*]|\d+[.)])\s+)(.*)$", line)
+    if bullet_match:
+        return f"{bullet_match.group(1)}{_strip_editorial_time_marker(bullet_match.group(2))}".rstrip()
+    return _strip_editorial_time_marker(line)
+
+
+def _clean_editorial_takeaway_line(line: str) -> str:
+    text = _strip_editorial_time_markers_from_line(line).strip()
+    text = re.sub(r"^(?:[-*]\s+)?(?:>\s*)+", "", text).strip()
+    text = text.replace("**", "").strip()
+    return text
+
+
+def _is_editorial_source_note(line: str) -> bool:
+    text = _to_clean_text(line)
+    return bool(
+        text.startswith("来自 ")
+        or text.startswith("基于清洗字幕")
+        or "这篇精读稿以视频原文为边界" in text
+    )
+
+
+def _normalize_editorial_article_markdown(markdown_text: str) -> str:
+    lines = markdown_text.replace("\r\n", "\n").split("\n")
+    result: list[str] = []
+    takeaway_lines: list[str] = []
+    collecting_takeaway = False
+    skipping_section = False
+    has_takeaway_heading = any(
+        re.match(r"^##\s+.*(?:一句话(?:带走|抓住)|一眼看懂|核心判断)", line.strip())
+        for line in lines
+    )
+
+    def is_h2(line: str) -> bool:
+        return bool(re.match(r"^##\s+", line.strip()))
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        heading = re.match(r"^(#{1,4})\s+(.+?)\s*$", line.strip())
+        if heading:
+            level = len(heading.group(1))
+            raw_heading_text = re.sub(
+                r"^(?:[\U0001F300-\U0001FAFF\u2600-\u27BF]\ufe0f?\s*)+",
+                "",
+                heading.group(2),
+            ).strip()
+            raw_heading_text = re.sub(r"^[\ufe0f\s]+", "", raw_heading_text)
+            heading_text = _normalize_editorial_heading(raw_heading_text, level)
+            normalized = re.sub(r"[\s：:、，,]+", "", raw_heading_text)
+            if level == 2 and re.search(r"一句话(?:带走|抓住)|一眼看懂|核心判断", heading.group(2)):
+                collecting_takeaway = True
+                skipping_section = False
+                continue
+            if level == 2 and has_takeaway_heading and normalized in {"先说结论", "开篇判断"}:
+                collecting_takeaway = False
+                skipping_section = False
+                result.append("### 核心要点")
+                continue
+            if level == 2 and normalized in {"普通摘要容易漏掉的细节", "被忽略的关键细节"}:
+                collecting_takeaway = False
+                skipping_section = False
+                result.append("### 进一步保留的细节")
+                continue
+            if level == 2 and normalized in {
+                "主线脉络",
+                "值得回看的片段",
+                "值得保留的原话",
+                "关键原话",
+                "事实观点与推测",
+                "事实观点与边界",
+                "事实判断与边界",
+                "事实判断边界",
+                "判断与边界",
+            }:
+                collecting_takeaway = False
+                skipping_section = True
+                continue
+            collecting_takeaway = False
+            skipping_section = False
+            result.append(f"{'#' * level} {heading_text}")
+            continue
+
+        if collecting_takeaway:
+            cleaned = _clean_editorial_takeaway_line(line)
+            if cleaned.strip():
+                takeaway_lines.append(cleaned)
+            continue
+        if skipping_section:
+            continue
+        result.append(_strip_editorial_time_markers_from_line(line))
+
+    if takeaway_lines:
+        insertion = next(
+            (index for index, line in enumerate(result) if re.match(r"^##\s+", line.strip())),
+            min(len(result), 1),
+        )
+        core_block: list[str] = []
+        core_start = -1
+        for index in range(insertion - 1, -1, -1):
+            stripped = result[index].strip()
+            if re.match(r"^##\s+", stripped):
+                break
+            if stripped == "### 核心要点":
+                core_start = index
+                break
+        if core_start >= 0:
+            core_block = [line for line in result[core_start:insertion] if line.strip()]
+            del result[core_start:insertion]
+            insertion = core_start
+
+        first_takeaway = next(
+            (
+                _clean_editorial_takeaway_line(line)
+                for line in takeaway_lines
+                if _to_clean_text(line) and not _is_editorial_source_note(line)
+            ),
+            "",
+        )
+        intro_lines = [
+            _clean_editorial_takeaway_line(line)
+            for line in takeaway_lines
+            if _is_editorial_source_note(line)
+        ]
+        takeaway_block = ["", "## 核心判断"]
+        if first_takeaway:
+            takeaway_block.extend(["", f"> {first_takeaway}"])
+        remaining = [
+            _clean_editorial_takeaway_line(line)
+            for line in takeaway_lines
+            if _clean_editorial_takeaway_line(line)
+            and _clean_editorial_takeaway_line(line) != first_takeaway
+            and not _is_editorial_source_note(line)
+        ]
+        if core_block:
+            takeaway_block.extend(["", *core_block])
+        if remaining:
+            takeaway_block.extend(["", *remaining])
+        takeaway_block.append("")
+        if intro_lines:
+            result[insertion:insertion] = ["", *intro_lines, ""]
+            insertion += len(intro_lines) + 2
+        result[insertion:insertion] = takeaway_block
+
+    normalized_text = "\n".join(result)
+    normalized_text = re.sub(r"\n{3,}", "\n\n", normalized_text)
+    return normalized_text.strip()
+
+
+def _first_meaningful_sentence(text: str, fallback: str) -> str:
+    for sentence in re.split(r"[。！？!?\n]+", _to_clean_text(text)):
+        sentence = re.sub(r"^#{1,6}\s*", "", sentence).strip()
+        sentence = re.sub(r"^[-*]\s*", "", sentence).strip()
+        sentence = sentence.replace("**", "").strip()
+        if "视频主线图" in sentence:
+            continue
+        if len(sentence) >= 12:
+            return sentence
+    return fallback
+
+
+def _build_fallback_editorial_article(
+    *,
+    title: str,
+    source: SourceDescriptor,
+    content_markdown: str,
+    work_dir: str,
+    reason: str,
+) -> str:
+    type_brief = _read_editorial_work_json(work_dir, "type_brief.json")
+    extraction = _read_editorial_work_json(work_dir, "information_extraction.json")
+    detail: dict[str, Any] = {}
+    mainline = _read_text_blob_if_exists(os.path.join(work_dir, "mainline.md"))
+
+    focus_items = _coerce_editorial_items(type_brief.get("editorial_focus"), limit=5)
+    facts = [
+        item
+        for item in _coerce_editorial_items(extraction.get("background") or extraction.get("facts"), limit=8)
+        if not re.search(r"收看第|星期[一二三四五六日天]", item)
+    ][:6]
+    claims = _coerce_editorial_items(extraction.get("claims"), limit=5)
+    arguments = _coerce_editorial_items(extraction.get("arguments"), limit=5)
+    examples = _coerce_editorial_items(extraction.get("examples"), limit=4)
+    definitions = _coerce_editorial_items(extraction.get("definitions"), limit=4)
+    predictions = _coerce_editorial_items(extraction.get("predictions"), limit=3)
+    missed_details = _coerce_editorial_items(detail.get("easily_missed_details"), limit=4)
+    minor_examples = _coerce_editorial_items(detail.get("minor_but_useful_examples"), limit=3)
+
+    focus_lead = "、".join(_strip_editorial_time_marker(item) for item in focus_items[:2])
+    fallback_lead = (
+        f"这期视频的核心，是围绕{focus_lead}展开，把一条新闻放回产业红利、政治博弈和普通人利益分化的脉络里看。"
+        if focus_lead
+        else "这期视频围绕一个具体事件展开，把劳资冲突、产业红利和公众立场放在同一条脉络里解释。"
+    )
+    content_lead = fallback_lead
+    content_type = _to_clean_text(type_brief.get("content_type")) or "视频精读"
+    reading_value = _to_clean_text(type_brief.get("reading_value")) or "中"
+    creator_line = f"来自 {source.creator}" if source.creator else "基于清洗字幕与多通路信息抽取生成"
+
+    lines: list[str] = [
+        f"# {title}",
+        "",
+        f"> {content_lead}",
+        "",
+        f"{creator_line}。这篇精读稿以视频原文为边界，把口语化表达整理成便于阅读和回看的结构。内容类型判断为「{content_type}」，阅读价值为「{reading_value}」。",
+        "",
+    ]
+
+    takeaway_candidates = predictions or arguments or focus_items
+    takeaway = _strip_editorial_time_marker(takeaway_candidates[-1]) if takeaway_candidates else "把视频当成一条问题线索，比把它当成单条新闻更有价值。"
+    lines.extend(["", "## 核心判断", "", f"> {takeaway}", "", "### 核心要点"])
+    if focus_items:
+        _append_editorial_bullets(lines, focus_items, keep_time=False)
+    else:
+        fallback_points = _split_brief_points(content_markdown, limit=4)
+        _append_editorial_bullets(lines, fallback_points, keep_time=False)
+    lines.append("")
+
+    lines.extend(["", "## 🧭 核心线索"])
+    if mainline:
+        mainline_paragraphs = [
+            paragraph.strip()
+            for paragraph in re.split(r"\n{2,}", mainline)
+            if len(_to_clean_text(paragraph)) >= 18 and "视频主线图" not in paragraph
+        ][:4]
+        for paragraph in mainline_paragraphs:
+            cleaned = re.sub(r"^#{1,4}\s*", "", paragraph).strip()
+            lines.append(cleaned)
+            lines.append("")
+    else:
+        lines.append(
+            "视频不是只在复述单个事件，而是在追问一件事：当 AI 和半导体产业创造出巨额增量时，这份红利应该由劳动者、股东、企业还是更广泛的社会来分享。"
+        )
+        lines.append("")
+
+    lines.append("## 🔎 问题拆解")
+    if claims:
+        lines.append("### 作者判断")
+        _append_editorial_bullets(lines, claims, keep_time=False)
+        lines.append("")
+    if arguments:
+        lines.append("### 论证链条")
+        _append_editorial_bullets(lines, arguments, keep_time=False)
+        lines.append("")
+    if facts:
+        lines.append("### 关键背景")
+        _append_editorial_bullets(lines, facts, keep_time=False)
+        lines.append("")
+
+    if definitions or examples or missed_details or minor_examples or do_not_flatten:
+        lines.append("## 🧱 细节与案例")
+        if definitions:
+            lines.append("### 概念解释")
+            _append_editorial_bullets(lines, definitions, keep_time=False)
+            lines.append("")
+        if examples:
+            lines.append("### 案例现场")
+            _append_editorial_bullets(lines, examples, keep_time=False)
+            lines.append("")
+        _append_editorial_bullets(lines, missed_details, keep_time=False)
+        _append_editorial_bullets(lines, minor_examples, keep_time=False)
+        lines.append("")
+    article = _normalize_editorial_article_markdown("\n".join(lines).strip())
+    if _is_rejected_editorial_output(article) or len(article) < 800:
+        raise RuntimeError(f"无法生成可用兜底精读稿：{reason}")
+    return article
+
+
+def _build_fallback_review(article_md: str, *, reason: str) -> dict[str, Any]:
+    return {
+        "status": "fallback_passed",
+        "fidelity_score": 0.72,
+        "unsupported_claims": [],
+        "flattened_boundaries": [],
+        "missing_key_details": [],
+        "notes": [
+            "主编 API 未返回可用文章，已使用清洗字幕和多通路抽取结果生成本地兜底稿。",
+            "兜底稿不做外部事实判断，仅保证资料台可读和信息结构完整。",
+            f"fallback_reason: {reason[:240]}",
+        ],
+    }
+
+
+def _editorial_summary_eligibility(*, video_info: dict[str, Any], plan: ChunkPlan, content_chars: int) -> dict[str, Any]:
+    mode = _editorial_summary_mode()
+    duration_seconds = float(video_info.get("duration") or 0)
+    max_duration_seconds = _read_int_env(
+        "SHIJIE_EDITORIAL_SUMMARY_MAX_DURATION_SECONDS",
+        default=1800,
+        minimum=300,
+        maximum=7200,
+    )
+    max_content_chars = _read_int_env(
+        "SHIJIE_EDITORIAL_SUMMARY_MAX_CONTENT_CHARS",
+        default=30000,
+        minimum=8000,
+        maximum=90000,
+    )
+    reasons: list[str] = []
+    if not _mimo_editorial_available():
+        reasons.append("missing_mimo_api_key")
+    if duration_seconds > max_duration_seconds > 0:
+        reasons.append("duration_over_route")
+    if content_chars > max_content_chars:
+        reasons.append("content_over_route")
+    if mode in {"off", "none", "skip"}:
+        reasons.append("disabled")
+    eligible = mode in {"force", "on", "always"} or (not reasons)
+    if mode in {"off", "none", "skip"}:
+        eligible = False
+    return {
+        "mode": mode,
+        "eligible": eligible,
+        "reasons": reasons,
+        "duration_seconds": duration_seconds,
+        "content_chars": content_chars,
+        "text_length": plan.text_length,
+        "block_count": len(plan.chunks),
+        "max_duration_seconds": max_duration_seconds,
+        "max_content_chars": max_content_chars,
+    }
+
+
+def _build_editorial_source_packet(*, title: str, source: SourceDescriptor, content_markdown: str) -> str:
+    return "\n".join(
+        [
+            f"视频标题：{title}",
+            f"来源 ID：{source.source_id}",
+            f"发布者：{source.creator or '未知'}",
+            f"链接：{source.url or '未记录'}",
+            "",
+            "下面是已经清洗过的字幕资料稿。它是本次编稿的主要依据；时间戳和原始表述用于支撑最终文稿。",
+            "",
+            content_markdown.strip(),
+        ]
+    ).strip()
+
+
+def _editorial_system_prompt(role_name: str) -> str:
+    return (
+        f"你是视界专注的视频自动编稿系统中的{role_name}。"
+        "目标不是压缩字幕，而是帮助主编把视频改写成适合邮件阅读的精品日报稿。"
+        "请优先保留事实、观点、因果、转折、限定条件、例子、数字、人名、机构和时间线之间的关系。"
+        "MiMo 不负责实时判断外部真相；你的审查重点是最终内容是否忠实于字幕资料。"
+    )
+
+
+def _run_editorial_task(
+    *,
+    task_id: str,
+    role_name: str,
+    instruction: str,
+    source_packet: str,
+    temperature: float = 0.2,
+) -> tuple[str, dict[str, Any]]:
+    messages = [
+        {"role": "system", "content": _editorial_system_prompt(role_name)},
+        {"role": "user", "content": f"{instruction}\n\n资料：\n{source_packet}"},
+    ]
+    return _request_mimo_editorial(task_id=task_id, messages=messages, temperature=temperature)
+
+
+def _render_simple_email_html(markdown_text: str, *, title: str, source: SourceDescriptor) -> str:
+    markdown_text = _normalize_editorial_article_markdown(markdown_text)
+    body: list[str] = []
+    in_list = False
+    section_open = False
+    skipped_lead_title = False
+    section_style = "margin:24px 0 0;padding:24px 0 0;border-top:1px solid #eef1f5;"
+    takeaway_section_style = (
+        "margin:18px 0 0;padding:20px 22px;border:1px solid #f3d28b;"
+        "border-radius:20px;background:#fffaf0;background-color:#fffaf0;color:#1f2937;"
+    )
+    h2_style = (
+        "font-size:22px;line-height:1.42;margin:0 0 14px;color:#667085;"
+        "letter-spacing:0;font-weight:760;"
+    )
+    h3_style = (
+        "font-size:16px;line-height:1.55;margin:22px 0 10px;color:#344054;"
+        "letter-spacing:0;font-weight:740;"
+    )
+    paragraph_style = "font-size:15px;line-height:1.92;color:#2f3a4a;margin:10px 0;"
+    list_style = "padding-left:20px;margin:8px 0 0;color:#2f3a4a;"
+    list_item_style = "font-size:15px;line-height:1.92;color:#2f3a4a;margin:7px 0;"
+    quote_style = (
+        "margin:8px 0 12px;padding:15px 18px;border-left:4px solid #f59e0b;"
+        "background:#fff7e6;background-color:#fff7e6;border-radius:0 14px 14px 0;color:#303846;font-weight:500;"
+    )
+
+    def normalize_title_for_compare(value: str) -> str:
+        return re.sub(r"\s+", " ", value).strip()
+
+    def render_inline(value: str) -> str:
+        rendered = html.escape(value)
+        rendered = re.sub(
+            r"`([^`]+)`",
+            r'<code style="padding:2px 5px;border-radius:6px;background:#eef2f7;background-color:#eef2f7;color:#243041;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.92em;">\1</code>',
+            rendered,
+        )
+        rendered = re.sub(r"\*\*([^*]+)\*\*", r'<strong style="color:#111827;font-weight:700;">\1</strong>', rendered)
+        return rendered
+
+    def close_list() -> None:
+        nonlocal in_list
+        if in_list:
+            body.append("</ul>")
+            in_list = False
+
+    def close_section() -> None:
+        nonlocal section_open
+        close_list()
+        if section_open:
+            body.append("</section>")
+            section_open = False
+
+    def ensure_section() -> None:
+        nonlocal section_open
+        if not section_open:
+            body.append(f'<section class="article-section" style="{section_style}">')
+            section_open = True
+
+    for raw_line in markdown_text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            close_list()
+            continue
+        if stripped == "---":
+            close_section()
+            body.append("<hr />")
+            continue
+        heading = re.match(r"^(#{1,4})\s+(.+)$", stripped)
+        if heading:
+            level_raw = len(heading.group(1))
+            heading_text = heading.group(2).strip()
+            if (
+                not skipped_lead_title
+                and level_raw == 1
+                and normalize_title_for_compare(heading_text) == normalize_title_for_compare(title)
+            ):
+                skipped_lead_title = True
+                continue
+            skipped_lead_title = True
+            if level_raw == 2:
+                close_section()
+                is_takeaway = bool(re.search(r"一句话|开篇|判断|核心", heading_text))
+                section_class = " article-section--takeaway" if is_takeaway else ""
+                current_section_style = takeaway_section_style if is_takeaway else section_style
+                body.append(f'<section class="article-section{section_class}" style="{current_section_style}">')
+                body.append(f'<h2 style="{h2_style}">{render_inline(heading_text)}</h2>')
+                section_open = True
+                continue
+            ensure_section()
+            level = min(max(level_raw, 2), 3)
+            heading_style = h2_style if level == 2 else h3_style
+            body.append(f'<h{level} style="{heading_style}">{render_inline(heading_text)}</h{level}>')
+            continue
+        if stripped.startswith(">"):
+            ensure_section()
+            close_list()
+            body.append(f'<blockquote style="{quote_style}">{render_inline(stripped.lstrip("> ").strip())}</blockquote>')
+            continue
+        if re.match(r"^[-*]\s+", stripped):
+            ensure_section()
+            if not in_list:
+                body.append(f'<ul style="{list_style}">')
+                in_list = True
+            item_text = re.sub(r"^[-*]\s+", "", stripped)
+            body.append(f'<li style="{list_item_style}">{render_inline(item_text)}</li>')
+            continue
+        ensure_section()
+        close_list()
+        body.append(f'<p style="{paragraph_style}">{render_inline(stripped)}</p>')
+    close_section()
+
+    source_line = " · ".join(part for part in [source.creator, source.source_id] if part)
+    source_link = (
+        f' · <a href="{html.escape(source.url, quote=True)}" style="color:#51657f;text-decoration:none;border-bottom:1px solid #c8d1dc;">原视频</a>'
+        if source.url
+        else ""
+    )
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light" />
+  <meta name="supported-color-schemes" content="light" />
+  <meta name="x-apple-disable-message-reformatting" content="" />
+  <title>{html.escape(title)}</title>
+  <style>
+    html {{ background:#f5f6f8; background-color:#f5f6f8; }}
+    :root {{ color-scheme: light; }}
+    body {{ margin:0; padding:0; background:#f5f6f8; background-color:#f5f6f8; color:#1f2937; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif; -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }}
+    .wrap {{ max-width:940px; margin:0 auto; padding:34px 22px 56px; }}
+    .article {{ background:#ffffff; background-color:#ffffff; border:1px solid #e7eaf0; border-radius:26px; padding:34px 42px 40px; box-shadow:0 18px 54px rgba(15,23,42,.08); }}
+    .source {{ color:#7b8494; font-size:13px; line-height:1.8; margin:0 0 22px; word-break:break-word; }}
+    .source a {{ color:#51657f; text-decoration:none; border-bottom:1px solid #c8d1dc; }}
+    h1 {{ font-size:30px; line-height:1.25; margin:0 0 12px; color:#111827; letter-spacing:0; }}
+    h2 {{ font-size:22px; line-height:1.42; margin:0 0 14px; color:#667085; letter-spacing:0; font-weight:760; }}
+    h3 {{ font-size:16px; line-height:1.55; margin:22px 0 10px; color:#344054; letter-spacing:0; font-weight:740; }}
+    p, li {{ font-size:15px; line-height:1.92; color:#2f3a4a; }}
+    p {{ margin:10px 0; }}
+    li {{ margin:7px 0; }}
+    strong {{ color:#111827; font-weight:700; }}
+    code {{ padding:2px 5px; border-radius:6px; background:#eef2f7; background-color:#eef2f7; color:#243041; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.92em; }}
+    ul {{ padding-left:20px; margin:8px 0 0; }}
+    blockquote {{ margin:8px 0 12px; padding:15px 18px; border-left:4px solid #f59e0b; background:#fff7e6; background-color:#fff7e6; border-radius:0 14px 14px 0; color:#303846; font-weight:500; }}
+    hr {{ border:0; border-top:1px solid #e7eaf0; margin:28px 0; }}
+    .article-section {{ margin:24px 0 0; padding:24px 0 0; border-top:1px solid #eef1f5; }}
+    .article-section + .article-section {{ margin-top:26px; }}
+    .article-section--takeaway {{ margin:18px 0 0; padding:20px 22px; border:1px solid #f3d28b; border-radius:20px; background:#fffaf0; background-color:#fffaf0; }}
+    .article-section > :first-child {{ margin-top:0; }}
+    .article-section > :last-child {{ margin-bottom:0; }}
+    @media (max-width: 680px) {{
+      .wrap {{ padding:18px 12px 36px; }}
+      .article {{ border-radius:20px; padding:24px 18px 28px; }}
+      h1 {{ font-size:24px; }}
+      h2 {{ font-size:19px; }}
+      p, li {{ font-size:14px; }}
+    }}
+  </style>
+</head>
+<body bgcolor="#f5f6f8" style="margin:0;padding:0;background:#f5f6f8;background-color:#f5f6f8;color:#1f2937;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">
+  <main class="wrap" style="max-width:940px;margin:0 auto;padding:34px 22px 56px;">
+    <article class="article" bgcolor="#ffffff" style="background:#ffffff;background-color:#ffffff;border:1px solid #e7eaf0;border-radius:26px;padding:34px 42px 40px;box-shadow:0 18px 54px rgba(15,23,42,.08);color:#1f2937;">
+      <h1 style="font-size:30px;line-height:1.25;margin:0 0 12px;color:#111827;letter-spacing:0;">{html.escape(title)}</h1>
+      <div class="source" style="color:#7b8494;font-size:13px;line-height:1.8;margin:0 0 22px;word-break:break-word;">{html.escape(source_line)}{source_link}</div>
+      {''.join(body)}
+    </article>
+  </main>
+</body>
+</html>
+"""
+
+
+def _build_editorial_cards(extraction: dict[str, Any], detail: dict[str, Any], type_brief: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": EDITORIAL_SUMMARY_VERSION,
+        "content_type": type_brief.get("content_type") or type_brief.get("type") or "",
+        "reading_value": type_brief.get("reading_value") or "",
+        "background": extraction.get("background") or extraction.get("facts") or [],
+        "claims": extraction.get("claims") or [],
+        "arguments": extraction.get("arguments") or [],
+        "examples": extraction.get("examples") or [],
+        "definitions": extraction.get("definitions") or [],
+        "predictions": extraction.get("predictions") or [],
+    }
+
+
+def _finalize_editorial_status(
     *,
     material_dir: str,
-    material_id: str,
-    course_title: str,
-    text_length: int,
-    block_count: int,
+    summary_dir: str,
+    status: dict[str, Any],
+    started_perf: float,
 ) -> dict[str, Any]:
-    profile = _detect_validation_profile(course_title, text_length=text_length, block_count=block_count)
-    profile_source_path = _project_file("src", "schemas", "validation_profiles", f"{profile}.v8.json")
-    profile_payload: dict[str, Any] = {}
-    profile_hash = ""
-    if os.path.exists(profile_source_path):
-        with open(profile_source_path, "r", encoding="utf-8") as file:
-            profile_raw = file.read()
-        profile_payload = json.loads(profile_raw)
-        profile_hash = "sha256:" + hashlib.sha256(profile_raw.encode("utf-8")).hexdigest()
-
-    fallback_by_profile = {
-        "lecture": {
-            "absolute_floor": 12_000,
-            "raw_ratio_floor": 0.04,
-            "min_chars_per_h3": 700,
-            "min_chars_per_required_topic": 180,
-            "short_h3_threshold": 400,
-            "short_h3_ratio_limit": 0.25,
-            "h3_median_floor": 700,
-            "effective_medical_chars_floor": 9_000,
-            "min_effective_medical_chars_per_h3": 500,
-            "h3_median_effective_medical_chars_floor": 600,
-        },
-        "technical_tutorial": {
-            "absolute_floor": 18_000,
-            "raw_ratio_floor": 0.06,
-            "min_chars_per_h3": 900,
-            "min_chars_per_required_topic": 250,
-            "short_h3_threshold": 600,
-            "short_h3_ratio_limit": 0.2,
-            "h3_median_floor": 900,
-            "effective_medical_chars_floor": 15_000,
-            "min_effective_medical_chars_per_h3": 700,
-            "h3_median_effective_medical_chars_floor": 800,
-        },
-        "medical_exam": {
-            "absolute_floor": 36_000,
-            "raw_ratio_floor": 0.1,
-            "min_chars_per_h3": 1_200,
-            "min_chars_per_required_topic": 350,
-            "short_h3_threshold": 800,
-            "short_h3_ratio_limit": 0.15,
-            "h3_median_floor": 1_200,
-            "effective_medical_chars_floor": 30_000,
-            "min_effective_medical_chars_per_h3": 850,
-            "h3_median_effective_medical_chars_floor": 1_000,
-        },
+    finished_at = str(status.get("finished_at") or _utc_now_iso())
+    status["finished_at"] = finished_at
+    elapsed_seconds = round(max(0.0, perf_counter() - started_perf), 3)
+    usage_totals = _summarize_usage_tokens(status.get("usage") if isinstance(status.get("usage"), dict) else {})
+    article_path = os.path.join(summary_dir, "article.md")
+    html_path = os.path.join(summary_dir, "article.html")
+    artifacts = {
+        "article_chars": _text_file_chars(article_path),
+        "article_html_bytes": _file_size(html_path),
+        "cards_bytes": _file_size(os.path.join(summary_dir, "cards.json")),
+        "review_bytes": _file_size(os.path.join(summary_dir, "review.json")),
     }
-    capabilities = {
-        "learning_page_plan": "required",
-        "candidate_source_cards": "required",
-        "required_source_cards": "required",
-        "published_claims": "required",
+    metrics = {
+        "status": status.get("status") or "",
+        "started_at": status.get("started_at") or "",
+        "finished_at": finished_at,
+        "elapsed_seconds": elapsed_seconds,
+        "token_totals": usage_totals,
+        "artifacts": artifacts,
+        "fallback": bool(status.get("fallback")),
+        "error": status.get("error") or status.get("reason") or "",
     }
-    required_checks = [
-        "material_structure",
-        "student_visible_artifacts_exist",
-        "student_text_clean",
-        "long_material_sanity_floor",
-        "learning_units_too_short",
-        "ready_state_layering",
-    ]
-    length_policy = profile_payload.get("length_policy") if isinstance(profile_payload.get("length_policy"), dict) else fallback_by_profile[profile]
-    contract = {
-        **profile_payload,
-        "schema_version": "shijie.validation-contract.v0.1",
-        "contract_version": str(profile_payload.get("contract_version") or "v8.3"),
-        "mode": str(profile_payload.get("mode") or "strict"),
-        "profile": profile,
-        "material_id": material_id,
-        "profile_source": f"schemas/validation_profiles/{profile}.v8.json",
-        "profile_hash": profile_hash,
-        "resolved_at": datetime.now(timezone.utc).isoformat(),
-        "capabilities": profile_payload.get("capabilities") if isinstance(profile_payload.get("capabilities"), dict) else capabilities,
-        "required_checks": profile_payload.get("required_checks") if isinstance(profile_payload.get("required_checks"), list) else required_checks,
-        "length_policy": length_policy,
-        "anti_padding_policy": profile_payload.get("anti_padding_policy")
-        if isinstance(profile_payload.get("anti_padding_policy"), dict)
-        else {
-            "max_boilerplate_ratio": 0.12 if profile == "medical_exam" else 0.14,
-            "max_repeated_sentence_ratio": 0.08 if profile == "medical_exam" else 0.1,
-            "max_repeated_subheading_coverage": 0.2 if profile == "medical_exam" else 0.25,
-            "max_boilerplate_phrase_coverage": 0.2 if profile == "medical_exam" else 0.25,
-        },
-        "resolved_rules": {
-            "new_material_contract": True,
-            "strict_features_required": True,
-            "notes": "v8.3 strict 合同要求学习页证据链和反模板化有效内容检查，最终导入前由软件 validator 检查。",
-        },
-    }
-    return contract
+    status["metrics"] = metrics
+    _write_material_metrics(material_dir, stage_name="editorial_summary", stage_payload=metrics)
+    return status
 
 
-def _write_authoring_workspace(material_dir: str, *, course_title: str, material_id: str) -> dict[str, str]:
-    authoring_dir = os.path.join(material_dir, "authoring")
-    schemas_dir = os.path.join(material_dir, "schemas")
-    os.makedirs(authoring_dir, exist_ok=True)
-    os.makedirs(schemas_dir, exist_ok=True)
+def build_editorial_summary_content(
+    *,
+    material_dir: str,
+    title: str,
+    source: SourceDescriptor,
+    video_info: dict[str, Any],
+    plan: ChunkPlan,
+) -> dict[str, Any]:
+    summary_dir = os.path.join(material_dir, "summary")
+    work_dir = os.path.join(summary_dir, "work")
+    os.makedirs(work_dir, exist_ok=True)
+    content_path = os.path.join(material_dir, "content.md")
+    content_markdown = ""
+    if os.path.exists(content_path):
+        with open(content_path, "r", encoding="utf-8") as file:
+            content_markdown = file.read()
+    content_chars = len(content_markdown)
+    eligibility = _editorial_summary_eligibility(video_info=video_info, plan=plan, content_chars=content_chars)
+    status_path = os.path.join(summary_dir, "summary_status.json")
+    started_at = _utc_now_iso()
+    started_perf = perf_counter()
 
-    codex_goal_v8_path = os.path.join(authoring_dir, "codex-goal-content-synthesis-v8.md")
-    authoring_doc_path = os.path.join(authoring_dir, "content-synthesis-authoring.md")
-    readonly_audit_doc_path = os.path.join(authoring_dir, "readonly-synthesis-audit.md")
-    codex_copy_path = os.path.join(authoring_dir, "02_start_codex_synthesis.md")
-    audit_copy_path = os.path.join(authoring_dir, "03_readonly_synthesis_audit.md")
-    plan_path = os.path.join(material_dir, "content_draft", "synthesis_plan.json")
+    if not eligibility["eligible"]:
+        status = {
+            "schema_version": EDITORIAL_SUMMARY_VERSION,
+            "status": "skipped",
+            "started_at": started_at,
+            "finished_at": _utc_now_iso(),
+            "eligibility": eligibility,
+            "reason": ", ".join(eligibility["reasons"]) or "not_eligible",
+        }
+        status = _finalize_editorial_status(material_dir=material_dir, summary_dir=summary_dir, status=status, started_perf=started_perf)
+        _save_json_file(status_path, status)
+        return status
 
-    _copy_project_file_if_exists(("src", "schemas", "content_synthesis_plan.schema.json"), os.path.join(schemas_dir, "content_synthesis_plan.schema.json"))
-    _copy_project_file_if_exists(("src", "schemas", "validation_contract.schema.json"), os.path.join(schemas_dir, "validation_contract.schema.json"))
-    for profile_name in ("lecture", "technical_tutorial", "medical_exam"):
-        _copy_project_file_if_exists(
-            ("src", "schemas", "validation_profiles", f"{profile_name}.v8.json"),
-            os.path.join(schemas_dir, "validation_profiles", f"{profile_name}.v8.json"),
-        )
-    _copy_project_file_if_exists(("docs", "content-synthesis-authoring.md"), authoring_doc_path)
-    _copy_project_file_if_exists(("docs", "prompts", "codex-goal-content-synthesis-v8.md"), codex_goal_v8_path)
-    _copy_project_file_if_exists(("docs", "prompts", "readonly-synthesis-audit.md"), readonly_audit_doc_path)
+    if not content_markdown.strip():
+        status = {
+            "schema_version": EDITORIAL_SUMMARY_VERSION,
+            "status": "failed",
+            "started_at": started_at,
+            "finished_at": _utc_now_iso(),
+            "eligibility": eligibility,
+            "error": "content.md 为空，无法编稿。",
+        }
+        status = _finalize_editorial_status(material_dir=material_dir, summary_dir=summary_dir, status=status, started_perf=started_perf)
+        _save_json_file(status_path, status)
+        return status
 
-    if not os.path.exists(codex_goal_v8_path):
-        _write_text_file(
-            codex_goal_v8_path,
-            [
-                "# Codex Goal 学习笔记任务 v8",
-                "",
-                "你是视界专注主生产窗口。请按 v8 流水线生成学习笔记：material_ready -> knowledge_tree_ready -> coverage_ready -> dossier_ready -> partial_learning_notes -> learning_notes_ready。长材料每轮只推进一个阶段，先搭知识树，再做 topic 覆盖，再写正文。",
-                "",
-                "核心原则：先读 run_state 决定阶段；knowledge_tree_ready 必须先确定主干、分支、子节点、跨章连接和 presentation_policy；coverage_ready 后必须回读 blocks 写 block_reread_ledger 和 section_dossiers；短材料可用 # 标题 + 少量 ## 学习小节，中长材料才使用 ## 大章节和 ### 完整小节。",
+    source_packet = _build_editorial_source_packet(title=title, source=source, content_markdown=content_markdown)
+    usage: dict[str, Any] = {}
+    try:
+        _emit_progress("正在抽取视频信息单元…", 88, stage="editorial_summary")
+        parallel_tasks = {
+            "type_brief": (
+                "类型判断员",
+                """请判断这条视频的内容类型和编辑取向。只输出 JSON：
+{
+  "content_type": "新闻评论/观点分析/行业分析/技能教程/访谈/播客/产品评测/知识讲解/其他",
+  "reading_value": "高/中/低",
+  "editorial_focus": ["主编写稿时最该抓住的重点"],
+  "risk_flags": ["容易误写或需要保守表达的地方"]
+}""",
+                0.15,
+            ),
+            "information_extraction": (
+                "信息抽取员",
+                """请从资料中抽取足够支撑正文的信息单元，不写文章。只输出 JSON：
+{
+  "claims": [],
+  "arguments": [],
+  "examples": [],
+  "definitions": [],
+  "background": [],
+  "predictions": []
+}
+每类保留 4-8 条最有用的信息。不要抽“关键原话”“时间戳列表”“事实清单”这类正文板块；事实只作为背景和论证材料。""",
+                0.12,
+            ),
+            "mainline": (
+                "主线编辑",
+                """请还原这条视频的表达路径。用 Markdown 输出，重点写清：
+- 视频开头提出什么问题
+- 背景如何展开
+- 作者的核心判断是什么
+- 判断依据、例子和转折是什么
+- 结尾落到什么结论
+这不是最终稿，而是给主编使用的主线图。""",
+                0.2,
+            ),
+        }
+        task_outputs: dict[str, str] = {}
+        task_meta: dict[str, Any] = {}
+        with ThreadPoolExecutor(max_workers=min(4, len(parallel_tasks))) as executor:
+            futures = {
+                executor.submit(
+                    _run_editorial_task,
+                    task_id=task_id,
+                    role_name=role_name,
+                    instruction=instruction,
+                    source_packet=source_packet,
+                    temperature=temperature,
+                ): task_id
+                for task_id, (role_name, instruction, temperature) in parallel_tasks.items()
+            }
+            for future in as_completed(futures):
+                task_id = futures[future]
+                output, meta = future.result()
+                task_outputs[task_id] = output
+                task_meta[task_id] = meta
+                usage[task_id] = meta.get("usage") or {}
+                suffix = "json" if task_id in {"type_brief", "information_extraction"} else "md"
+                _write_text_blob(os.path.join(work_dir, f"{task_id}.{suffix}"), output)
+
+        type_brief = _extract_json_document(task_outputs.get("type_brief", ""))
+        extraction = _extract_json_document(task_outputs.get("information_extraction", ""))
+        detail: dict[str, Any] = {}
+        cards = _build_editorial_cards(extraction, detail, type_brief)
+        _save_json_file(os.path.join(summary_dir, "cards.json"), cards)
+
+        _emit_progress("正在合成精品视频稿…", 94, stage="editorial_summary")
+        editor_material = {
+            "type_brief": type_brief,
+            "information_extraction": extraction,
+            "mainline": task_outputs.get("mainline", ""),
+        }
+        article_instruction = f"""你是主编。请把多通路材料合成为一篇适合邮件阅读的精品视频日报稿。
+
+写作目标：
+- 读者不看视频，也能清楚知道视频讲了什么、作者想表达什么、为什么值得关注。
+- 文章要像人工编辑写的自然中文，不要堆模板。
+- 压缩口语和重复表达，但保留观点、因果、转折、限定条件和关键例子。
+- 不做外部事实判断；遇到资料内无法确认的内容，用“作者认为/视频提到/仍需核查”等保守表达。
+- 最有价值的一句话判断要放在文章前部，帮助读者先抓住主旨；这句话不要加粗。
+- 正文默认不要展示密集时间戳；时间戳只作为内部回查线索，除非某个时间点本身就是新闻事实。
+- 板块要少而稳，优先 3-5 个二级标题；把相近内容合并，不要把每类信息拆成很碎的小节。
+- “核心判断”不要加 emoji；“核心线索”和“问题拆解”要使用固定 emoji 前缀。
+- 不要输出“关键原话”“事实”“事实、判断与边界”这类独立板块；这些只作为内部支撑材料。
+- 避免使用“需要读懂的概念和例子”“普通摘要容易漏掉的细节”“值得回看的片段”“一句话带走”这类机械标题。
+- 这篇 Markdown 会继续生成邮件和资料台 HTML 渲染稿；请使用清晰的 `#`、`##`、`###` 层级、列表、引用和加粗，不要输出原始 HTML。
+
+建议结构：
+# 精品标题
+> 一句话副标题，不加粗
+
+## 核心判断
+## 🧭 核心线索
+## 🔎 问题拆解
+## 🧱 细节与案例
+
+多通路材料：
+{json.dumps(editor_material, ensure_ascii=False, indent=2)}
+"""
+        article_md, article_meta = _request_mimo_editorial(
+            task_id="chief_editor_article",
+            messages=[
+                {"role": "system", "content": _editorial_system_prompt("主编")},
+                {"role": "user", "content": article_instruction},
             ],
+            temperature=0.32,
+            timeout=240,
         )
+        usage["chief_editor_article"] = article_meta.get("usage") or {}
+        article_md = _normalize_editorial_article_markdown(article_md)
+        article_path = os.path.join(summary_dir, "article.md")
+        html_path = os.path.join(summary_dir, "article.html")
+        _write_text_blob(article_path, article_md)
+        _write_text_blob(html_path, _render_simple_email_html(article_md, title=title, source=source))
 
-    codex_copy_text = [
-        f"/goal 在 `{material_dir}` 执行 `authoring/codex-goal-content-synthesis-v8.md`，按 v8 知识树优先流水线处理《{course_title}》；目标是产出生产侧完整的学习笔记包。Codex 负责把 `run_state.stage` 推进到 `learning_notes_ready`；`importable`、`pipeline_ready` 和 `release_ready` 保持由软件 validator 接管。",
-        "",
-        "先读取根目录 `run_state.json`、`validation_contract.json` 和 `content_draft/work/run_state.json`：这是单次复制入口，同一个 Goal 应自动多轮推进；每一轮最多只过一个阶段闸门。`material_ready` 先到 `knowledge_tree_ready`；`knowledge_tree_ready` 再到 `coverage_ready`；`coverage_ready` 再到 `dossier_ready`；`dossier_ready` 或 `partial_learning_notes` 每轮只深写 1-2 个知识树分支，直到 `learning_notes_ready`。阶段完成不是 Goal 完成，不要跳阶段。",
-        "",
-        "软件已生成 `indexes/source_index.jsonl`。最终收口时请把正文和导图来源写入 `indexes/learning_notes_trace.json`、`indexes/chapter_mindmap_trace.json`；学生正文保持干净，不写 block/source/debug 信息。",
-        "",
-        "本材料包默认按 v8.3 content-specific strict contract 生产：最终收口前需要写出 `content_draft/work/learning_page_plans/`、`content_draft/work/source_cards/candidates/`、`content_draft/work/source_cards/required/` 和 `content_draft/work/published_claims/` 的可解析旁路证据；学生正文必须是本节专属医学内容，通用学习话术、重复复盘模板和跨小节高相似段落不能用来补足长度。",
-        "",
-        "最终收口后请回到项目根目录运行 `cd desktop && npm run validate:material -- \"<本材料包路径>\"`。只有 validator 写入 `pipeline_ready=true` 才能说工程上可导入；如果失败，按 validation_report 的 `repair_intent` 和 `blocking_reason_codes` 继续修复。",
-        "",
-        "若材料超过 100000 字、超过 8 blocks，或属于考试/医学/教程等密集材料，即使用户希望直接完成，也只在当前轮推进当前阶段并留下下一轮继续入口；coverage、dossier、draft、导图和 validator 状态分层推进。",
-    ]
-    _write_text_file(codex_copy_path, codex_copy_text)
+        _emit_progress("正在审读视频稿忠实性…", 97, stage="editorial_summary")
+        review_instruction = f"""请轻量审读最终稿是否忠实于前面抽取出的编辑材料。你不需要判断外部世界真假，只判断文稿是否存在明显无支撑扩写。
 
-    audit_copy_text = [
-        "# 只读学习笔记审计",
-        "",
-        "```text",
-        "请担任“视界专注”的只读学习笔记审计 Goal。你的任务是审核学习笔记和章节思维导图质量，不是制作或修改正文。",
-        "",
-        "原材料包路径：",
-        material_dir,
-        "",
-        "只允许读取 canonical 学习笔记文件，并只允许写入：",
-        os.path.join(material_dir, "content_draft", "review_exports"),
-        "",
-        "禁止修改：",
-        "- `content_draft/synthesis_plan.json`",
-        "- `content_draft/learning_notes.md`",
-        "- `content_draft/chapter_mindmap.md`",
-        "",
-        "请读取 `authoring/readonly-synthesis-audit.md`、`authoring/content-synthesis-authoring.md`、`content_draft/synthesis_plan.json`、`content_draft/learning_notes.md`、`content_draft/work/evidence_ledger.jsonl`、`content_draft/work/specificity_review.md`、`content_draft/chapter_mindmap.md` 和 `indexes/*trace.json`。",
-        "重点判断：是否以视频内容为主体，是否只是字幕压缩版或总结文章，是否丢掉材料的解读方向、具体情境、例子、边界和表达重心；正文是否按材料选择 `compact_notes` 或 `chaptered_notes`，可打开小节是否完整可读而不是一个 topic 一页；章节思维导图是否适合作为学习台对话流中的一整条图文消息展示；长材料 trace map 是否覆盖主要学习单位。",
-        "报告开头必须写：`---`、`schema_version: shijie.quality-audit-report.v0.1`、`audit_result: pass | needs_fix | blocked`、`recommended_stage: none | needs_restructure | coverage_ready | dossier_ready | partial_learning_notes | needs_deepening`、`---`。",
-        "输出一份中文审计报告到 `content_draft/review_exports/quality_audit_report.md`，只写 front matter、是否通过、主要问题、证据和返工方向。不要直接重写正文，不要设置 release_ready。",
-        "```",
-    ]
-    _write_text_file(audit_copy_path, audit_copy_text)
+只输出 JSON：
+{{
+  "status": "passed/needs_revision",
+  "fidelity_score": 0,
+  "unsupported_claims": [],
+  "flattened_boundaries": [],
+  "missing_key_details": [],
+  "notes": []
+}}
 
-    return {
-        "authoring_dir": authoring_dir,
-        "codex_goal_prompt": codex_copy_path,
-        "codex_audit_prompt": audit_copy_path,
-        "synthesis_plan": plan_path,
+最终稿：
+{article_md}
+
+编辑材料：
+{json.dumps(editor_material, ensure_ascii=False, indent=2)}
+"""
+        review_raw, review_meta = _request_mimo_editorial(
+            task_id="fidelity_review",
+            messages=[
+                {"role": "system", "content": _editorial_system_prompt("忠实性审稿员")},
+                {"role": "user", "content": review_instruction},
+            ],
+            temperature=0.1,
+            timeout=180,
+        )
+        usage["fidelity_review"] = review_meta.get("usage") or {}
+        review = _extract_json_document(review_raw)
+        _write_text_blob(os.path.join(work_dir, "fidelity_review.raw.json"), review_raw)
+        _save_json_file(os.path.join(summary_dir, "review.json"), review)
+
+        status = {
+            "schema_version": EDITORIAL_SUMMARY_VERSION,
+            "status": "summary_ready",
+            "started_at": started_at,
+            "finished_at": _utc_now_iso(),
+            "eligibility": eligibility,
+            "paths": {
+                "article_md": "summary/article.md",
+                "article_html": "summary/article.html",
+                "cards": "summary/cards.json",
+                "review": "summary/review.json",
+                "work_dir": "summary/work",
+            },
+            "review_status": review.get("status") or "",
+            "usage": usage,
+        }
+        status = _finalize_editorial_status(material_dir=material_dir, summary_dir=summary_dir, status=status, started_perf=started_perf)
+        _save_json_file(os.path.join(summary_dir, "meta.json"), status)
+        _save_json_file(status_path, status)
+        return status
+    except Exception as exc:
+        for stale_name in ("article.md", "article.html"):
+            stale_path = os.path.join(summary_dir, stale_name)
+            if os.path.exists(stale_path):
+                try:
+                    os.remove(stale_path)
+                except OSError:
+                    pass
+        try:
+            fallback_reason = str(exc)
+            article_md = _build_fallback_editorial_article(
+                title=title,
+                source=source,
+                content_markdown=content_markdown,
+                work_dir=work_dir,
+                reason=fallback_reason,
+            )
+            article_path = os.path.join(summary_dir, "article.md")
+            html_path = os.path.join(summary_dir, "article.html")
+            review = _build_fallback_review(article_md, reason=fallback_reason)
+            _write_text_blob(article_path, article_md)
+            _write_text_blob(html_path, _render_simple_email_html(article_md, title=title, source=source))
+            _save_json_file(os.path.join(summary_dir, "review.json"), review)
+            status = {
+                "schema_version": EDITORIAL_SUMMARY_VERSION,
+                "status": "summary_ready",
+                "started_at": started_at,
+                "finished_at": _utc_now_iso(),
+                "eligibility": eligibility,
+                "fallback": True,
+                "fallback_reason": fallback_reason,
+                "paths": {
+                    "article_md": "summary/article.md",
+                    "article_html": "summary/article.html",
+                    "cards": "summary/cards.json",
+                    "review": "summary/review.json",
+                    "work_dir": "summary/work",
+                },
+                "review_status": review.get("status") or "",
+                "usage": usage,
+            }
+            status = _finalize_editorial_status(material_dir=material_dir, summary_dir=summary_dir, status=status, started_perf=started_perf)
+            _save_json_file(os.path.join(summary_dir, "meta.json"), status)
+            _save_json_file(status_path, status)
+            return status
+        except Exception as fallback_exc:
+            fallback_error = str(fallback_exc)
+            for stale_name in ("article.md", "article.html"):
+                stale_path = os.path.join(summary_dir, stale_name)
+                if os.path.exists(stale_path):
+                    try:
+                        os.remove(stale_path)
+                    except OSError:
+                        pass
+        status = {
+            "schema_version": EDITORIAL_SUMMARY_VERSION,
+            "status": "failed",
+            "started_at": started_at,
+            "finished_at": _utc_now_iso(),
+            "eligibility": eligibility,
+            "error": str(exc),
+            "fallback_error": fallback_error,
+        }
+        status = _finalize_editorial_status(material_dir=material_dir, summary_dir=summary_dir, status=status, started_perf=started_perf)
+        _save_json_file(status_path, status)
+        return status
+
+
+def _clean_one_chunk_with_checkpoint(chunk: CleaningChunk, *, title: str, work_dir: str, mode: str) -> dict[str, Any]:
+    chunk_input_path = os.path.join(work_dir, "chunks", f"{chunk.chunk_id}.input.md")
+    chunk_output_path = os.path.join(work_dir, "chunks", f"{chunk.chunk_id}.md")
+    chunk_meta_path = os.path.join(work_dir, "chunks", f"{chunk.chunk_id}.meta.json")
+    raw_sha1 = hashlib.sha1(chunk.text.encode("utf-8")).hexdigest()
+    provider_fingerprint = f"rule:{CONTENT_CLEANING_VERSION}"
+    if mode == "mimo":
+        provider_fingerprint = f"mimo:{CONTENT_CLEANING_VERSION}:{_resolve_mimo_chat_endpoint()}:{_resolve_mimo_cleaning_model()}"
+    cached_meta = _load_json_file(chunk_meta_path)
+    if (
+        cached_meta
+        and cached_meta.get("input_sha1") == raw_sha1
+        and cached_meta.get("requested_mode") == mode
+        and cached_meta.get("provider_fingerprint") == provider_fingerprint
+        and cached_meta.get("status") in {"rule_based", "mimo", "mimo_softened", "mimo_with_warnings", "mimo_repaired", "mimo_repaired_with_warnings"}
+        and os.path.exists(chunk_output_path)
+    ):
+        with open(chunk_output_path, "r", encoding="utf-8") as file:
+            cached_text = file.read().strip()
+        if cached_text:
+            return {
+                **cached_meta,
+                "cleaned_text": cached_text,
+                "cache_hit": True,
+            }
+
+    _write_text_blob(chunk_input_path, chunk.text)
+    cleaned_text = ""
+    provider_meta: dict[str, Any] = {}
+    status = "rule_based"
+    error = ""
+
+    if mode == "mimo":
+        try:
+            cleaned_text, provider_meta = _request_mimo_cleaning(chunk, title=title)
+            cleaned_text, softened_years = _soften_unsupported_full_years(chunk.text, cleaned_text)
+            if softened_years:
+                provider_meta["softened_unsupported_full_years"] = softened_years
+            missing_terms = _missing_critical_numeric_terms(chunk.text, cleaned_text)
+            missing_markers = _missing_time_markers(chunk.text, cleaned_text)
+            source_marker_count = len(_extract_time_markers(chunk.text))
+            acceptable_missing_marker_count = 0 if source_marker_count < 5 else max(1, int(source_marker_count * 0.05))
+            time_marker_loss_ok = len(missing_markers) <= acceptable_missing_marker_count
+            if missing_terms or not time_marker_loss_ok:
+                repair_notes = []
+                if missing_terms:
+                    repair_notes.append(f"上一版缺少或改写了这些关键数字/日期：{', '.join(missing_terms[:16])}")
+                if not time_marker_loss_ok:
+                    repair_notes.append(f"上一版缺少这些时间戳：{', '.join(missing_markers[:16])}")
+                if softened_years:
+                    repair_notes.append(f"上一版新增的完整年份已被保守弱化：{', '.join(softened_years[:16])}")
+                repair_text, repair_meta = _request_mimo_cleaning(
+                    chunk,
+                    title=title,
+                    previous_output=cleaned_text,
+                    repair_notes=repair_notes,
+                )
+                repair_text, repair_softened_years = _soften_unsupported_full_years(chunk.text, repair_text)
+                repair_missing_terms = _missing_critical_numeric_terms(chunk.text, repair_text)
+                repair_missing_markers = _missing_time_markers(chunk.text, repair_text)
+                source_critical_count = len(_extract_critical_numeric_terms(chunk.text))
+                acceptable_missing_term_count = 0 if source_critical_count < 8 else max(1, int(source_critical_count * 0.05))
+                time_marker_loss_ok = len(repair_missing_markers) <= acceptable_missing_marker_count
+                critical_loss_ok = len(repair_missing_terms) <= acceptable_missing_term_count
+                if critical_loss_ok and time_marker_loss_ok:
+                    cleaned_text = repair_text
+                    status = "mimo_repaired_with_warnings" if (repair_missing_terms or repair_missing_markers or repair_softened_years) else "mimo_repaired"
+                    if repair_missing_terms or repair_missing_markers or repair_softened_years:
+                        warning_parts = []
+                        if repair_missing_terms:
+                            warning_parts.append(f"仍缺少少量关键数字/日期：{', '.join(repair_missing_terms[:8])}")
+                        if repair_missing_markers:
+                            warning_parts.append(f"仍缺少少量时间戳：{', '.join(repair_missing_markers[:8])}")
+                        if repair_softened_years:
+                            warning_parts.append(f"已弱化原片段无法直接支持的完整年份：{', '.join(repair_softened_years[:8])}")
+                        error = "；".join(warning_parts)
+                    provider_meta = {
+                        **provider_meta,
+                        "repair": repair_meta,
+                        "initial_missing_critical_terms": missing_terms,
+                        "initial_missing_time_markers": missing_markers,
+                        "repair_softened_unsupported_full_years": repair_softened_years,
+                    }
+                    missing_terms = []
+                    missing_markers = []
+                else:
+                    problems = []
+                    if repair_missing_terms:
+                        problems.append(f"关键数字/日期：{', '.join(repair_missing_terms[:16])}")
+                    if not time_marker_loss_ok:
+                        problems.append(f"时间戳：{', '.join(repair_missing_markers[:16])}")
+                    error = f"AI 输出缺少{'；'.join(problems)}，已回退规则清洗以避免信息丢失。"
+                    cleaned_text = _rule_clean_transcript_text(chunk.text)
+                    status = "fallback_fidelity"
+            elif softened_years:
+                status = "mimo_softened"
+                error = f"已弱化原片段无法直接支持的完整年份：{', '.join(softened_years[:8])}"
+            elif missing_markers:
+                status = "mimo_with_warnings"
+                error = f"仍缺少少量时间戳：{', '.join(missing_markers[:8])}"
+            if status not in {"mimo_repaired", "mimo_repaired_with_warnings", "mimo_softened", "mimo_with_warnings", "fallback_fidelity"}:
+                if len(cleaned_text) < max(240, int(len(chunk.text) * 0.75)) and len(chunk.text) > 800:
+                    error = "AI 输出明显过短，已回退规则清洗以避免信息丢失。"
+                    cleaned_text = _rule_clean_transcript_text(chunk.text)
+                    status = "fallback_output_too_short"
+                else:
+                    status = "mimo"
+        except Exception as exc:
+            error = str(exc)
+            cleaned_text = _rule_clean_transcript_text(chunk.text)
+            status = "fallback_rule"
+    else:
+        cleaned_text = _rule_clean_transcript_text(chunk.text)
+
+    _write_text_blob(chunk_output_path, cleaned_text)
+    meta = {
+        "chunk_id": chunk.chunk_id,
+        "index": chunk.index,
+        "requested_mode": mode,
+        "provider_fingerprint": provider_fingerprint,
+        "status": status,
+        "error": error,
+        "cache_hit": False,
+        "input_sha1": raw_sha1,
+        "input_chars": len(chunk.text),
+        "output_chars": len(cleaned_text),
+        "critical_numeric_terms": _extract_critical_numeric_terms(chunk.text),
+        "missing_critical_numeric_terms": _missing_critical_numeric_terms(chunk.text, cleaned_text),
+        "unsupported_full_years": _unsupported_full_year_terms(chunk.text, cleaned_text),
+        "time_markers": _extract_time_markers(chunk.text),
+        "missing_time_markers": _missing_time_markers(chunk.text, cleaned_text),
+        "page_labels": chunk.page_labels,
+        "time_range": {
+            "from": chunk.start_time,
+            "to": chunk.end_time,
+        },
+        "provider": provider_meta,
     }
+    _save_json_file(chunk_meta_path, meta)
+    return {
+        **meta,
+        "cleaned_text": cleaned_text,
+    }
+
+
+def _prune_stale_cleaning_chunks(chunks_dir: str, chunks: list[CleaningChunk]) -> None:
+    expected_names: set[str] = set()
+    for chunk in chunks:
+        expected_names.add(f"{chunk.chunk_id}.input.md")
+        expected_names.add(f"{chunk.chunk_id}.md")
+        expected_names.add(f"{chunk.chunk_id}.meta.json")
+    if not os.path.isdir(chunks_dir):
+        return
+    for entry_name in os.listdir(chunks_dir):
+        if not entry_name.startswith("clean_chunk_"):
+            continue
+        if entry_name in expected_names:
+            continue
+        if not (entry_name.endswith(".input.md") or entry_name.endswith(".md") or entry_name.endswith(".meta.json")):
+            continue
+        stale_path = os.path.abspath(os.path.join(chunks_dir, entry_name))
+        if os.path.dirname(stale_path) != os.path.abspath(chunks_dir):
+            continue
+        os.remove(stale_path)
+
+
+def _build_standard_content_markdown(*, title: str, source: SourceDescriptor, text_source_type: str, chunks: list[dict[str, Any]]) -> str:
+    lines = [
+        f"# {title}",
+        "",
+        "## 来源",
+        "",
+        f"- 标题：{title}",
+        f"- 来源：{source.source_id}",
+        f"- UP 主：{source.creator or '未知'}",
+        f"- 链接：{source.url or '未记录'}",
+        f"- 字幕来源：{text_source_type or source.source_type}",
+        "",
+        "## 正文",
+        "",
+    ]
+    for item in chunks:
+        text = str(item.get("cleaned_text") or "").strip()
+        if not text:
+            continue
+        start = _format_seconds_for_markdown(item.get("time_range", {}).get("from") if isinstance(item.get("time_range"), dict) else None)
+        end = _format_seconds_for_markdown(item.get("time_range", {}).get("to") if isinstance(item.get("time_range"), dict) else None)
+        has_heading = bool(re.match(r"^#{1,6}\s+", text))
+        if (start or end) and not has_heading:
+            lines.extend([f"### {start or '?'} - {end or '?'}", ""])
+        lines.extend([text, ""])
+    return "\n".join(lines).strip() + "\n"
+
+
+def _build_notebooklm_markdown(content_markdown: str) -> str:
+    return content_markdown
+
+
+def build_clean_material_content(
+    *,
+    material_dir: str,
+    title: str,
+    source: SourceDescriptor,
+    text_source_type: str,
+    plan: ChunkPlan,
+) -> dict[str, Any]:
+    work_dir = os.path.join(material_dir, "work", "cleaning")
+    exports_dir = os.path.join(material_dir, "exports")
+    os.makedirs(os.path.join(work_dir, "chunks"), exist_ok=True)
+    os.makedirs(exports_dir, exist_ok=True)
+
+    requested_mode = (
+        os.getenv("SHIJIE_CONTENT_CLEANING_MODE")
+        or os.getenv("SHIJIE_TRANSCRIPT_CLEANING_MODE")
+        or "auto"
+    ).strip().lower()
+    if requested_mode in {"off", "none", "skip"}:
+        mode = "rule"
+    elif requested_mode in {"mimo", "ai"}:
+        mode = "mimo" if _mimo_cleaning_available() else "rule"
+    else:
+        mode = "mimo" if _mimo_cleaning_available() else "rule"
+
+    target_chars = _read_int_env(
+        "SHIJIE_CONTENT_CLEANING_CHUNK_CHARS",
+        "SHIJIE_TRANSCRIPT_CLEANING_CHUNK_CHARS",
+        default=7000,
+        minimum=2500,
+        maximum=16000,
+    )
+    max_workers = _read_int_env(
+        "SHIJIE_CONTENT_CLEANING_WORKERS",
+        "SHIJIE_TRANSCRIPT_CLEANING_WORKERS",
+        default=2,
+        minimum=1,
+        maximum=4,
+    )
+    chunks = _chunk_units_for_cleaning(plan.units, target_chars=target_chars)
+    _prune_stale_cleaning_chunks(os.path.join(work_dir, "chunks"), chunks)
+    started_at = _utc_now_iso()
+    started_perf = perf_counter()
+    results: list[dict[str, Any]] = []
+
+    if mode == "mimo" and len(chunks) > 1 and max_workers > 1:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_clean_one_chunk_with_checkpoint, chunk, title=title, work_dir=work_dir, mode=mode): chunk
+                for chunk in chunks
+            }
+            for future in as_completed(futures):
+                results.append(future.result())
+        results.sort(key=lambda item: int(item.get("index") or 0))
+    else:
+        for chunk in chunks:
+            results.append(_clean_one_chunk_with_checkpoint(chunk, title=title, work_dir=work_dir, mode=mode))
+
+    content_markdown = _build_standard_content_markdown(
+        title=title,
+        source=source,
+        text_source_type=text_source_type,
+        chunks=results,
+    )
+    content_path = os.path.join(material_dir, "content.md")
+    notebooklm_path = os.path.join(exports_dir, "notebooklm.md")
+    _write_text_blob(content_path, content_markdown)
+    _write_text_blob(notebooklm_path, _build_notebooklm_markdown(content_markdown))
+    input_chars = sum(int(item.get("input_chars") or 0) for item in results)
+    output_chars = sum(int(item.get("output_chars") or 0) for item in results)
+    finished_at = _utc_now_iso()
+    elapsed_seconds = round(max(0.0, perf_counter() - started_perf), 3)
+    usage_totals = _summarize_usage_tokens([item.get("provider") for item in results])
+    meta = {
+        "schema_version": CONTENT_CLEANING_VERSION,
+        "mode": mode,
+        "requested_mode": requested_mode,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "elapsed_seconds": elapsed_seconds,
+        "chunk_count": len(results),
+        "input_chars": input_chars,
+        "output_chars": output_chars,
+        "compression_ratio": round(output_chars / input_chars, 4) if input_chars else 0,
+        "token_totals": usage_totals,
+        "content_path": "content.md",
+        "notebooklm_path": "exports/notebooklm.md",
+        "work_dir": "work/cleaning",
+        "warnings": [
+            str(item.get("error"))
+            for item in results
+            if item.get("error")
+        ],
+        "chunks": [
+            {
+                key: value
+                for key, value in item.items()
+                if key != "cleaned_text"
+            }
+            for item in results
+        ],
+    }
+    _save_json_file(os.path.join(material_dir, "content.meta.json"), meta)
+    _save_json_file(os.path.join(work_dir, "cleaning_report.json"), meta)
+    _write_material_metrics(
+        material_dir,
+        stage_name="content_cleaning",
+        stage_payload={
+            "status": "content_ready",
+            "mode": mode,
+            "requested_mode": requested_mode,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "elapsed_seconds": elapsed_seconds,
+            "chunk_count": len(results),
+            "input_chars": input_chars,
+            "output_chars": output_chars,
+            "compression_ratio": meta["compression_ratio"],
+            "token_totals": usage_totals,
+            "artifacts": {
+                "content_chars": _text_file_chars(content_path),
+                "notebooklm_chars": _text_file_chars(notebooklm_path),
+                "content_bytes": _file_size(content_path),
+                "notebooklm_bytes": _file_size(notebooklm_path),
+            },
+            "warning_count": len(meta["warnings"]),
+        },
+    )
+    return meta
 
 
 def _build_run_state(
@@ -1202,19 +2889,16 @@ def _build_run_state(
     block_count: int,
 ) -> dict[str, Any]:
     return {
-        "schema_version": "shijie.content-run-state.v0.1",
-        "stage": "material_ready",
-        "stage_label": "待知识树整理",
-        "pipeline_version": "content_synthesis_v8",
-        "current_stage": "material_ready",
-        "completed_stages": ["material_package"],
-        "dirty_outputs": [],
-        "importable": False,
-        "pipeline_ready": False,
-        "audit_ready": False,
-        "release_ready": False,
-        "resume_instruction": "复制 authoring/02_start_codex_synthesis.md 到 Codex；v8 会在同一个 Goal 中按 run_state 自动多轮推进，每轮只过一个阶段闸门。",
-        "next_action": "复制 authoring/02_start_codex_synthesis.md 到 Codex；v8 会在同一个 Goal 中按 run_state 自动多轮推进，每轮只过一个阶段闸门。",
+        "schema_version": "shijie.material-run-state.v0.2",
+        "stage": "content_ready",
+        "stage_label": "字幕清洗完成",
+        "pipeline_version": "lightweight_video_material_v1",
+        "current_stage": "content_ready",
+        "completed_stages": ["raw_transcript", "content_cleaning", "notebooklm_export"],
+        "next_action": "短视频可继续生成 summary/article.md；长视频可直接把 exports/notebooklm.md 导入 NotebookLM。",
+        "pipeline_ready": True,
+        "notebooklm_ready": True,
+        "summary_ready": False,
         "material": {
             "title": course_title,
             "material_id": material_id,
@@ -1227,66 +2911,37 @@ def _build_run_state(
             "material_dir": material_dir,
             "handoff": os.path.join(material_dir, "HANDOFF.md"),
             "run_state": os.path.join(material_dir, "run_state.json"),
-            "validation_contract": os.path.join(material_dir, "validation_contract.json"),
-            "synthesis_plan": os.path.join(material_dir, "content_draft", "synthesis_plan.json"),
-            "learning_notes": os.path.join(material_dir, "content_draft", "learning_notes.md"),
-            "chapter_mindmap": os.path.join(material_dir, "content_draft", "chapter_mindmap.md"),
+            "raw_transcript": os.path.join(material_dir, "raw_transcript.txt"),
+            "clean_content": os.path.join(material_dir, "content.md"),
+            "notebooklm_source": os.path.join(material_dir, "exports", "notebooklm.md"),
+            "summary_article": os.path.join(material_dir, "summary", "article.md"),
+            "summary_html": os.path.join(material_dir, "summary", "article.html"),
+            "summary_status": os.path.join(material_dir, "summary", "summary_status.json"),
             "source_index": os.path.join(material_dir, "indexes", "source_index.jsonl"),
-            "node_contexts_dir": os.path.join(material_dir, "indexes", "node_contexts"),
-            "learning_notes_trace": os.path.join(material_dir, "indexes", "learning_notes_trace.json"),
-            "chapter_mindmap_trace": os.path.join(material_dir, "indexes", "chapter_mindmap_trace.json"),
-            "codex_prompt": os.path.join(material_dir, "authoring", "02_start_codex_synthesis.md"),
-            "codex_goal_v8": os.path.join(material_dir, "authoring", "codex-goal-content-synthesis-v8.md"),
-            "knowledge_tree": os.path.join(material_dir, "content_draft", "work", "knowledge_tree.json"),
-            "tree_outline": os.path.join(material_dir, "content_draft", "work", "tree_outline.md"),
-            "structure_review": os.path.join(material_dir, "content_draft", "work", "structure_review.md"),
-            "block_digest_dir": os.path.join(material_dir, "content_draft", "work", "block_digest"),
-            "candidate_source_cards_dir": os.path.join(material_dir, "content_draft", "work", "source_cards", "candidates"),
-            "required_source_cards_dir": os.path.join(material_dir, "content_draft", "work", "source_cards", "required"),
-            "learning_page_plans_dir": os.path.join(material_dir, "content_draft", "work", "learning_page_plans"),
-            "published_claims_dir": os.path.join(material_dir, "content_draft", "work", "published_claims"),
-            "topic_inventory": os.path.join(material_dir, "content_draft", "work", "topic_inventory.json"),
-            "coverage_matrix": os.path.join(material_dir, "content_draft", "work", "coverage_matrix.json"),
-            "block_reread_ledger": os.path.join(material_dir, "content_draft", "work", "block_reread_ledger.jsonl"),
-            "codex_readonly_audit_prompt": os.path.join(material_dir, "authoring", "03_readonly_synthesis_audit.md"),
-            "validation_report": os.path.join(material_dir, "content_draft", "review_exports", "validation_report.json"),
-            "quality_audit_report": os.path.join(material_dir, "content_draft", "review_exports", "quality_audit_report.md"),
-            "source_map": os.path.join(material_dir, "content_draft", "work", "source_map.json"),
-            "evidence_ledger": os.path.join(material_dir, "content_draft", "work", "evidence_ledger.jsonl"),
-            "theme_model": os.path.join(material_dir, "content_draft", "work", "theme_model.json"),
-            "specificity_review": os.path.join(material_dir, "content_draft", "work", "specificity_review.md"),
-            "thinness_review": os.path.join(material_dir, "content_draft", "work", "thinness_review.md"),
         },
-        "stage_outputs": {},
         "steps": [
             {
-                "id": "material_package",
-                "label": "原材料包",
+                "id": "raw_transcript",
+                "label": "字幕获取",
                 "status": "done",
-                "output": "manifest.json, raw_transcript.txt, blocks/, indexes/, authoring/",
+                "output": "raw_transcript.txt, raw_tracks.json",
             },
             {
-                "id": "codex_synthesis",
-                "label": "Codex v8 学习笔记",
-                "status": "next",
-                "output": "knowledge_tree_ready -> coverage_ready -> dossier_ready -> partial_learning_notes -> learning_notes_ready",
+                "id": "content_cleaning",
+                "label": "字幕清洗",
+                "status": "done",
+                "output": "content.md, exports/notebooklm.md",
             },
             {
-                "id": "readonly_audit",
-                "label": "只读审计",
+                "id": "editorial_summary",
+                "label": "视频精读",
                 "status": "optional",
-                "output": "content_draft/review_exports/quality_audit_report.md",
-            },
-            {
-                "id": "import_content",
-                "label": "开始学习",
-                "status": "pending",
-                "output": "content_draft/learning_notes.md",
+                "output": "summary/article.md, summary/article.html",
             },
         ],
         "notes": [
-            "当前唯一主流程是：软件生成原材料包 -> Codex Goal v8 知识树优先学习笔记 -> 可选只读审计 -> 进入学习台。",
-            "v8 是长材料阶段化的可恢复流水线：knowledge_tree_ready 先定知识树；coverage_ready 只证明 topic 已挂树；dossier_ready 证明已按分支回读 blocks；partial_learning_notes 每轮只深写 1-2 个分支；learning_notes_ready 代表生产侧产物齐备，软件 validator 通过后才能导入学习。",
+            "当前默认主流程是：软件提取字幕并清洗为 NotebookLM 可导入资料；短视频可继续由 MiMo API 生成精读稿。",
+            "本状态文件只服务字幕资料与短视频精读两条当前主线。",
         ],
     }
 
@@ -1302,12 +2957,6 @@ def _write_handoff_files(
 ) -> dict[str, str]:
     handoff_path = os.path.join(material_dir, "HANDOFF.md")
     run_state_path = os.path.join(material_dir, "run_state.json")
-    codex_prompt = os.path.join(material_dir, "authoring", "02_start_codex_synthesis.md")
-    goal_v8_prompt = os.path.join(material_dir, "authoring", "codex-goal-content-synthesis-v8.md")
-    audit_prompt = os.path.join(material_dir, "authoring", "03_readonly_synthesis_audit.md")
-    plan_path = os.path.join(material_dir, "content_draft", "synthesis_plan.json")
-    learning_notes_path = os.path.join(material_dir, "content_draft", "learning_notes.md")
-    chapter_mindmap_path = os.path.join(material_dir, "content_draft", "chapter_mindmap.md")
 
     _save_json_file(
         run_state_path,
@@ -1323,7 +2972,7 @@ def _write_handoff_files(
     _write_text_file(
         handoff_path,
         [
-            "# 视界专注学习笔记交接单",
+            "# 视界专注资料包交接单",
             "",
             f"标题：{course_title}",
             f"来源：{source_id or material_id}",
@@ -1331,37 +2980,34 @@ def _write_handoff_files(
             "",
             "## 当前状态",
             "",
-            "✅ 原材料包已生成",
+            "✅ 字幕资料已生成并清洗",
             "",
-            "下一步：复制 `authoring/02_start_codex_synthesis.md` 到 Codex。v8 会在同一个 Goal 中自动多轮推进，但每轮只过一个阶段闸门。",
+            "长视频/本地视频：优先使用 `exports/notebooklm.md` 导入 NotebookLM。",
+            "",
+            "短视频：可由软件继续调用 MiMo API 生成 `summary/article.md` 与 `summary/article.html`。",
             "",
             "## 唯一主流程",
             "",
-            "1. 软件生成完整原材料包。",
-            "2. `material_ready`：Codex 先建立 `knowledge_tree.json`、`tree_outline.md` 和 `synthesis_plan.json`，停在 `knowledge_tree_ready`。",
-            "3. `knowledge_tree_ready`：Codex 把 topic 挂到知识树节点，建立 block digest、topic inventory、source cards、evidence ledger 和 coverage matrix，停在 `coverage_ready`。",
-            "4. `coverage_ready`：Codex 按知识树分支回读 blocks，写 `block_reread_ledger.jsonl`、`section_dossiers/*.md` 和 `thinness_review.md`，停在 `dossier_ready`。",
-            "5. `dossier_ready` 或 `partial_learning_notes`：Codex 每轮只深写 1-2 个知识树分支，逐步合并 `learning_notes.md`。",
-            "6. 全部高价值分支通过结构复查和 thinness review 后，Codex 写入 `chapter_mindmap.md`、trace map，并标记 `learning_notes_ready`。",
-            "7. 回到项目根目录运行 `cd desktop && npm run validate:material -- <材料包路径>` 或刷新工作台；只有 validator 写入 `pipeline_ready=true`，才算工程上可导入学习台。v8.3 strict 新包会检查学习页计划、candidate/required source cards、published claims、有效医学内容和反模板化指标。",
+            "1. 获取 B 站字幕或本地音频转写。",
+            "2. 生成 `raw_transcript.txt` 和 `raw_tracks.json`，保留原始证据。",
+            "3. 生成 `content.md`，作为忠实清洗后的可读稿。",
+            "4. 生成 `exports/notebooklm.md`，用于 NotebookLM 导入。",
+            "5. 对适合短视频精读的材料，继续生成 `summary/article.md` 和 `summary/article.html`。",
             "",
             "## 关键文件",
             "",
-            f"- Codex 总结计划位置：`{plan_path}`",
-            f"- 验证合同：`{os.path.join(material_dir, 'validation_contract.json')}`",
-            f"- Codex 学习笔记入口：`{codex_prompt}`",
-            f"- Codex Goal v8 流水线：`{goal_v8_prompt}`",
-            f"- Codex 只读审计提示：`{audit_prompt}`",
-            f"- 原文旁路索引：`{os.path.join(material_dir, 'indexes', 'source_index.jsonl')}`",
-            f"- 正文 trace map：`{os.path.join(material_dir, 'indexes', 'learning_notes_trace.json')}`",
-            f"- 学习笔记：`{learning_notes_path}`",
-            f"- 章节思维导图：`{chapter_mindmap_path}`",
+            f"- 原始字幕：`{os.path.join(material_dir, 'raw_transcript.txt')}`",
+            f"- 清洗资料：`{os.path.join(material_dir, 'content.md')}`",
+            f"- NotebookLM 导入稿：`{os.path.join(material_dir, 'exports', 'notebooklm.md')}`",
+            f"- 视频精读稿：`{os.path.join(material_dir, 'summary', 'article.md')}`",
+            f"- 视频精读 HTML：`{os.path.join(material_dir, 'summary', 'article.html')}`",
+            f"- 来源索引：`{os.path.join(material_dir, 'indexes', 'source_index.jsonl')}`",
         ],
     )
     return {"handoff": handoff_path, "run_state": run_state_path}
 
 
-def save_codex_material_package(
+def save_material_package(
     *,
     video_info: dict[str, Any],
     subtitles: list[dict[str, Any]],
@@ -1377,48 +3023,8 @@ def save_codex_material_package(
     material_dir = os.path.join(material_root, _safe_material_dir_name(str(video_info.get("title") or source.title), bvid))
     blocks_dir = os.path.join(material_dir, "blocks")
     indexes_dir = os.path.join(material_dir, "indexes")
-    authoring_dir = os.path.join(material_dir, "authoring")
-    schemas_dir = os.path.join(material_dir, "schemas")
-    content_draft_dir = os.path.join(material_dir, "content_draft")
-    review_exports_dir = os.path.join(content_draft_dir, "review_exports")
-    work_dir = os.path.join(content_draft_dir, "work")
-    node_contexts_dir = os.path.join(indexes_dir, "node_contexts")
     os.makedirs(blocks_dir, exist_ok=True)
     os.makedirs(indexes_dir, exist_ok=True)
-    os.makedirs(node_contexts_dir, exist_ok=True)
-    os.makedirs(authoring_dir, exist_ok=True)
-    os.makedirs(schemas_dir, exist_ok=True)
-    os.makedirs(content_draft_dir, exist_ok=True)
-    os.makedirs(review_exports_dir, exist_ok=True)
-    os.makedirs(os.path.join(work_dir, "writing_packets"), exist_ok=True)
-    os.makedirs(os.path.join(work_dir, "source_cards"), exist_ok=True)
-    os.makedirs(os.path.join(work_dir, "source_cards", "candidates"), exist_ok=True)
-    os.makedirs(os.path.join(work_dir, "source_cards", "required"), exist_ok=True)
-    os.makedirs(os.path.join(work_dir, "learning_page_plans"), exist_ok=True)
-    os.makedirs(os.path.join(work_dir, "published_claims"), exist_ok=True)
-    os.makedirs(os.path.join(work_dir, "section_dossiers"), exist_ok=True)
-    os.makedirs(os.path.join(work_dir, "drafts"), exist_ok=True)
-    if os.path.exists(os.path.join(CURRENT_DIR, "schemas", "codex_material_package.schema.json")):
-        shutil.copyfile(
-            os.path.join(CURRENT_DIR, "schemas", "codex_material_package.schema.json"),
-            os.path.join(schemas_dir, "codex_material_package.schema.json"),
-        )
-    if os.path.exists(os.path.join(CURRENT_DIR, "schemas", "content_synthesis_plan.schema.json")):
-        shutil.copyfile(
-            os.path.join(CURRENT_DIR, "schemas", "content_synthesis_plan.schema.json"),
-            os.path.join(schemas_dir, "content_synthesis_plan.schema.json"),
-        )
-    if os.path.exists(os.path.join(CURRENT_DIR, "schemas", "validation_contract.schema.json")):
-        shutil.copyfile(
-            os.path.join(CURRENT_DIR, "schemas", "validation_contract.schema.json"),
-            os.path.join(schemas_dir, "validation_contract.schema.json"),
-        )
-    for profile_name in ("lecture", "technical_tutorial", "medical_exam"):
-        profile_source = os.path.join(CURRENT_DIR, "schemas", "validation_profiles", f"{profile_name}.v8.json")
-        if os.path.exists(profile_source):
-            profile_target = os.path.join(schemas_dir, "validation_profiles", f"{profile_name}.v8.json")
-            os.makedirs(os.path.dirname(profile_target), exist_ok=True)
-            shutil.copyfile(profile_source, profile_target)
 
     raw_transcript_text = flatten_subtitles_to_text(subtitles)
     raw_content_length = sum(
@@ -1435,7 +3041,7 @@ def save_codex_material_package(
         file.write(raw_transcript_text)
 
     manifest = {
-        "schema_version": "onboard.codex-materials.v0.1",
+        "schema_version": "shijie.material-package.v0.1",
         "material_id": f"{_slugify(str(video_info.get('title') or bvid), 'material')}_{bvid.lower()}",
         "source": {
             "source_type": source.source_type,
@@ -1455,58 +3061,27 @@ def save_codex_material_package(
         "files": {
             "raw_transcript": "raw_transcript.txt",
             "raw_tracks": "raw_tracks.json",
+            "content": "content.md",
+            "content_meta": "content.meta.json",
+            "notebooklm_source": "exports/notebooklm.md",
+            "cleaning_report": "work/cleaning/cleaning_report.json",
+            "cleaning_work_dir": "work/cleaning",
+            "cleaning_chunks_dir": "work/cleaning/chunks",
+            "summary_dir": "summary",
+            "summary_article": "summary/article.md",
+            "summary_html": "summary/article.html",
+            "summary_cards": "summary/cards.json",
+            "summary_review": "summary/review.json",
+            "summary_status": "summary/summary_status.json",
             "handoff": "HANDOFF.md",
             "run_state": "run_state.json",
-            "validation_contract": "validation_contract.json",
             "blocks_dir": "blocks",
             "indexes_dir": "indexes",
             "part_index": "indexes/part_index.json",
             "source_index": "indexes/source_index.jsonl",
-            "node_contexts_dir": "indexes/node_contexts",
-            "learning_notes_trace": "indexes/learning_notes_trace.json",
-            "chapter_mindmap_trace": "indexes/chapter_mindmap_trace.json",
             "teaching_map": "indexes/teaching_map.json",
             "term_normalization": "indexes/term_normalization.json",
             "noise_segments": "indexes/noise_segments.json",
-            "authoring_dir": "authoring",
-            "codex_synthesis_prompt": "authoring/02_start_codex_synthesis.md",
-            "codex_goal_v8_prompt": "authoring/codex-goal-content-synthesis-v8.md",
-            "codex_readonly_audit_prompt": "authoring/03_readonly_synthesis_audit.md",
-            "synthesis_plan": "content_draft/synthesis_plan.json",
-            "synthesis_plan_schema": "schemas/content_synthesis_plan.schema.json",
-            "validation_contract_schema": "schemas/validation_contract.schema.json",
-            "content_draft_dir": "content_draft",
-            "content_work_dir": "content_draft/work",
-            "intake_inventory": "content_draft/work/intake_inventory.md",
-            "knowledge_tree": "content_draft/work/knowledge_tree.json",
-            "tree_outline": "content_draft/work/tree_outline.md",
-            "structure_review": "content_draft/work/structure_review.md",
-            "source_map": "content_draft/work/source_map.json",
-            "source_cards_dir": "content_draft/work/source_cards",
-            "candidate_source_cards_dir": "content_draft/work/source_cards/candidates",
-            "required_source_cards_dir": "content_draft/work/source_cards/required",
-            "learning_page_plans_dir": "content_draft/work/learning_page_plans",
-            "published_claims_dir": "content_draft/work/published_claims",
-            "block_digest_dir": "content_draft/work/block_digest",
-            "topic_inventory": "content_draft/work/topic_inventory.json",
-            "evidence_ledger": "content_draft/work/evidence_ledger.jsonl",
-            "coverage_matrix": "content_draft/work/coverage_matrix.json",
-            "block_reread_ledger": "content_draft/work/block_reread_ledger.jsonl",
-            "theme_model": "content_draft/work/theme_model.json",
-            "editorial_contract": "content_draft/work/editorial_contract.md",
-            "coverage_gap_report": "content_draft/work/coverage_gap_report.md",
-            "section_dossiers_dir": "content_draft/work/section_dossiers",
-            "drafts_dir": "content_draft/work/drafts",
-            "thinness_review": "content_draft/work/thinness_review.md",
-            "editorial_review": "content_draft/work/editorial_review.md",
-            "specificity_review": "content_draft/work/specificity_review.md",
-            "concept_graph": "content_draft/work/concept_graph.json",
-            "learning_notes": "content_draft/learning_notes.md",
-            "chapter_mindmap": "content_draft/chapter_mindmap.md",
-            "review_exports_dir": "content_draft/review_exports",
-            "validation_report": "content_draft/review_exports/validation_report.json",
-            "quality_audit_report": "content_draft/review_exports/quality_audit_report.md",
-            "block_schema": "schemas/codex_material_package.schema.json#/$defs/materialBlock",
         },
         "block_count": 0,
         "text_length": raw_content_length,
@@ -1518,26 +3093,42 @@ def save_codex_material_package(
                 "min": MATERIAL_BLOCK_MIN_CHARS,
                 "max": MATERIAL_BLOCK_MAX_CHARS,
             },
-            "single_pass_blocks": "每次优先处理 1-3 个 blocks，不要一次性吞完整 raw_transcript.txt。",
-            "active_workflow": "material_package -> Codex Goal v8 knowledge_tree_ready -> coverage_ready -> dossier_ready -> partial_learning_notes -> learning_notes_ready -> learning import",
-            "coverage_strategy": "长材料第一轮只做到 knowledge_tree_ready；第二轮把 topic 挂到知识树并停在 coverage_ready；第三轮必须按分支回读 blocks 写 block_reread_ledger 和 section_dossiers；后续每轮只深写 1-2 个知识树分支。",
-            "review_strategy": "v8 学习笔记以 structure_review、thinness_review 和 specificity_review 作为能否导入学习的质量闸门；文件存在不等于 learning_notes_ready。",
-            "presentation_strategy": "短材料或主题集中材料使用 compact_notes：# 标题 + 少量 ## 完整学习小节；中长材料使用 chaptered_notes：## 大章节 + ### 完整小节。不要把单个 topic 拆成一页。",
-            "trace_strategy": "source refs、block_id、raw offset 等追溯信息只写入 indexes/source_index.jsonl、indexes/node_contexts/ 和 trace map，学生正文保持干净。",
+            "source_preparation": "软件先生成 raw_transcript.txt 和 content.md。content.md 是清洗后的可读资料稿，可直接作为 NotebookLM/Obsidian 前置输入；raw_transcript.txt 保留完整原始证据。",
+            "transcript_cleaning": "字幕清洗只做忠实清稿：修正断句、标点、重复口癖和明显识别问题，不总结、不扩写、不删除有效信息。大文本按块调用 API，使用断点缓存和有限并发。",
+            "active_workflow": "raw_transcript -> content_cleaning -> notebooklm_export -> optional_editorial_summary",
+            "long_video_strategy": "长视频/本地长材料只生成清洗稿和 NotebookLM 导入稿，不再默认进入深度学习笔记生产。",
+            "short_video_strategy": "短视频可继续由 MiMo API 生成 summary/article.md 和 summary/article.html，供资料台、档案馆和灵犀阅读归档。",
+            "trace_strategy": "block_id、时间范围和来源摘录保留在 indexes/source_index.jsonl 与 blocks/ 中；读者正文保持干净。",
         },
     }
 
-    validation_contract = _build_validation_contract(
-        material_dir=material_dir,
-        material_id=str(manifest["material_id"]),
-        course_title=str(video_info.get("title") or source.title or bvid),
-        text_length=raw_content_length,
-        block_count=len(plan.chunks),
-    )
-    _save_json_file(os.path.join(material_dir, "validation_contract.json"), validation_contract)
-
     raw_tracks = {"tracks": _subtitle_track_segments(subtitles)}
     _save_json_file(os.path.join(material_dir, "raw_tracks.json"), raw_tracks)
+
+    _emit_progress("正在清洗字幕资料稿…", 84, stage="content_cleaning")
+    content_cleaning_meta = build_clean_material_content(
+        material_dir=material_dir,
+        title=str(video_info.get("title") or source.title or bvid),
+        source=source,
+        text_source_type=text_source_type,
+        plan=plan,
+    )
+    manifest["content_cleaning"] = {
+        key: content_cleaning_meta.get(key)
+        for key in (
+            "schema_version",
+            "mode",
+            "requested_mode",
+            "chunk_count",
+            "input_chars",
+            "output_chars",
+            "compression_ratio",
+            "content_path",
+            "notebooklm_path",
+            "work_dir",
+            "warnings",
+        )
+    }
 
     concept_index: dict[str, list[str]] = {}
     timeline_items: list[dict[str, Any]] = []
@@ -1547,24 +3138,6 @@ def save_codex_material_package(
     manifest["block_count"] = len(material_blocks)
     _save_json_file(os.path.join(material_dir, "manifest.json"), manifest)
     _save_json_file(os.path.join(indexes_dir, "part_index.json"), part_index)
-    _write_text_file(
-        os.path.join(node_contexts_dir, "README.md"),
-        [
-            "# Node Contexts",
-            "",
-            "Codex 在 coverage/dossier 阶段可以把知识树节点或分支的原文依据写到这里。",
-            "",
-            "建议文件名：`branch_001.json`、`node_001_001.json`。学生正文不读取这里。",
-        ],
-    )
-    _save_json_file(
-        os.path.join(indexes_dir, "learning_notes_trace.json"),
-        _build_initial_trace_map(material_id=str(manifest.get("material_id") or bvid), artifact="learning_notes.md"),
-    )
-    _save_json_file(
-        os.path.join(indexes_dir, "chapter_mindmap_trace.json"),
-        _build_initial_trace_map(material_id=str(manifest.get("material_id") or bvid), artifact="chapter_mindmap.md"),
-    )
 
     source_index_entries: list[dict[str, Any]] = []
     for block in material_blocks:
@@ -1576,7 +3149,7 @@ def save_codex_material_package(
         if not isinstance(time_range.get("from"), (int, float)) and not isinstance(time_range.get("to"), (int, float)):
             time_range = _time_range_for_chunk(subtitles, page_labels)
         block_payload = {
-            "schema_version": "onboard.material-block.v0.1",
+            "schema_version": "shijie.material-block.v0.1",
             "block_id": block_id,
             "order": block["order"],
             "source_chunk_ids": block["chunk_ids"],
@@ -1587,10 +3160,9 @@ def save_codex_material_package(
             "text": block_text,
             "key_points": key_points,
             "source_excerpt": _normalize_whitespace(block_text)[:1200],
-            "codex_notes": [
-                "本块只限定内容范围，不代表最终学习笔记质量上限。",
-                "生成学习笔记时请补足必要定义、因果、场景、步骤和常见误区，但不要脱离视频主线。",
-                "如果本块信息量过大，请先生成 block_summary.json，再回读关键原文证据。",
+            "processing_notes": [
+                "本块用于字幕清洗、NotebookLM 导入和短视频精读回查。",
+                "不要把 block_id、raw offset 等追溯信息写入读者正文。",
             ],
         }
         _save_json_file(os.path.join(blocks_dir, f"{block_id}.json"), block_payload)
@@ -1645,31 +3217,28 @@ def save_codex_material_package(
         _build_term_normalization_index(part_index, concept_index),
     )
     _save_json_file(os.path.join(indexes_dir, "noise_segments.json"), _build_noise_segments_index(part_index))
-    _write_text_file(
-        os.path.join(work_dir, "README.md"),
-        [
-            "# Content Draft Work",
-            "",
-            "这里保存 Codex Goal v8 的中间工作文件：入口盘点、知识树、结构复查、原文地图、block digest、topic inventory、证据账本、coverage matrix、block_reread_ledger、分支材料包、草稿、薄度复查、编辑复查、具体性复查、概念图和最终自检。",
-            "",
-            "`content_draft/learning_notes.md` 和 `content_draft/chapter_mindmap.md` 只能由 Codex 在 learning_notes_ready 阶段生成；原材料包阶段不写占位正文。",
-        ],
+
+    editorial_summary_meta = build_editorial_summary_content(
+        material_dir=material_dir,
+        title=str(video_info.get("title") or source.title or bvid),
+        source=source,
+        video_info=video_info,
+        plan=plan,
     )
-    _write_text_file(
-        os.path.join(review_exports_dir, "README.md"),
-        [
-            "# Review Exports",
-            "",
-            "第二个只读审计窗口只允许把学习笔记审计报告写到这里。",
-            "",
-            "标准输出：`quality_audit_report.md`。旧版 `latest-readonly-audit.md` 只作为历史兼容文件。",
-        ],
-    )
-    _write_authoring_workspace(
-        material_dir,
-        course_title=str(video_info.get("title") or source.title or bvid),
-        material_id=str(manifest.get("material_id") or bvid),
-    )
+    manifest["editorial_summary"] = {
+        key: editorial_summary_meta.get(key)
+        for key in (
+            "schema_version",
+            "status",
+            "eligibility",
+            "paths",
+            "review_status",
+            "reason",
+            "error",
+        )
+    }
+    _save_json_file(os.path.join(material_dir, "manifest.json"), manifest)
+
     _write_handoff_files(
         material_dir=material_dir,
         course_title=str(video_info.get("title") or source.title or bvid),
@@ -1881,7 +3450,7 @@ def _format_resume_status(manifest: dict[str, Any]) -> str:
     if stage == "chunking" and chunk_total > 0:
         return f"检测到上次已整理 {chunk_completed}/{chunk_total} 个材料分块，将从断点继续。"
     if stage == "material_ready":
-        return "检测到上次原材料包已经写入，正在刷新制作记录。"
+        return "检测到上次资料包已经写入，正在刷新记录。"
     return f"检测到上次材料整理停留在“{stage}”阶段，将尝试继续。"
 
 
@@ -1908,6 +3477,265 @@ def flatten_subtitles_to_text(subtitles: list[dict[str, Any]]) -> str:
     return "\n\n".join(blocks)
 
 
+def _subtitles_from_raw_tracks(raw_tracks: dict[str, Any]) -> list[dict[str, Any]]:
+    subtitles: list[dict[str, Any]] = []
+    tracks = raw_tracks.get("tracks") if isinstance(raw_tracks.get("tracks"), list) else []
+    for track_index, track in enumerate(tracks, start=1):
+        segments = track.get("segments") if isinstance(track.get("segments"), list) else []
+        grouped: dict[str, dict[str, Any]] = {}
+        all_entries: list[dict[str, Any]] = []
+        for segment in segments:
+            text = str(segment.get("text") or segment.get("content") or "").strip()
+            if not text:
+                continue
+            page_no = int(segment.get("page") or 1)
+            label = str(segment.get("label") or f"P{page_no}").strip() or f"P{page_no}"
+            entry = {
+                "from": segment.get("from", 0),
+                "to": segment.get("to", 0),
+                "content": text,
+            }
+            group = grouped.setdefault(
+                f"{page_no}:{label}",
+                {
+                    "page": page_no,
+                    "cid": segment.get("cid"),
+                    "part": label,
+                    "label": label,
+                    "entries": [],
+                },
+            )
+            group["entries"].append(entry)
+            all_entries.append(entry)
+        if not all_entries:
+            continue
+        subtitles.append(
+            {
+                "lang": str(track.get("language") or "zh-CN"),
+                "lan": str(track.get("track_id") or f"track_{track_index:02d}"),
+                "entries": all_entries,
+                "page_segments": list(grouped.values()),
+            }
+        )
+    return subtitles
+
+
+def _load_existing_material_context(material_dir: str) -> dict[str, Any]:
+    material_dir = os.path.abspath(material_dir)
+    manifest_path = os.path.join(material_dir, "manifest.json")
+    manifest = _load_json_file(manifest_path) or {}
+    raw_tracks = _load_json_file(os.path.join(material_dir, "raw_tracks.json")) or {}
+    subtitles = _subtitles_from_raw_tracks(raw_tracks) if raw_tracks else []
+
+    raw_source: str | list[dict[str, Any]]
+    if subtitles:
+        raw_source = subtitles
+    else:
+        raw_transcript_path = os.path.join(material_dir, "raw_transcript.txt")
+        if not os.path.exists(raw_transcript_path):
+            raise DistillationError("材料包缺少 raw_tracks.json 和 raw_transcript.txt，无法清洗。")
+        with open(raw_transcript_path, "r", encoding="utf-8") as file:
+            raw_source = file.read()
+
+    source_payload = manifest.get("source") if isinstance(manifest.get("source"), dict) else {}
+    title = str(source_payload.get("title") or os.path.basename(material_dir).replace(".course_material", ""))
+    source = SourceDescriptor(
+        source_type=str(source_payload.get("source_type") or "material_transcript"),
+        source_id=str(source_payload.get("source_id") or manifest.get("material_id") or os.path.basename(material_dir)),
+        title=title,
+        creator=str(source_payload.get("creator") or ""),
+        url=str(source_payload.get("url") or ""),
+        language=str(source_payload.get("language") or "zh-CN"),
+    )
+    package_id = _slugify(str(manifest.get("material_id") or source.source_id or "material"), "material")
+    plan = prepare_chunk_plan(raw_source, package_id=package_id, pipeline_config=PipelineConfig())
+    text_source_type = str(
+        (manifest.get("acquisition") if isinstance(manifest.get("acquisition"), dict) else {}).get("text_source_type")
+        or source.source_type
+    )
+    return {
+        "material_dir": material_dir,
+        "manifest_path": manifest_path,
+        "manifest": manifest,
+        "source": source,
+        "title": title,
+        "plan": plan,
+        "text_source_type": text_source_type,
+    }
+
+
+def _ensure_existing_material_file_contract(manifest: dict[str, Any]) -> None:
+    files = manifest.setdefault("files", {})
+    if not isinstance(files, dict):
+        files = {}
+        manifest["files"] = files
+    files.update(
+        {
+            "content": "content.md",
+            "content_meta": "content.meta.json",
+            "notebooklm_source": "exports/notebooklm.md",
+            "cleaning_report": "work/cleaning/cleaning_report.json",
+            "cleaning_work_dir": "work/cleaning",
+            "cleaning_chunks_dir": "work/cleaning/chunks",
+            "summary_dir": "summary",
+            "summary_article": "summary/article.md",
+            "summary_html": "summary/article.html",
+            "summary_cards": "summary/cards.json",
+            "summary_review": "summary/review.json",
+            "summary_status": "summary/summary_status.json",
+        }
+    )
+
+
+def clean_existing_material_package(material_dir: str) -> dict[str, Any]:
+    context = _load_existing_material_context(material_dir)
+    material_dir = context["material_dir"]
+    manifest_path = context["manifest_path"]
+    manifest = context["manifest"]
+    source = context["source"]
+    title = context["title"]
+    plan = context["plan"]
+    text_source_type = context["text_source_type"]
+
+    _emit_progress("正在重建清洗资料稿…", 20, stage="content_cleaning")
+    content_cleaning_meta = build_clean_material_content(
+        material_dir=material_dir,
+        title=title,
+        source=source,
+        text_source_type=text_source_type,
+        plan=plan,
+    )
+    _ensure_existing_material_file_contract(manifest)
+    manifest["content_cleaning"] = {
+        key: content_cleaning_meta.get(key)
+        for key in (
+            "schema_version",
+            "mode",
+            "requested_mode",
+            "chunk_count",
+            "input_chars",
+            "output_chars",
+            "compression_ratio",
+            "content_path",
+            "notebooklm_path",
+            "work_dir",
+            "warnings",
+        )
+    }
+    editorial_summary_meta = build_editorial_summary_content(
+        material_dir=material_dir,
+        title=title,
+        source=source,
+        video_info={
+            "title": title,
+            "bvid": source.source_id,
+            "duration": (manifest.get("media") if isinstance(manifest.get("media"), dict) else {}).get("duration_seconds", 0),
+        },
+        plan=plan,
+    )
+    manifest["editorial_summary"] = {
+        key: editorial_summary_meta.get(key)
+        for key in (
+            "schema_version",
+            "status",
+            "eligibility",
+            "paths",
+            "review_status",
+            "reason",
+            "error",
+        )
+    }
+    _save_json_file(manifest_path, manifest)
+    _emit_progress("清洗资料稿已生成。", 100, stage="complete")
+    return {
+        "materialPath": material_dir,
+        "contentPath": os.path.join(material_dir, "content.md"),
+        "notebooklmPath": os.path.join(material_dir, "exports", "notebooklm.md"),
+        "editorialArticlePath": os.path.join(material_dir, "summary", "article.md"),
+        "contentMetaPath": os.path.join(material_dir, "content.meta.json"),
+        "cleaning": manifest["content_cleaning"],
+        "editorialSummary": manifest["editorial_summary"],
+    }
+
+
+def summarize_existing_material_package(material_dir: str) -> dict[str, Any]:
+    context = _load_existing_material_context(material_dir)
+    material_dir = context["material_dir"]
+    manifest_path = context["manifest_path"]
+    manifest = context["manifest"]
+    source = context["source"]
+    title = context["title"]
+    plan = context["plan"]
+    text_source_type = context["text_source_type"]
+
+    content_path = os.path.join(material_dir, "content.md")
+    existing_content = ""
+    if os.path.exists(content_path):
+        with open(content_path, "r", encoding="utf-8") as file:
+            existing_content = file.read()
+    if not existing_content.strip():
+        _emit_progress("正在补齐清洗资料稿…", 16, stage="content_cleaning")
+        content_cleaning_meta = build_clean_material_content(
+            material_dir=material_dir,
+            title=title,
+            source=source,
+            text_source_type=text_source_type,
+            plan=plan,
+        )
+        manifest["content_cleaning"] = {
+            key: content_cleaning_meta.get(key)
+            for key in (
+                "schema_version",
+                "mode",
+                "requested_mode",
+                "chunk_count",
+                "input_chars",
+                "output_chars",
+                "compression_ratio",
+                "content_path",
+                "notebooklm_path",
+                "work_dir",
+                "warnings",
+            )
+        }
+
+    _ensure_existing_material_file_contract(manifest)
+    _emit_progress("正在制作视频精读稿…", 82, stage="editorial_summary")
+    editorial_summary_meta = build_editorial_summary_content(
+        material_dir=material_dir,
+        title=title,
+        source=source,
+        video_info={
+            "title": title,
+            "bvid": source.source_id,
+            "duration": (manifest.get("media") if isinstance(manifest.get("media"), dict) else {}).get("duration_seconds", 0),
+        },
+        plan=plan,
+    )
+    manifest["editorial_summary"] = {
+        key: editorial_summary_meta.get(key)
+        for key in (
+            "schema_version",
+            "status",
+            "eligibility",
+            "paths",
+            "review_status",
+            "reason",
+            "error",
+        )
+    }
+    _save_json_file(manifest_path, manifest)
+    _emit_progress("视频精读稿已生成。", 100, stage="complete")
+    return {
+        "materialPath": material_dir,
+        "editorialArticlePath": os.path.join(material_dir, "summary", "article.md"),
+        "editorialHtmlPath": os.path.join(material_dir, "summary", "article.html"),
+        "editorialCardsPath": os.path.join(material_dir, "summary", "cards.json"),
+        "editorialReviewPath": os.path.join(material_dir, "summary", "review.json"),
+        "editorialSummary": manifest["editorial_summary"],
+    }
+
+
 __all__ = [
     "DistillationError",
     "PipelineConfig",
@@ -1915,12 +3743,14 @@ __all__ = [
     "TextChunk",
     "TextUnit",
     "build_chunks",
+    "clean_existing_material_package",
     "flatten_subtitles_to_text",
     "normalize_raw_source",
     "prepare_chunk_plan",
     "run_distillation_from_bilibili",
     "run_material_package_from_local_media",
-    "save_codex_material_package",
+    "save_material_package",
+    "summarize_existing_material_package",
 ]
 
 
@@ -1933,7 +3763,7 @@ def _emit_progress(message: str, percent: int, **extra: Any) -> None:
     payload = {"message": message, "percent": percent}
     payload.update({key: value for key, value in extra.items() if value is not None})
     print(
-        "__ONBOARD_DISTILL_PROGRESS__="
+        "__SHIJIE_DISTILL_PROGRESS__="
         + json.dumps(payload, ensure_ascii=False),
         flush=True,
     )
@@ -2314,7 +4144,7 @@ def run_distillation_from_bilibili(video_input: str, *, material_only: bool = Fa
         pipeline_config=pipeline_config,
     )
     material_write_started_at = perf_counter()
-    codex_material_path = save_codex_material_package(
+    material_path = save_material_package(
         video_info=video_info,
         subtitles=subtitles,
         plan=full_plan,
@@ -2344,15 +4174,15 @@ def run_distillation_from_bilibili(video_input: str, *, material_only: bool = Fa
         package_id=package_id,
         source=source,
         patch={
-            "stage": "material_ready",
+            "stage": "content_ready",
             "finished": True,
-            "material_path": codex_material_path,
+            "material_path": material_path,
             "chunk_total": len(full_plan.chunks),
             "chunk_completed": len(full_plan.chunks),
             "stage_timings": stage_timings,
         },
     )
-    _emit_progress("Codex 原材料包已生成。", 100, stage="complete", cacheHint="material_package")
+    _emit_progress("字幕资料已生成。", 100, stage="complete", cacheHint="material_package")
     return {
         "packagePath": "",
         "packageId": package_id,
@@ -2360,7 +4190,7 @@ def run_distillation_from_bilibili(video_input: str, *, material_only: bool = Fa
         "bvid": str(video_info.get("bvid") or bvid),
         "textSourceType": text_source_type,
         "textSourceNote": text_source_note,
-        "materialPath": codex_material_path,
+        "materialPath": material_path,
         "chunkCount": len(full_plan.chunks),
         "warningCount": 0,
         "warnings": [_format_timing_brief(stage_timings)],
@@ -2429,7 +4259,7 @@ def run_material_package_from_local_media(media_path: str) -> dict[str, Any]:
         entries.append({"from": start, "to": end, "content": text})
 
     if not entries:
-        raise DistillationError("本地音视频转写结果为空，无法生成原材料包。")
+        raise DistillationError("本地音视频转写结果为空，无法生成资料包。")
 
     video_info = {
         "bvid": source_id,
@@ -2464,9 +4294,9 @@ def run_material_package_from_local_media(media_path: str) -> dict[str, Any]:
     ]
     pipeline_config = PipelineConfig()
     full_plan = prepare_chunk_plan(subtitles, package_id=package_id, pipeline_config=pipeline_config)
-    _emit_progress("正在写入 Codex 原材料包…", 82, stage="chunking", chunkCompleted=len(full_plan.chunks), chunkTotal=len(full_plan.chunks))
+    _emit_progress("正在写入资料包…", 82, stage="chunking", chunkCompleted=len(full_plan.chunks), chunkTotal=len(full_plan.chunks))
     material_write_started_at = perf_counter()
-    codex_material_path = save_codex_material_package(
+    material_path = save_material_package(
         video_info=video_info,
         subtitles=subtitles,
         plan=full_plan,
@@ -2490,7 +4320,7 @@ def run_material_package_from_local_media(media_path: str) -> dict[str, Any]:
             "text_length": full_plan.text_length,
         },
     }
-    _emit_progress("本地音视频原材料包已生成。", 100, stage="complete", cacheHint="material_package")
+    _emit_progress("本地音视频字幕资料已生成。", 100, stage="complete", cacheHint="material_package")
     return {
         "packagePath": "",
         "packageId": package_id,
@@ -2498,7 +4328,7 @@ def run_material_package_from_local_media(media_path: str) -> dict[str, Any]:
         "bvid": source_id,
         "textSourceType": "local_media_transcript",
         "textSourceNote": f"已从本地文件转写：{source_path}",
-        "materialPath": codex_material_path,
+        "materialPath": material_path,
         "chunkCount": len(full_plan.chunks),
         "warningCount": 0,
         "warnings": [_format_timing_brief(stage_timings)],
@@ -2507,10 +4337,12 @@ def run_material_package_from_local_media(media_path: str) -> dict[str, Any]:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="视界专注 Codex 原材料包生成入口")
+    parser = argparse.ArgumentParser(description="视界专注资料包生成入口")
     parser.add_argument("video", nargs="?", help="B 站视频链接或 BV 号")
     parser.add_argument("--material-only", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--local-media", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--clean-material", help="重跑已有 .course_material 的字幕清洗与 NotebookLM 导出", metavar="PATH")
+    parser.add_argument("--summarize-material", help="为已有 .course_material 制作视频精读稿", metavar="PATH")
     parser.add_argument("--result-json", action="store_true", help=argparse.SUPPRESS)
     return parser
 
@@ -2524,17 +4356,20 @@ def main() -> int:
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
 
-    if not args.video:
-        parser.error("请提供 B 站视频链接或 BV 号。")
-
     try:
-        if args.local_media:
+        if args.clean_material:
+            result = clean_existing_material_package(args.clean_material)
+        elif args.summarize_material:
+            result = summarize_existing_material_package(args.summarize_material)
+        elif args.video and args.local_media:
             result = run_material_package_from_local_media(args.video)
-        else:
+        elif args.video:
             result = run_distillation_from_bilibili(args.video, material_only=args.material_only)
-        _emit_progress("原材料包生成完成，正在回传桌面端…", 100, stage="complete")
+        else:
+            parser.error("请提供 B 站视频链接、BV 号，或使用 --clean-material/--summarize-material 指定材料包。")
+        _emit_progress("资料包生成完成，正在回传桌面端…", 100, stage="complete")
         if args.result_json:
-            print("__ONBOARD_DISTILL_RESULT__=" + json.dumps(result, ensure_ascii=False), flush=True)
+            print("__SHIJIE_DISTILL_RESULT__=" + json.dumps(result, ensure_ascii=False), flush=True)
         return 0
     except Exception as exc:
         print(f"材料整理失败：{exc}", file=sys.stderr, flush=True)

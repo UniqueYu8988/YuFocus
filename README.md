@@ -1,208 +1,117 @@
 # 视界专注
 
-**视界专注** 是一个本地优先的桌面学习工作台。它的核心不是聊天、判分或复刻视频，而是把视频和字幕整理成结构化学习笔记，再由 Codex Goal 离线生成可逐节阅读、可复查、可继续整理的知识树和章节思维导图。
+视界专注是一个本地优先的视频资料处理与阅读工具。
 
-当前项目路线已经从旧版 Groq / MiniMax 运行时教练，重构为：
+当前产品只围绕两条主线：
 
-```text
-视频 / 字幕 / 本地音频转写
-  -> 软件生成 .course_material 学习材料包
-  -> Codex Goal 建立 synthesis_plan
-  -> Codex Goal 生成 learning_notes.md + chapter_mindmap.md
-  -> 只读审计
-  -> 用户确认后进入学习台
-  -> Electron 逐节阅读、回看和复习
-```
+1. 长视频 / 本地视频：提取字幕或转写音频，清洗成可读文本，并导出 NotebookLM 可导入资料。
+2. 短视频：在字幕清洗后调用 MiMo API 自动生成视频精读稿，并进入专注、档案与灵犀归档阅读。
 
-运行时软件不依赖远程 AI 判卷，也不把用户卡在某一关。学习价值来自“材料整理 -> 知识树规划 -> 逐节学习笔记 -> 思维导图 -> 复习回看”。
+旧的 Codex Goal 深写、知识树学习包、验证器和课程打包路线已经退出默认生产链路。相关历史只保留在纪念或兼容文档中，不再作为制作按钮、材料包结构或用户流程出现。
 
-## 当前能力
+## 当前流程
 
-### 工作台
+### 长视频与本地视频
 
-- 输入 B 站链接 / BV 号生成学习材料包。
-- 支持本地音视频文件作为输入来源。
-- 优先读取中文字幕；无字幕时调用本地音频转写。
-- 生成结构化 `*.course_material`，包含 `authoring/` 学习笔记入口、schema 和只读审计工具。
-- 软件生成 `indexes/source_index.jsonl`，最终由 Codex 写 trace map，保证长材料正文可旁路追溯。
-- 整理记录按时间展示，可打开材料包、复制 Codex Goal 提示、查看章节思维导图和只读审计提示，并进入学习台。
+输入 B 站 BV / 链接，或选择本地音视频文件。
 
-### Codex 学习笔记链路
+软件会完成：
 
-- Codex Goal 是主生产者：先建立知识树和覆盖层，再生成 `content_draft/learning_notes.md` 和 `content_draft/chapter_mindmap.md`。
-- 章节思维导图是主产物之一，不是附属装饰。
-- 只读审计窗口只检查学习笔记和思维导图，不重写内容。
-- 新主线默认不再依赖 ChatGPT。
-- Codex 窗口最多两个：一个主生产 Goal，一个只读审计 Goal；不要让多个窗口同时写同一组材料文件。
+- 获取视频基础信息。
+- 优先读取字幕；缺字幕时使用本地 SenseVoice 转写。
+- 清洗字幕，生成正文资料。
+- 写出 NotebookLM 导入文件。
 
-### 学习台
-
-- 深色极简界面，保留类 Codex 的问答式学习体验。
-- 左侧学习树展示章节与小节进度。
-- 已解锁小节可主动回忆；短材料会直接以少量完整小节呈现，不强行拆多级章节。
-- 每个小节展示学习笔记正文、主动回忆输入框、参考回看、关键点和常见误区。
-- 不做实时 AI 判分，不阻塞继续学习。
-- 支持 TTS 朗读、预热本节、预热本章。
-- 支持打开 Obsidian 笔记和同步学习笔记。
-
-### 章节思维导图
-
-现在的地图不是旧式大图，而是学习笔记的章节思维导图：
-
-- Codex 会同时生成 `learning_notes.md` 和 `chapter_mindmap.md`。
-- 章节思维导图可以是分层标题、Mermaid mindmap 或清晰的结构图。
-- 软件会把它当成可直接发送到学习台对话流的图文消息，而不是额外负担。
-
-### TTS
-
-- 支持 MiniMax Speech 2.8。
-- 支持 Xiaomi MiMo TTS。
-- MiMo 方向已作为主要实验通道，支持预置音色试听与选择。
-- 本节音频已缓存时，学习提交后可播放参考回看内容。
-
-### Obsidian
-
-Obsidian 同步作为独立导出/存档能力保留：
-
-- 不进入主学习流。
-- 支持学习笔记导出。
-- 提供 CSS 样式增强，使笔记更接近学习档案阅读体验。
-
-## 项目结构
+主要产物在 `.course_material` 目录内：
 
 ```text
-视界专注/
-  desktop/                  Electron + React 桌面端
-  src/                      Python 本地素材、转写、原材料包和总结打包工具
-  docs/
-    prompts/                Codex 学习笔记提示词和审计提示词
-  output/                   本地运行输出，已被 .gitignore 忽略
-    materials/              *.course_material 原材料包
-    cache/                  字幕、音频、转写缓存
+raw_transcript.txt
+content.md
+exports/notebooklm.md
+indexes/source_index.jsonl
+summary/article.md       # 短视频精读稿存在时生成
+summary/article.html     # 短视频精读稿存在时生成
+summary/summary_status.json
+metrics.json             # 制作耗时、token 汇总和产物规模
+manifest.json
+run_state.json
+HANDOFF.md
 ```
 
-## 关键文件
+### 短视频精读
 
-```text
-desktop/electron/main.ts                       Electron 主进程、文件系统、设置、Python 桥接
-desktop/electron/preload.ts                    Renderer 可调用的桌面 API
-desktop/src/components/WorkspacePane.tsx       工作台、材料整理、整理记录
-desktop/src/components/CoachPane.tsx           学习台主界面
-desktop/src/components/CoachChatTimeline.tsx   学习笔记正文和主动回忆后的内容渲染
-desktop/src/components/CoachComposer.tsx       主动回忆输入框
-desktop/src/components/MarkdownRenderer.tsx    Markdown / 表格 / Mermaid 等内容渲染
-desktop/src/components/CourseVisualMapDialog.tsx 全局学习地图展示
-desktop/src/store.ts                           学习状态、学习包导入和进度记录
+短视频不再复制提示词到 Codex 制作。制作页会在字幕清洗完成后，通过 MiMo 文稿模型生成：
 
-src/bilibili_api.py                            B 站视频信息与字幕抓取
-src/audio_fallback.py                          无字幕音频兜底转写
-src/local_audio_client.py                      本地转写桥接
-src/distiller.py                               原材料包生成器
-src/validate_content_synthesis_plan.py         学习笔记计划校验
+- `summary/article.md`
+- `summary/article.html`
+- `summary/cards.json`
+- `summary/review.json`
+- `summary/summary_status.json`
 
-src/schemas/content_synthesis_plan.schema.json  学习笔记工作计划合约
-docs/prompts/codex-goal-content-synthesis-v8.md Codex Goal 学习笔记提示词
-docs/prompts/readonly-synthesis-audit.md        只读学习笔记审计提示词
-docs/content-synthesis-authoring.md             学习笔记作者手册
-PROJECT_CONTEXT.md                              项目长期上下文和方向护栏
-```
+这些文件用于专注阅读、灵犀归档、未来邮件推送与其他导出通道。
 
-新主线只认 `*.course_material` 和新提示词入口；旧 JSON 学习包只作为学习台内部兼容层，不作为新的生产流程。
+### 后台与推送
 
-## 推荐整理流程
+桌面端预留后台自动化框架：
 
-1. 打开桌面端工作台。
-2. 输入 B 站链接 / BV 号，或选择本地音视频。
-3. 生成 `*.course_material`。
-4. 点击“开始整理”，复制 Codex Goal 提示词到新的 Codex Goal 对话。
-5. Codex 先建立知识树和覆盖层，再按材料选择紧凑小节或大章节结构，生成 `content_draft/learning_notes.md`、`content_draft/chapter_mindmap.md` 和旁路 trace map。
-6. 软件 validator 通过后再点击“开始学习”。
-7. 可选：点击“审计”，第二个 Codex 窗口复制 `authoring/03_readonly_synthesis_audit.md` 做只读质量审计，报告写入 `content_draft/review_exports/quality_audit_report.md`。
-8. 需要时直接在工作台打开知识稿、章节地图和审计报告。
+- 关闭窗口后驻留托盘。
+- 主进程维护定时检查、暂停恢复和立即检查。
+- 定时检查和手动检查共用同一套机制：只发现收藏来源最近 24 小时内的新视频。
+- 同一 BV 全局去重，已经入队或已经生成资料的视频不会重复制作。
+- 任务队列由主进程顺序处理，窗口关闭后也能继续清洗字幕和生成短视频精读稿。
+- 已有清洗稿或精读稿时按阶段复用，不重复消耗字幕处理或 MiMo 文稿资源。
+- 新生成资料会写入 `metrics.json`，用于统计字幕清洗、API 编稿、产物字数、文件大小和 token 消耗。
+- 设置中配置 SMTP 邮件推送参数。
+- 邮件服务已支持真实 SMTP 发送，并优先使用浅色 HTML 正文与纯文本兜底。
 
-## 本地运行
+未来稳定形态是：收藏来源发布新视频后，软件自动清洗字幕、生成短视频精读稿，并按日报或批次推送到邮箱。
 
-安装桌面端依赖：
+## 桌面端
 
 ```powershell
-cd C:\Users\Yu\AI\视界专注\desktop
+cd desktop
 npm install
-```
-
-启动开发服务器：
-
-```powershell
 npm run dev
 ```
 
-构建前端和 Electron 入口：
+构建前检查：
 
 ```powershell
+npx tsc --noEmit
 npm run build:web
 ```
 
-打包便携版：
+后端语法检查：
 
 ```powershell
-npm run build:portable
+python -m py_compile src\bilibili_api.py src\audio_fallback.py src\local_audio_client.py src\distiller.py src\validate_content_synthesis_plan.py
 ```
 
-## Python 检查
+## 配置
 
-改动 Python 文件后建议运行：
+桌面端设置中配置：
 
-```powershell
-cd C:\Users\Yu\AI\视界专注
-python -m py_compile src\bilibili_api.py src\audio_fallback.py src\local_audio_client.py src\distiller.py src\validate_content_synthesis_plan.py src\eval_material_pipeline.py
-```
+- B 站 SESSDATA：读取关注源、最近视频和字幕。
+- MiMo API Key：短视频精读稿与后续文本处理。
+- MiMo 文稿模型：默认 `mimo-v2.5-pro`。
+- MiMo TTS / MiniMax TTS：保留朗读能力。
+- 本地转写环境：用于无字幕视频或本地音视频。
+- 后台定时与 SMTP：用于未来自动检查和邮件推送。
 
-校验 schema：
+## 项目边界
 
-```powershell
-python src\validate_content_synthesis_plan.py "<course_material_dir>\content_draft\synthesis_plan.json"
-```
+默认产品语言使用：
 
-运行 30 万字 synthetic 协议测试：
+- 制作
+- 视频来源
+- 任务队列
+- 专注
+- 档案
+- 灵犀
+- 清洗稿
+- 精读稿
+- NotebookLM 导入资料
 
-```powershell
-python src\eval_material_pipeline.py --target-chars 300000
-```
+旧的 `CoursePackage`、`lesson`、`quiz_question`、`standard_answer` 等字段只作为专注页内部兼容层存在，不代表当前产品方向。
 
-报告会写入 `output/evals/synthetic_300k/synthetic_300k_report.json`。该测试不调用真实视频或 Codex，只验证材料包、source index、trace map、validator sanity 和只读审计 gate 能否挡住假 ready。
-
-## 本地文件与隐私
-
-运行输出默认放在：
-
-```text
-C:\Users\Yu\AI\视界专注\output
-```
-
-该目录被 `.gitignore` 忽略，里面可能包含字幕、音频缓存、转写文本、学习笔记和本地配置，不应提交到 GitHub。
-
-本地设置文件也会被忽略：
-
-```text
-.shijie-focus.local.json
-.shijie-focus.window.json
-.onboard-tts-cache/
-```
-
-## 设计原则
-
-- 本地优先。
-- 软件轻量，主流程清晰。
-- 视频只是知识范围，不是知识稿正文。
-- 字幕/转写文本只作为材料，不直接暴露给阅读界面。
-- Codex Goal 负责学习笔记计划、知识稿、章节地图和审稿配合。
-- 学习台只承载少量可打开层级：短材料直接读小节，中长材料再分大章节。
-- Electron 负责稳定展示、搜索、进度记录和增强功能。
-- 运行时不依赖 Groq / MiniMax / 远程 API 判分。
-- TTS、Obsidian 和章节地图都是增强能力，不应污染主阅读流。
-
-## 当前下一步
-
-- 用一条新视频完整测试“原材料包 -> Codex 学习笔记 -> 章节地图 -> 只读审计 -> 入库”。
-- 继续评估章节地图是否应长期采用 Mermaid、分层标题还是图片导图。
-- 优化知识稿的展示块，让软件成为更开放的学习笔记阅读器，而不是固定模板展示器。
-- 继续观察 Codex 分轮整理中的信息差、提示词负担和学科适配问题。
+不要恢复旧课程制作、答题验收、Codex Goal 制作学习包或 course-package 主生产流程。

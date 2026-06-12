@@ -1,4 +1,4 @@
-import { flattenCourse, getNextNodeId, getUnlockedNodeIds, isStudyNode } from './courseTree'
+import { flattenCourse, getNextNodeId, getUnlockedNodeIds, isStudyNode } from './studyTree'
 import type {
   AchievementBadge,
   CoursePackage,
@@ -9,6 +9,9 @@ import type {
   PersistedNodeLearningSession,
 } from '../types/course'
 
+// Reader-state compatibility layer. CoursePackage-shaped data is allowed here
+// as an internal bridge for 专注, but new 制作/档案/灵犀 flows should not depend
+// on the old course/lesson product model.
 export type StageCelebration = {
   id: string
   stageId: string
@@ -248,7 +251,7 @@ export function buildAchievementBadgesSummary(
     badges.push({
       code: 'first_step',
       label: '起步完成',
-      description: '已经顺利拿下第一个小关，开始进入学习节奏。',
+      description: '已经读完第一个小节，开始进入稳定节奏。',
       tone: 'neutral',
     })
   }
@@ -257,7 +260,7 @@ export function buildAchievementBadgesSummary(
     badges.push({
       code: 'steady_stride',
       label: '稳定推进',
-      description: '连续推进多个小关，节奏已经慢慢稳住了。',
+      description: '连续推进多个小节，节奏已经慢慢稳住了。',
       tone: 'info',
     })
   }
@@ -275,7 +278,7 @@ export function buildAchievementBadgesSummary(
     badges.push({
       code: 'midway',
       label: '半程已过',
-      description: '这门课已经进入中段，不再只是开始试水。',
+      description: '这份资料已经进入中段，不再只是开始试读。',
       tone: 'success',
     })
   }
@@ -283,8 +286,8 @@ export function buildAchievementBadgesSummary(
   if (progressPercent >= 100) {
     badges.push({
       code: 'course_finisher',
-      label: '结课归档',
-      description: '整门课程已经完成，可以沉淀为长期知识资产。',
+      label: '资料归档',
+      description: '这份资料已经完成，可以沉淀为长期知识资产。',
       tone: 'success',
     })
   }

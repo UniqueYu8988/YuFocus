@@ -16,10 +16,12 @@ import { CoachChatTimeline } from '@/components/CoachChatTimeline'
 import { CoachComposer } from '@/components/CoachComposer'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { getNextSequentialNodeId } from '@/lib/courseTree'
+import { getNextSequentialNodeId } from '@/lib/studyTree'
 import { buildLessonSpeechMarkdown, formatMiniMaxCharacters } from '@/lib/tts'
 import { useLearningStore } from '@/store'
 
+// 专注 still consumes the internal study-package adapter so existing reading,
+// TTS, and Obsidian affordances remain available after the product pivot.
 function stripStagePrefix(title: string) {
   return title.replace(/^(?:学习)?阶段\s*\d+\s*[·\-:：]\s*/u, '').replace(/^阶段\s*\d+\s*/u, '').trim()
 }
@@ -319,7 +321,7 @@ export function CoachPane({
       ? ''
       : archiveMilestones.some((event) => event.kind === 'stage_complete')
         ? '你是靠一段一段稳稳推进，把整门课完整打通下来的。'
-        : '你把这门课完整学完了，而且路径非常干净，说明理解链路已经相当顺。'
+        : '你已经把这份资料完整读完，后续可以作为长期资料回看。'
   const lessonSpeechText = useMemo(() => (currentNode ? buildLessonSpeechMarkdown(currentNode) : ''), [currentNode])
   const resumeRecord = useMemo(() => {
     const sortedRecords = [...libraryRecords].sort((left, right) => right.lastOpenedAt - left.lastOpenedAt)
@@ -490,7 +492,7 @@ export function CoachPane({
           ? `已打开当前小节笔记：${result.openedPath}`
           : target === 'board'
             ? `已打开学习看板：${result.openedPath}`
-            : `已打开课程总览：${result.openedPath}`,
+            : `已打开资料总览：${result.openedPath}`,
         'success',
       )
     } catch (error) {
@@ -551,7 +553,7 @@ export function CoachPane({
               <LearningHomePet />
               <div className="space-y-2">
                 <h2 className="text-[30px] font-semibold tracking-tight text-foreground">今天从哪里开始</h2>
-                <p className="text-[13px] leading-6 text-muted-foreground">接着上次学习，或者去工作台制作新的内容。</p>
+                <p className="text-[13px] leading-6 text-muted-foreground">接着上次阅读，或者去制作页整理新的资料。</p>
               </div>
             </div>
 
@@ -582,7 +584,7 @@ export function CoachPane({
               </button>
             ) : (
               <div className="rounded-[22px] border border-white/[0.08] bg-white/[0.025] px-4 py-4 text-center text-[13px] text-muted-foreground">
-                还没有学习记录。
+                还没有资料记录。
               </div>
             )}
 
@@ -594,7 +596,7 @@ export function CoachPane({
                 disabled={Boolean(homeOpeningRecordId)}
               >
                 {homeOpeningRecordId ? <LoaderCircle className="size-4 animate-spin" /> : <BookOpenText size={16} />}
-                {resumeRecord ? '继续学习' : '开始制作'}
+                {resumeRecord ? '继续阅读' : '去制作'}
               </Button>
               <Button
                 type="button"
@@ -603,7 +605,7 @@ export function CoachPane({
                 onClick={onOpenWorkbench}
               >
                 <FolderOpen size={16} />
-                工作台
+                制作
               </Button>
               <Button
                 type="button"
@@ -612,7 +614,7 @@ export function CoachPane({
                 onClick={onOpenArchive}
               >
                 <Archive size={16} />
-                学习档案
+                档案
               </Button>
             </div>
 
@@ -714,7 +716,7 @@ export function CoachPane({
           progressText=""
           onGoToNext={() => void goToNextNode()}
           canGoToNext={canAdvanceToNext && Boolean(nextNodeId)}
-          nextLabel={isCourseCompleted ? '课程已完成' : '下一节'}
+          nextLabel={isCourseCompleted ? '已完成' : '下一节'}
         />
       </div>
     </section>

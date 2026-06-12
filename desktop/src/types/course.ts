@@ -1,8 +1,8 @@
-// Learning desk compatibility model.
+// Data-desk compatibility model.
 // Historical Course/Lesson/quiz/standard-answer field names are kept as an
-// internal study-package adapter for the React/Electron learning runtime. New
-// authoring should describe learning notes, study sections, recall prompts, and
-// review references instead of reviving the old course-making workflow.
+// internal adapter for the React/Electron reading runtime. New product work
+// should describe source packages, data records, export channels, and optional
+// recall/review affordances instead of reviving the old course-making workflow.
 export type LearningStatus = 'teaching' | 'quizzing' | 'completed'
 
 export type CoachMessageRole = 'system' | 'coach' | 'user'
@@ -49,6 +49,8 @@ export type TeacherReadyContent = {
   primary_training_action?: string
   training_focus?: string[]
   teaching_markdown?: string
+  // Optional rendered article body for email-style and HTML-compatible readers.
+  teaching_html?: string
   // Compatibility fields rendered as active recall and review reference text.
   quiz_question?: string
   standard_answer?: string

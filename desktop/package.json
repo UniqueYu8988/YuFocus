@@ -9,12 +9,11 @@
     "dev": "vite",
     "prepare:release": "powershell -ExecutionPolicy Bypass -File ./scripts/prepare-release.ps1",
     "package:share": "powershell -ExecutionPolicy Bypass -File ./scripts/package-share.ps1",
-    "build:web": "tsc && vite build",
+    "build:web": "powershell -ExecutionPolicy Bypass -File ./scripts/clean-build-output.ps1 && tsc && vite build",
     "build": "npm run prepare:release && npm run build:web && electron-builder && npm run package:share",
     "build:portable": "npm run prepare:release && npm run build:web && electron-builder --win portable --publish never && npm run package:share",
     "build:mirror": "npm run prepare:release && npm run build:web && set \"ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/\" && set \"ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/\" && electron-builder && npm run package:share",
-    "preview": "vite preview",
-    "validate:material": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types ./electron/validateMaterialCli.ts"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
@@ -26,7 +25,6 @@
     "electron-store": "^10.1.0",
     "framer-motion": "^12.23.12",
     "lucide-react": "^0.542.0",
-    "mermaid": "^11.14.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "tailwind-merge": "^3.3.1",

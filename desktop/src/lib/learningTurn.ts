@@ -1,5 +1,7 @@
 import type { CoachTurnResult, FlatCourseNode } from '../types/course'
 
+// Fallback turns for the 专注 reader's legacy step-by-step state machine.
+// They are intentionally kept away from the current API-driven production flow.
 const LEARNED_CONFIRMATION_TEXT = '已学习'
 
 function normalizeTeachingMarkdown(markdown: string) {
@@ -28,7 +30,7 @@ function normalizeTeachingMarkdown(markdown: string) {
     .trim()
 }
 
-export function buildCodexTeachingMarkdown(node: FlatCourseNode) {
+export function buildAssistantTeachingMarkdown(node: FlatCourseNode) {
   const teacher = node.teacher_ready_content
   const markdown = teacher?.teaching_markdown?.trim()
   if (markdown) {
@@ -38,7 +40,7 @@ export function buildCodexTeachingMarkdown(node: FlatCourseNode) {
   return [
     `## ${node.title}`,
     '',
-    node.summary || '这份学习笔记还没有写入完整讲解。请先回到 Codex 生产窗口，为这一小节补充 teacher_ready_content.teaching_markdown。',
+    node.summary || '这份资料还没有写入完整正文。请先回到制作页生成清洗稿或精读稿。',
   ].join('\n')
 }
 
@@ -59,7 +61,7 @@ export function buildFallbackCoachTurn(options: {
 
   if (learningStatus === 'teaching' && !answer.trim()) {
     return {
-      reply: buildCodexTeachingMarkdown(node),
+      reply: buildAssistantTeachingMarkdown(node),
       learningStatus: 'quizzing',
       markCurrentNodeCompleted: false,
       suggestedNextNodeId: null,

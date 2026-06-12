@@ -5,10 +5,12 @@ import {
   computeNodeCompletionStreak,
   resolveStageCelebration,
 } from './learningState'
-import { getUnlockedNodeIds } from './courseTree'
+import { getUnlockedNodeIds } from './studyTree'
 import type { FlatCourseNode, LearningMilestoneEvent } from '../types/course'
 import type { StageCelebration } from './learningState'
 
+// Completion bookkeeping for the 专注 reader compatibility runtime. This does
+// not define the current material production pipeline.
 type ToastTone = 'info' | 'success' | 'error'
 
 type CompletionToast = {
@@ -43,7 +45,7 @@ function resolveCompletionToast(options: {
 
   if (nextStreak >= 5 && previousStreak < 5) {
     return {
-      title: '连过 5 关',
+      title: '连读 5 节',
       description: '势头已经完全起来了，继续往下推会非常顺。',
       tone: 'success',
     }
@@ -51,7 +53,7 @@ function resolveCompletionToast(options: {
 
   if (nextStreak >= 3 && previousStreak < 3) {
     return {
-      title: '连过 3 关',
+      title: '连读 3 节',
       description: '状态很稳，已经进入连续推进节奏。',
       tone: 'success',
     }
@@ -90,7 +92,7 @@ export function buildCompletionCelebrationPayload(options: {
     milestoneEvents = appendMilestoneEvent(milestoneEvents, {
       kind: 'node_complete',
       title: `拿下《${node.title}》`,
-      detail: `这已经是本课程完成的第 ${completedNodeIds.length} 个小关了，继续保持这个节奏。`,
+      detail: `这已经是本资料完成的第 ${completedNodeIds.length} 个小节了，继续保持这个节奏。`,
       nodeId: node.id,
       progressPercent: nextProgressPercent,
     })
@@ -99,7 +101,7 @@ export function buildCompletionCelebrationPayload(options: {
       milestoneEvents = appendMilestoneEvent(milestoneEvents, {
         kind: 'stage_complete',
         title: `阶段《${stageCelebration.stageTitle}》已打通`,
-        detail: `这一阶段的 ${stageCelebration.totalCount} 个小关已经全部通过，可以进入下一段主线。`,
+        detail: `这一阶段的 ${stageCelebration.totalCount} 个小节已经全部完成，可以进入下一段主线。`,
         stageId: stageCelebration.stageId,
         progressPercent: nextProgressPercent,
       })
@@ -108,8 +110,8 @@ export function buildCompletionCelebrationPayload(options: {
     if (nextProgressPercent >= 100) {
       milestoneEvents = appendMilestoneEvent(milestoneEvents, {
         kind: 'course_complete',
-        title: `《${courseTitle}》顺利结课`,
-        detail: '这门课已经完整学完，可以沉淀到你的长期知识资产里了。',
+        title: `《${courseTitle}》已完成`,
+        detail: '这份资料已经完整读完，可以沉淀到你的长期知识资产里了。',
         progressPercent: 100,
       })
     }

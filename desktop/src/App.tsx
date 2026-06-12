@@ -1,12 +1,10 @@
 import { LoaderCircle, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { AppChrome } from '@/components/AppChrome'
-import { CourseOutlinePane } from '@/components/CourseOutlinePane'
+import { SourceSidebarPane } from '@/components/SourceSidebarPane'
 import { WorkspacePane, type WorkspaceView } from '@/components/WorkspacePane'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Progress } from '@/components/ui/progress'
 import { ensureDesktopApiFallback } from '@/lib/desktopApiFallback'
 import { cn } from '@/lib/utils'
 import { useLearningStore } from '@/store'
@@ -40,10 +38,6 @@ function App() {
   const bootState = useLearningStore((state) => state.bootState)
   const courseData = useLearningStore((state) => state.courseData)
   const currentNodeId = useLearningStore((state) => state.currentNodeId)
-  const distillRequestState = useLearningStore((state) => state.distillRequestState)
-  const distillProgressPercent = useLearningStore((state) => state.distillProgressPercent)
-  const distillStatusMessage = useLearningStore((state) => state.distillStatusMessage)
-  const distillError = useLearningStore((state) => state.distillError)
   const runtimeSettings = useLearningStore((state) => state.runtimeSettings)
   const toast = useLearningStore((state) => state.toast)
   const hydrateApp = useLearningStore((state) => state.hydrateApp)
@@ -76,11 +70,11 @@ function App() {
         await loadCourseFromText(result.text, result.path)
         setShowLearningHome(false)
         setWorkspaceView('learn')
-        pushToast('课程包已载入', result.path, 'success')
+        pushToast('资料包已载入', result.path, 'success')
       })
       .catch((error) => {
         queryImportedPackageRef.current = null
-        pushToast('课程包载入失败', error instanceof Error ? error.message : String(error), 'error')
+        pushToast('资料包载入失败', error instanceof Error ? error.message : String(error), 'error')
       })
   }, [bootState, loadCourseFromText, pushToast])
 
@@ -150,7 +144,6 @@ function App() {
     window.addEventListener('pointerup', handlePointerUp, { once: true })
   }
 
-  const showDistillNotice = distillRequestState === 'loading' || Boolean(distillError)
   const workspaceNoticeStyle = {
     left: `${sidebarWidth + 8}px`,
     right: 0,
@@ -165,8 +158,8 @@ function App() {
               <LoaderCircle className="size-5 animate-spin" />
             </div>
             <div className="space-y-1">
-              <p className="text-sm font-medium text-foreground">正在恢复你的伴学档案</p>
-              <p className="text-sm text-muted-foreground">课程、进度和聊天记录都会在这里无缝续上。</p>
+              <p className="text-sm font-medium text-foreground">正在恢复专注页</p>
+              <p className="text-sm text-muted-foreground">资料、进度和记录都会在这里续上。</p>
             </div>
           </CardContent>
         </Card>
@@ -186,60 +179,12 @@ function App() {
         onClose={() => void window.desktopAPI.close()}
       />
 
-      {showDistillNotice || toast ? (
+      {toast ? (
         <div
           className="pointer-events-none absolute top-[52px] z-40 flex justify-center px-5"
           style={workspaceNoticeStyle}
         >
           <div className="flex w-full max-w-[540px] flex-col items-center gap-3">
-            {showDistillNotice ? (
-              <Card
-                className={cn(
-                  'glass-panel-strong toast-enter pointer-events-auto w-full overflow-hidden rounded-[22px]',
-                  distillError && 'border-destructive/25',
-                )}
-              >
-                <CardContent className="space-y-4 p-3.5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="space-y-1.5">
-                      <div className="text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground">整理任务</div>
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={cn(
-                            'inline-flex size-2 rounded-full bg-white/70 shadow-[0_0_10px_rgba(255,255,255,0.18)]',
-                            distillError && 'bg-destructive shadow-[0_0_12px_hsl(var(--destructive)/0.8)]',
-                          )}
-                        />
-                        <p className="text-sm font-semibold text-foreground">
-                          {distillRequestState === 'loading' ? '后台整理中' : '整理失败'}
-                        </p>
-                      </div>
-                      <p className="text-xs leading-5 text-muted-foreground">
-                        {distillRequestState === 'loading'
-                          ? distillStatusMessage || '正在抓取字幕、清洗文本并整理 Codex 原材料。'
-                          : distillError}
-                      </p>
-                    </div>
-                    {distillRequestState === 'loading' ? (
-                      <Badge variant="outline" className="border-white/10 bg-white/[0.06] text-foreground/85">
-                        {Math.max(0, Math.min(100, Math.round(distillProgressPercent)))}%
-                      </Badge>
-                    ) : null}
-                  </div>
-
-                  {distillRequestState === 'loading' ? (
-                    <div className="space-y-2.5">
-                      <Progress value={Math.max(4, Math.min(100, distillProgressPercent || 4))} className="h-1.5 bg-white/8" />
-                      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                        <span>整理不会打断你当前的学习流程。</span>
-                        <span>后台运行</span>
-                      </div>
-                    </div>
-                  ) : null}
-                </CardContent>
-              </Card>
-            ) : null}
-
             {toast ? (
               <Card className="glass-panel-strong toast-enter pointer-events-auto w-[min(460px,100%)] overflow-hidden rounded-[22px]">
                 <CardContent className="flex items-start gap-3 p-3.5">
@@ -279,7 +224,7 @@ function App() {
       ) : null}
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <CourseOutlinePane
+        <SourceSidebarPane
           workspaceView={workspaceView}
           onSelectView={handleSelectWorkspaceView}
           onActivateLearningNode={() => {

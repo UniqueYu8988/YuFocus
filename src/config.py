@@ -45,19 +45,23 @@ OUTPUT_DIR = os.path.abspath(
 )
 SESSDATA = os.environ.get("BILIBILI_SESSDATA", "").strip()
 
-TRANSCRIPTION_PROVIDER = (os.environ.get("ONBOARD_TRANSCRIPTION_PROVIDER", "local_sensevoice").strip() or "local_sensevoice").lower()
-LOCAL_TRANSCRIPTION_ROOT = os.environ.get("ONBOARD_LOCAL_TRANSCRIPTION_ROOT", "").strip()
-LOCAL_TRANSCRIPTION_PYTHON = os.environ.get("ONBOARD_LOCAL_TRANSCRIPTION_PYTHON", "").strip()
+def _env(name: str, legacy_name: str, default: str = "") -> str:
+    return os.environ.get(name, "").strip() or os.environ.get(legacy_name, "").strip() or default
+
+
+TRANSCRIPTION_PROVIDER = (_env("SHIJIE_TRANSCRIPTION_PROVIDER", "ONBOARD_TRANSCRIPTION_PROVIDER", "local_sensevoice") or "local_sensevoice").lower()
+LOCAL_TRANSCRIPTION_ROOT = _env("SHIJIE_LOCAL_TRANSCRIPTION_ROOT", "ONBOARD_LOCAL_TRANSCRIPTION_ROOT")
+LOCAL_TRANSCRIPTION_PYTHON = _env("SHIJIE_LOCAL_TRANSCRIPTION_PYTHON", "ONBOARD_LOCAL_TRANSCRIPTION_PYTHON")
 LOCAL_TRANSCRIPTION_MODEL_ID = (
-    os.environ.get("ONBOARD_LOCAL_TRANSCRIPTION_MODEL_ID", "iic/SenseVoiceSmall").strip() or "iic/SenseVoiceSmall"
+    _env("SHIJIE_LOCAL_TRANSCRIPTION_MODEL_ID", "ONBOARD_LOCAL_TRANSCRIPTION_MODEL_ID", "iic/SenseVoiceSmall") or "iic/SenseVoiceSmall"
 )
-LOCAL_TRANSCRIPTION_DEVICE = os.environ.get("ONBOARD_LOCAL_TRANSCRIPTION_DEVICE", "cuda:0").strip() or "cuda:0"
-LOCAL_TRANSCRIPTION_LANGUAGE = os.environ.get("ONBOARD_LOCAL_TRANSCRIPTION_LANGUAGE", "zh").strip() or "zh"
-LOCAL_TRANSCRIPTION_TIMEOUT = int(os.environ.get("ONBOARD_LOCAL_TRANSCRIPTION_TIMEOUT", "600") or "600")
-RESOURCE_MODE = (os.environ.get("ONBOARD_RESOURCE_MODE", "balanced").strip().lower() or "balanced")
+LOCAL_TRANSCRIPTION_DEVICE = _env("SHIJIE_LOCAL_TRANSCRIPTION_DEVICE", "ONBOARD_LOCAL_TRANSCRIPTION_DEVICE", "cuda:0") or "cuda:0"
+LOCAL_TRANSCRIPTION_LANGUAGE = _env("SHIJIE_LOCAL_TRANSCRIPTION_LANGUAGE", "ONBOARD_LOCAL_TRANSCRIPTION_LANGUAGE", "zh") or "zh"
+LOCAL_TRANSCRIPTION_TIMEOUT = int(_env("SHIJIE_LOCAL_TRANSCRIPTION_TIMEOUT", "ONBOARD_LOCAL_TRANSCRIPTION_TIMEOUT", "600") or "600")
+RESOURCE_MODE = (_env("SHIJIE_RESOURCE_MODE", "ONBOARD_RESOURCE_MODE", "balanced").lower() or "balanced")
 if RESOURCE_MODE not in {"fast", "balanced", "background"}:
     RESOURCE_MODE = "balanced"
-BACKGROUND_MODE = RESOURCE_MODE == "background" or os.environ.get("ONBOARD_BACKGROUND_MODE", "").strip() == "1"
+BACKGROUND_MODE = RESOURCE_MODE == "background" or _env("SHIJIE_BACKGROUND_MODE", "ONBOARD_BACKGROUND_MODE") == "1"
 
 BASE_HEADERS = {
     "User-Agent": (

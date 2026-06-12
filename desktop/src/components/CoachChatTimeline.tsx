@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { LoaderCircle, MessageSquareDashed, Square, Volume2 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { ArticleHtmlRenderer } from '@/components/ArticleHtmlRenderer'
 import { cn } from '@/lib/utils'
 import { useLearningStore } from '@/store'
 import { MarkdownRenderer } from '@/components/MarkdownRenderer'
@@ -9,6 +10,8 @@ import { buildLessonSpeechMarkdown, estimateMiniMaxSpeechCharacters, formatMiniM
 import teacherAvatar from '@/assets/teacher-avatar.svg'
 import studentAvatar from '@/assets/student-avatar.svg'
 
+// Chat-style rendering for the 专注 compatibility reader. Current short-video
+// production enters this surface as article/readable material, not as a course.
 function hasRenderableCoachContent(content: string) {
   const withoutCodeFences = content.replace(/```[\s\S]*?```/g, ' ')
   const withoutHeadings = withoutCodeFences.replace(/^\s*#{1,6}\s+/gm, '')
@@ -193,6 +196,8 @@ export function CoachChatTimeline() {
     () => visibleMessages.filter((message) => revealedMessageIds.includes(message.id)),
     [revealedMessageIds, visibleMessages],
   )
+  const articleReadingMode = Boolean(currentNode?.teacher_ready_content?.display_hints?.includes('article_reading'))
+  const articleHtml = currentNode?.teacher_ready_content?.teaching_html?.trim() ?? ''
   const lessonSpeechText = useMemo(() => (currentNode ? buildLessonSpeechMarkdown(currentNode) : ''), [currentNode])
   const lessonSpeechCharacters = useMemo(
     () => estimateMiniMaxSpeechCharacters(lessonSpeechText),
@@ -255,7 +260,12 @@ export function CoachChatTimeline() {
   return (
     <div
       ref={containerRef}
-      className="subtle-scrollbar h-full min-h-0 flex-1 overflow-y-auto overscroll-contain bg-[#171717] pr-1"
+      className={cn(
+        'subtle-scrollbar h-full min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1',
+        articleReadingMode
+          ? 'bg-[radial-gradient(circle_at_50%_0%,rgba(76,90,130,0.10),transparent_34%),linear-gradient(180deg,#191a1f_0%,#15161a_100%)]'
+          : 'bg-[#171717]',
+      )}
     >
       <div className="flex w-full flex-col gap-3 pt-2 pb-28">
         {renderedMessages.length ? (
@@ -266,6 +276,11 @@ export function CoachChatTimeline() {
             const isGroupStart = previousMessage?.role !== message.role
             const isGroupEnd = nextMessage?.role !== message.role
             const groupLabel = message.role === 'coach' ? coachDisplayName : ''
+            const isArticleCoachMessage =
+              message.role === 'coach' &&
+              articleReadingMode &&
+              message.content.length > 800 &&
+              /(^|\n)#{1,3}\s+/u.test(message.content)
 
             return (
               <article
@@ -280,10 +295,14 @@ export function CoachChatTimeline() {
                 <div
                   className={cn(
                     'flex min-w-0 items-start gap-2',
-                    message.role === 'coach' ? 'max-w-[94%]' : 'max-w-[72%] ml-auto flex-row-reverse',
+                    isArticleCoachMessage
+                      ? 'w-full max-w-full'
+                      : message.role === 'coach'
+                        ? 'max-w-[94%]'
+                        : 'max-w-[72%] ml-auto flex-row-reverse',
                   )}
                 >
-                  {showAvatar ? (
+                  {showAvatar && !isArticleCoachMessage ? (
                     <div
                       className={cn(
                         'flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/[0.08] bg-[#202224]',
@@ -299,12 +318,18 @@ export function CoachChatTimeline() {
                         className="size-full object-cover"
                       />
                     </div>
-                  ) : (
+                  ) : !isArticleCoachMessage ? (
                     <div className="size-9 shrink-0" aria-hidden />
-                  )}
+                  ) : null}
 
-                  <div className={cn('min-w-0 max-w-full', message.role === 'coach' && 'pl-6', message.role === 'user' && 'flex flex-col items-end')}>
-                    {showAvatar && groupLabel ? (
+                  <div
+                    className={cn(
+                      'min-w-0 max-w-full',
+                      isArticleCoachMessage ? 'w-full' : message.role === 'coach' && 'pl-6',
+                      message.role === 'user' && 'flex flex-col items-end',
+                    )}
+                  >
+                    {showAvatar && groupLabel && !isArticleCoachMessage ? (
                       <div
                         className={cn(
                           'mb-1 pl-3 text-[12px] font-semibold leading-[18px] tracking-tight text-[#d7dee8]',
@@ -316,13 +341,28 @@ export function CoachChatTimeline() {
                     ) : null}
 
                     {message.role === 'coach' ? (
-                      <div className="inline-flex max-w-full flex-col rounded-[22px] border border-white/[0.06] bg-[#181818] px-4 py-3.5 shadow-[0_8px_22px_rgba(0,0,0,0.10)]">
-                        <MarkdownRenderer
-                          content={message.content}
-                          hideLeadHeading
-                          className="space-y-3"
-                        />
-                      </div>
+                      isArticleCoachMessage ? (
+                        <div className="mx-auto w-full max-w-[1160px] px-3 py-4">
+                          {articleHtml ? (
+                            <ArticleHtmlRenderer html={articleHtml} />
+                          ) : (
+                            <MarkdownRenderer
+                              content={message.content}
+                              hideLeadHeading
+                              articleMode
+                              className="space-y-5"
+                            />
+                          )}
+                        </div>
+                      ) : (
+                        <div className="inline-flex max-w-full flex-col rounded-[22px] border border-white/[0.06] bg-[#181818] px-4 py-3.5 shadow-[0_8px_22px_rgba(0,0,0,0.10)]">
+                          <MarkdownRenderer
+                            content={message.content}
+                            hideLeadHeading
+                            className="space-y-3"
+                          />
+                        </div>
+                      )
                     ) : (
                       <div
                         className={cn(
@@ -347,8 +387,8 @@ export function CoachChatTimeline() {
                 <MessageSquareDashed size={18} />
               </div>
               <div className="space-y-1">
-                <div className="text-sm font-medium text-foreground">教练已经就位</div>
-                <p className="text-sm leading-6 text-muted-foreground">选中一节小关后，这里会开始讲解、提问、补正和推进。</p>
+                <div className="text-sm font-medium text-foreground">阅读台已就绪</div>
+                <p className="text-sm leading-6 text-muted-foreground">选中一个小节后，这里会显示正文、回看和推进记录。</p>
               </div>
             </CardContent>
           </Card>
