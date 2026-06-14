@@ -2,29 +2,29 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const WORKFLOW_DOCUMENTS = {
-  project_context: {
-    title: '项目语境',
-    relativePath: 'PROJECT_CONTEXT.md',
+  agents: {
+    title: 'AI 工作入口',
+    relativePath: 'AGENTS.md',
   },
-  editorial_pipeline: {
-    title: '编稿流程',
-    relativePath: path.join('docs', 'video-editorial-pipeline.md'),
+  product: {
+    title: '产品边界',
+    relativePath: 'PRODUCT.md',
   },
-  system_optimization_audit: {
-    title: '系统优化审计',
-    relativePath: path.join('docs', 'system-optimization-audit.md'),
+  architecture: {
+    title: '技术结构',
+    relativePath: 'ARCHITECTURE.md',
   },
-  cleanup_baseline: {
-    title: '清理基线',
-    relativePath: path.join('docs', 'cleanup-baseline.md'),
+  current_state: {
+    title: '当前状态',
+    relativePath: 'CURRENT_STATE.md',
   },
-  email_contract: {
-    title: '邮件合同检查',
-    relativePath: path.join('src', 'check_editorial_email_contract.py'),
+  baseline_acceptance: {
+    title: '核心验收',
+    relativePath: path.join('docs', 'BASELINE_ACCEPTANCE.md'),
   },
-  distiller_core: {
-    title: 'distiller 核心逻辑',
-    relativePath: path.join('src', 'distiller.py'),
+  stabilization_plan: {
+    title: '稳定化计划',
+    relativePath: path.join('docs', 'plans', 'STABILIZATION_PLAN.md'),
   },
 } as const
 

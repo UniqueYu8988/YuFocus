@@ -27,6 +27,17 @@ function resolvePortableExecutableDir(execPath: string, portableExecutableDir?: 
   return portableExecutableDir || path.dirname(execPath)
 }
 
+function looksLikeDevProjectRoot(candidate: string) {
+  const requiredFiles = [
+    'AGENTS.md',
+    'PRODUCT.md',
+    'ARCHITECTURE.md',
+    path.join('src', 'distiller.py'),
+    path.join('desktop', 'package.json'),
+  ]
+  return requiredFiles.every((relativePath) => fs.existsSync(path.join(candidate, relativePath)))
+}
+
 function resolveDevProjectRoot(execPath: string, cwd: string, moduleDir: string) {
   const searchRoots = [
     path.dirname(execPath),
@@ -37,10 +48,7 @@ function resolveDevProjectRoot(execPath: string, cwd: string, moduleDir: string)
   for (const root of searchRoots) {
     for (let depth = 0; depth <= 6; depth += 1) {
       const candidate = path.resolve(root, ...Array(depth).fill('..'))
-      if (
-        fs.existsSync(path.join(candidate, 'PROJECT_CONTEXT.md')) &&
-        fs.existsSync(path.join(candidate, 'src', 'distiller.py'))
-      ) {
+      if (looksLikeDevProjectRoot(candidate)) {
         return candidate
       }
     }

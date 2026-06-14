@@ -33,8 +33,8 @@ export function formatDistillTimingSummary(stageTimings?: {
   return `本次整理耗时约 ${Math.round(totalSeconds)} 秒`
 }
 
-function normalizeDistillStage(stage?: string): DistillStage {
-  switch ((stage || '').trim()) {
+function normalizeDistillStage(stage?: unknown): DistillStage {
+  switch (String(stage ?? '').trim()) {
     case 'metadata':
       return 'metadata'
     case 'metadata_ready':
@@ -80,18 +80,24 @@ function formatDistillStageLabel(stage: DistillStage, cacheHint?: string | null)
   }
 }
 
-export function buildDistillProgressSnapshot(payload: DistillProgressPayload): DistillProgressSnapshot {
-  const stage = normalizeDistillStage(payload.stage)
-  const cacheHint = payload.cacheHint ?? null
+function normalizeProgressNumber(value: unknown) {
+  const numberValue = Number(value ?? 0)
+  return Number.isFinite(numberValue) ? numberValue : 0
+}
+
+export function buildDistillProgressSnapshot(payload?: Partial<DistillProgressPayload> | null): DistillProgressSnapshot {
+  const safePayload = payload ?? {}
+  const stage = normalizeDistillStage(safePayload.stage)
+  const cacheHint = safePayload.cacheHint ?? null
   return {
     stage,
     stageLabel: formatDistillStageLabel(stage, cacheHint),
-    message: payload.message || '正在整理资料包，请稍候…',
+    message: safePayload.message || '正在整理资料包，请稍候…',
     cacheHint,
-    audioCompleted: Number(payload.audioCompleted ?? 0) || 0,
-    audioTotal: Number(payload.audioTotal ?? 0) || 0,
-    chunkCompleted: Number(payload.chunkCompleted ?? 0) || 0,
-    chunkTotal: Number(payload.chunkTotal ?? 0) || 0,
-    resumed: Boolean(payload.resumed),
+    audioCompleted: normalizeProgressNumber(safePayload.audioCompleted),
+    audioTotal: normalizeProgressNumber(safePayload.audioTotal),
+    chunkCompleted: normalizeProgressNumber(safePayload.chunkCompleted),
+    chunkTotal: normalizeProgressNumber(safePayload.chunkTotal),
+    resumed: Boolean(safePayload.resumed),
   }
 }

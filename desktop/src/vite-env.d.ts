@@ -303,7 +303,7 @@ type KnowledgeLibraryPayload = {
   records: KnowledgeLibrarySummary[]
 }
 
-type WorkflowDocumentKey = 'project_context' | 'editorial_pipeline' | 'system_optimization_audit' | 'cleanup_baseline' | 'email_contract' | 'distiller_core'
+type WorkflowDocumentKey = 'agents' | 'product' | 'architecture' | 'current_state' | 'baseline_acceptance' | 'stabilization_plan'
 
 type WorkflowDocumentPayload = {
   key: WorkflowDocumentKey
