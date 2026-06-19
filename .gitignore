@@ -5,6 +5,7 @@ __pycache__/
 *.pyd
 
 # Local runtime data
+data/
 .biliarchive.local.json
 .biliarchive.window.json
 .zhiyuli-runtime.log

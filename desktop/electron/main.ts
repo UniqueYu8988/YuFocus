@@ -1,59 +1,57 @@
 import { app } from 'electron'
 import path from 'node:path'
-import { registerAppLifecycle } from './appLifecycle'
-import { createAutomationRuntime } from './automationRuntime'
+import { registerAppLifecycle } from './runtime/appLifecycle'
+import { createAutomationRuntime } from './runtime/automationRuntime'
 import {
   createBackendRuntime,
   type DistillProgressPayload,
-} from './backendRuntime'
+} from './runtime/backendRuntime'
 import {
   registerDialogIpcHandlers,
-} from './dialogHandlers'
-import { createMaterialDeletion } from './materialDeletion'
+} from './ipc/dialogHandlers'
+import { createMaterialDeletion } from './services/materialDeletion'
 import {
   listMaterialPackages as scanMaterialPackages,
-} from './materialInventory'
-import { createLearningLibraryRuntime } from './learningLibraryRuntime'
-import { registerLearningLibraryIpcHandlers } from './learningLibraryIpcHandlers'
+} from './services/materialInventory'
+import { createLearningLibraryRuntime } from './legacy/learningLibraryRuntime'
+import { registerLearningLibraryIpcHandlers } from './ipc/learningLibraryIpcHandlers'
 import {
   findKnowledgeRecordForMaterial,
   loadKnowledgeLibraryFile,
   resolveKnowledgeOutputDir,
   saveKnowledgeLibraryFile,
-} from './knowledgeLibrary'
-import { registerKnowledgeIpcHandlers } from './knowledgeIpcHandlers'
-import { runObsidianExportCliIfRequested as runObsidianExportCli } from './obsidianCli'
-import { registerObsidianIpcHandlers } from './obsidianIpcHandlers'
-import { registerSettingsAutomationIpcHandlers } from './settingsAutomationIpcHandlers'
-import { registerSystemIpcHandlers } from './systemIpcHandlers'
-import { createPinnedSourcesStore } from './pinnedSourcesStore'
-import { createSourceDiscoveryRuntime } from './sourceDiscoveryRuntime'
-import { createMaterialRecordBridge } from './materialRecordBridge'
+} from './services/knowledgeLibrary'
+import { registerKnowledgeIpcHandlers } from './ipc/knowledgeIpcHandlers'
+import { registerSettingsAutomationIpcHandlers } from './ipc/settingsAutomationIpcHandlers'
+import { registerSystemIpcHandlers } from './ipc/systemIpcHandlers'
+import { createPinnedSourcesStore } from './services/pinnedSourcesStore'
+import { createSourceDiscoveryRuntime } from './providers/sourceDiscoveryRuntime'
+import { createMaterialRecordBridge } from './services/materialRecordBridge'
+import { resolveVideoRegistryRoot } from './services/videoRegistry'
 import {
   createRuntimePaths,
   createSettingsDefaultsContext as createRuntimeSettingsDefaultsContext,
   resolveCanonicalOutputRoot,
   resolveCourseImportDefaultPath as resolveRuntimeCourseImportDefaultPath,
   resolveMaterialOutputDir as resolveMaterialOutputDirectory,
-} from './runtimePaths'
+} from './runtime/runtimePaths'
 import {
   createRuntimeStores,
   migrateLegacyRuntimeStoreIfNeeded,
-} from './runtimeStores'
-import { createRuntimeLogger } from './runtimeLogger'
+} from './runtime/runtimeStores'
+import { createRuntimeLogger } from './runtime/runtimeLogger'
 import {
   type RuntimeSettings,
-} from './settings'
-import { createSettingsRuntime } from './settingsRuntime'
-import { registerMaterialIpcHandlers } from './materialIpcHandlers'
-import { registerBilibiliSourceIpcHandlers } from './sourceIpcHandlers'
-import { registerTtsIpcHandlers } from './ttsIpcHandlers'
+} from './runtime/settings'
+import { createSettingsRuntime } from './runtime/settingsRuntime'
+import { registerMaterialIpcHandlers } from './ipc/materialIpcHandlers'
+import { registerBilibiliSourceIpcHandlers } from './ipc/sourceIpcHandlers'
 import {
   createWindowController,
-} from './windowController'
-import { registerWindowIpcHandlers } from './windowIpcHandlers'
-import { registerWorkbenchQueueIpcHandlers } from './workbenchQueueIpcHandlers'
-import { createWorkbenchQueueStore } from './workbenchQueueStore'
+} from './runtime/windowController'
+import { registerWindowIpcHandlers } from './ipc/windowIpcHandlers'
+import { registerWorkbenchQueueIpcHandlers } from './ipc/workbenchQueueIpcHandlers'
+import { createWorkbenchQueueStore } from './queue/workbenchQueueStore'
 
 const APP_NAME = '视界专注'
 const APP_ID = 'ShijieFocus'
@@ -86,6 +84,7 @@ const runtimePaths = createRuntimePaths({
 const {
   devProjectRoot,
   dataRoot,
+  canonicalDataRoot,
   userDataRoot,
   settingsPath,
   windowStatePath,
@@ -93,6 +92,7 @@ const {
   runtimeLogPath,
   iconPath,
 } = runtimePaths
+const videoRegistryRoot = resolveVideoRegistryRoot(canonicalDataRoot)
 
 const {
   appendRuntimeLog,
@@ -128,10 +128,6 @@ const {
   saveLearningLibraryState,
   upsertLearningRecord,
 } = learningLibraryRuntime
-
-function getTtsServicePaths() {
-  return { dataRoot, userDataRoot }
-}
 
 const settingsRuntime = createSettingsRuntime({
   readSettings: () => secureStore.get('runtimeSettings'),
@@ -198,6 +194,7 @@ const sourceDiscoveryRuntime = createSourceDiscoveryRuntime({
   loadQueue: loadWorkbenchQueue,
   listMaterialPackages,
   appendRuntimeLog,
+  registryRoot: videoRegistryRoot,
   discoveryWindowMs: BACKGROUND_DISCOVERY_WINDOW_MS,
   sourceQueryBatchSize: BILIBILI_SOURCE_QUERY_BATCH_SIZE,
   recentVideoPageSize: BILIBILI_RECENT_VIDEO_PAGE_SIZE,
@@ -246,7 +243,6 @@ const {
 } = backendRuntime
 
 const automationRuntime = createAutomationRuntime({
-  appId: APP_ID,
   checkIntervalMinutes: BACKGROUND_CHECK_INTERVAL_MINUTES,
   queueConcurrency: WORKBENCH_QUEUE_CONCURRENCY,
   loadSettings,
@@ -344,7 +340,6 @@ function emitDistillProgress(payload: DistillProgressPayload) {
 registerAppLifecycle({
   argv: process.argv,
   windowController,
-  runObsidianExportCliIfRequested: () => runObsidianExportCli(process.argv, loadSettings),
   recoverInterruptedWorkbenchQueue,
   refreshBackgroundAutomationSchedule,
 })
@@ -356,7 +351,6 @@ registerWindowIpcHandlers({
 })
 
 registerSettingsAutomationIpcHandlers({
-  appId: APP_ID,
   loadSettings,
   saveSettings,
   getBackgroundAutomationStatus,
@@ -372,7 +366,6 @@ registerDialogIpcHandlers({
 registerMaterialIpcHandlers({
   loadSettings,
   runPythonDistiller,
-  runPythonMaterialSummary,
   listMaterialPackages,
   deleteMaterialPackage,
   archiveMaterialByPath: (materialPath) => archiveMaterialByPath(loadSettings(), materialPath),
@@ -388,6 +381,7 @@ registerBilibiliSourceIpcHandlers({
   loadSettings,
   loadPinnedBilibiliSources,
   savePinnedBilibiliSources,
+  registryRoot: videoRegistryRoot,
 })
 
 registerKnowledgeIpcHandlers({ loadSettings })
@@ -398,13 +392,6 @@ registerLearningLibraryIpcHandlers({
   refreshLearningLibraryStructure,
   upsertLearningRecord,
   deleteLearningRecord,
-})
-
-registerObsidianIpcHandlers({ loadSettings })
-
-registerTtsIpcHandlers({
-  loadSettings,
-  getTtsServicePaths,
 })
 
 registerSystemIpcHandlers({ resolveDevProjectRoot: () => devProjectRoot })

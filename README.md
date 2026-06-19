@@ -1,6 +1,6 @@
 # 视界专注
 
-视界专注是一个本地优先的桌面工具，用来把 B 站视频或本地音视频整理成可阅读、可保存、可导入 NotebookLM 的资料，并为短视频生成精读稿。
+视界专注是一个本地优先的桌面工具，用来把 B 站视频或本地音视频整理成可阅读、可保存、可导入 NotebookLM 的字幕清洗资料。
 
 ## 项目简介
 
@@ -12,10 +12,9 @@
 
 - B 站视频输入、字幕获取和字幕清洗。
 - 本地视频或音频输入，本地转写作为无字幕兜底。
-- 短视频精读稿生成。
 - 长视频和本地媒体的 NotebookLM 清洗稿出口。
 - 任务队列、来源管理和基础后台能力。
-- 档案、灵犀、设置、TTS、Obsidian、邮件等能力保留在项目中，但当前是否进入近期主线以正式文档为准。
+- 设置和必要兼容层保留在项目中；精读、TTS、Obsidian、邮件、旧档案和旧灵犀不属于当前主线。
 
 ## 项目结构入口
 
@@ -67,13 +66,7 @@ npm run build:web
 Python 语法检查：
 
 ```powershell
-python -m py_compile src\bilibili_api.py src\audio_fallback.py src\local_audio_client.py src\distiller.py src\validate_content_synthesis_plan.py
-```
-
-邮件正文契约检查：
-
-```powershell
-python src\check_editorial_email_contract.py
+python -m py_compile src\bilibili_api.py src\audio_fallback.py src\local_audio_client.py src\distiller.py
 ```
 
 进度解析纯函数检查：
@@ -82,19 +75,28 @@ python src\check_editorial_email_contract.py
 cd desktop && node --experimental-strip-types --no-warnings scripts/check-distill-progress.mjs
 ```
 
+视频注册表稳定性检查：
+
+```powershell
+cd desktop && node --experimental-strip-types --no-warnings scripts/check-video-registry-layer.mjs
+```
+
 ## 数据与安全提示
 
 重要数据位置：
 
-- 默认输出根目录：`C:\Users\Yu\AI\视界专注\output`
-- 内部材料包：`output/materials/*.course_material`
-- 灵犀索引：`output/knowledge/knowledge_library.json`
+- 默认数据根目录：`C:\Users\Yu\AI\视界专注\data`
+- 当前生产材料包：`data/materials/{up_id}/{video_id}`
+- UP 主视频注册表：`data/registry/{up_id}.json`
+- NotebookLM 导入稿：`data/materials/{up_id}/{video_id}/exports/notebooklm.md`
+- 遗留知识库：`data/legacy/knowledge/knowledge_library.json`
 - Electron 用户数据目录：`C:\Users\Yu\AppData\Roaming\视界专注`
 - Electron Store：`C:\Users\Yu\AppData\Roaming\视界专注\shijie-focus-secure.json`
 
 安全原则：
 
-- 不随意删除或移动 `output` 下的资料。
+- 不随意删除或移动 `data/materials` 下的资料。
+- 不随意删除 `data/registry`，否则 UP 主历史视频列表会丢失。
 - 不公开 Electron Store、备份文件或任何秘密值。
 - 不把旧路线文档当作当前事实来源。
 - 修改前先确认任务范围和相关验收。

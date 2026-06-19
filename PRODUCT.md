@@ -4,7 +4,7 @@
 
 ## 产品一句话说明
 
-视界专注是一个本地优先的桌面工具，用来把 B 站视频或本地音视频整理成可阅读、可归档、可导入 NotebookLM 的资料，并为短视频生成精读稿。
+视界专注是一个本地优先的桌面工具。当前核心是把 UP 主 / 来源视频和本地音视频的字幕获取、清洗成可阅读、可归档、可导入 NotebookLM 的资料。
 
 ## 核心用户
 
@@ -13,44 +13,48 @@
 
 ## 核心使用场景
 
-1. 主流程：短视频精读。输入短视频，获取字幕，清洗字幕，调用 MiMo，生成轻量、清晰、适合快速阅读的精读稿。
-2. 辅助流程：长视频和本地媒体。输入长视频或本地视频/音频，获取字幕或本地转写，清洗后生成适合直接导入 NotebookLM 的 Markdown 文件。
-3. 维护关注来源或收藏来源，后续用于发现候选视频；是否自动制作仍需确认。
+1. 主流程：UP 主 / 来源视频列表 → 批量选择 → 字幕获取 → 字幕清洗 → NotebookLM 可导入资料。
+2. 辅助输入：单个 B 站视频、本地视频或本地音频，也进入同一条字幕获取和清洗链路。
+3. 后续消费：总结、精读稿、邮件和 TTS 暂停作为主线推进，以后作为独立 Summary Pipeline 或阅读消费模块。
 
-## 已确认产品方向：方案 A
+## 已确认下一阶段主线：UP 主驱动的字幕清洗
 
-方案 A 是下一版主方向。
+当前不再把短视频精读、邮件推送或 TTS 作为下一阶段主线。下一阶段先把字幕系统稳定为核心数据层。
 
-- 主流程是短视频精读：重点不是做旧课程或重型学习包，而是把短视频变成能快速阅读、快速判断价值的精读稿。
-- 辅助流程是长视频和本地媒体清洗：重点不是生成课程，而是产出可以直接放进 NotebookLM 的 Markdown 清洗稿。
+- 主流程是 UP 主 / 来源视频列表驱动的字幕清洗：先选视频，再获取字幕或转写，再清洗成 NotebookLM 可导入资料。
+- 字幕系统是当前核心数据层：它产出原始字幕、清洗正文、NotebookLM 导入稿和必要索引。
+- UP 主视频列表以本地 `data/registry/{up_id}.json` 为稳定事实来源；B 站 API 只用于刷新和补充元数据，不能因为 API 临时缺失就删除本地视频。
+- 总结系统是后续独立消费层：以后可以读取字幕清洗产物，但不应继续绑在字幕清洗主流程里。
 - 旧课程系统、旧学习包、旧档案数据映射和旧独立灵犀页面进入遗留状态，暂时不作为下一版重点。
-- `.course_material` 暂时保留为内部工作目录，用于兼容现有代码和历史数据。
-- `output/notebooklm/` 是面向用户直接使用的长期资料库，是长视频和本地媒体的最终出口。
+- 新生产输出统一写入 `data/materials/{up_id}/{video_id}/`。
+- 每个材料包内部的 `exports/notebooklm.md` 是 NotebookLM 导入稿的唯一主出口。
+- 当前主队列已进入字幕清洗-only 模式：UP 主批量加入和后台来源发现会显式创建 `pipelineMode: 'subtitle_only'`、`editorialMode: 'off'`，队列完成于 NotebookLM 导入稿阶段，不再继续触发精读稿、邮件或 TTS。
 
 ## NotebookLM 清洗稿资料库
 
-`output/notebooklm/` 是核心产品能力。它保存用户可以直接打开、阅读、复制或导入 NotebookLM 的最终 Markdown 文件。
+`data/materials/{up_id}/{video_id}/exports/notebooklm.md` 是核心产品能力。它保存用户可以直接打开、阅读、复制或导入 NotebookLM 的最终 Markdown 文件。
 
 第一版目录结构：
 
 ```text
-output/notebooklm/
-├── long-video/
-├── local-media/
-└── index.md
+data/materials/{up_id}/{video_id}/
+├── raw_transcript.txt
+├── cleaned_transcript.txt
+├── content.md
+├── manifest.json
+├── run_state.json
+└── exports/
+    └── notebooklm.md
 ```
 
 | 路径 | 用途 |
 |---|---|
-| `output/notebooklm/long-video/` | 存放在线视频长视频清洗稿。 |
-| `output/notebooklm/local-media/` | 存放本地视频和音频清洗稿。 |
-| `output/notebooklm/index.md` | 记录清洗稿的标题、来源、日期、文件路径和基本状态。 |
-
-每个来源优先生成一个主要 Markdown 文件。建议命名：
-
-```text
-YYYY-MM-DD_标题_来源ID.md
-```
+| `data/materials/{up_id}/{video_id}/raw_transcript.txt` | 原始字幕或转写文本证据。 |
+| `data/materials/{up_id}/{video_id}/cleaned_transcript.txt` | 清洗后的正文文本。 |
+| `data/materials/{up_id}/{video_id}/content.md` | 清洗后的 Markdown 资料。 |
+| `data/materials/{up_id}/{video_id}/exports/notebooklm.md` | NotebookLM 导入稿。 |
+| `data/materials/{up_id}/{video_id}/manifest.json` | 材料包元数据。 |
+| `data/materials/{up_id}/{video_id}/run_state.json` | 当前处理状态。 |
 
 第一版文件至少包含：
 
@@ -71,29 +75,25 @@ YYYY-MM-DD_标题_来源ID.md
 - 复杂中间结果；
 - 只有软件内部才能理解的字段。
 
-`output/notebooklm/` 与 `.course_material` 的关系：
-
-| 类型 | 面向谁 | 用途 | 是否可以单独阅读 |
-|---|---|---|---|
-| `.course_material` | 软件内部 | 保存字幕、缓存、状态、精读稿和兼容旧流程所需文件 | 不要求 |
-| `output/notebooklm/` | 用户 | 保存最终清洗稿，直接导入 NotebookLM 或单独阅读 | 必须可以 |
+当前生产资料只写入 `data/materials/{up_id}/{video_id}`。此前测试产生的旧 `output/` 内容已按项目负责人确认删除，后续不再作为生产输出或兼容读取来源。
 
 ## 当前真实功能
 
 ### 已由代码确认存在，仍需人工验收确认
 
-- 桌面端主界面：制作、视频来源、任务队列、专注、档案、灵犀、设置等入口。
+- 桌面端主界面：当前主入口已收束为“字幕流水线”、NotebookLM 输出、流程和设置；旧专注、灵犀、学习包和档案消费入口从主导航降级。
 - 流程透明页：代码中存在用于查看当前正式工作流文档的入口，已不再把旧项目语境、旧编稿流程、旧系统审计或旧清理基线作为默认入口。
 - B 站视频处理：读取视频信息、字幕、关注来源和来源视频；依赖 B 站 SESSDATA。
+- UP 主视频注册表：刷新来源视频时会把 API 结果合并进 `data/registry/{up_id}.json`，界面读取合并后的本地列表。
 - 本地音视频处理：通过文件选择入口进入整理流程。
-- Python 后端整理：生成 `.course_material` 资料目录，包含原始字幕、清洗稿、NotebookLM 导入稿和运行状态。
-- 短视频精读：调用 MiMo 文稿模型生成 `summary/article.md`、`summary/article.html`、`summary/cards.json`、`summary/review.json`、`summary/summary_status.json`。
-- 资料列表和档案：扫描 `output/materials/*.course_material`，显示清洗、编稿、字数、大小等状态。
-- 灵犀索引：使用 `output/knowledge/knowledge_library.json` 维护归档记录。
-- 设置：保存 B 站、MiMo、MiniMax、本地转写、Obsidian、后台检查和 SMTP 邮件相关配置。
-- 后台自动化框架：托盘驻留、定时检查、立即检查、暂停恢复、队列顺序处理和同一 BV 去重逻辑已存在。
-- TTS 朗读：支持 MiMo / MiniMax 配置和本地缓存。
-- Obsidian 导出：已有 IPC 入口和导出模块。
+- Python 后端整理：生成 `data/materials/{up_id}/{video_id}` 资料目录，包含原始字幕、清洗稿、NotebookLM 导入稿和运行状态。
+- 短视频精读：代码中仍存在调用 MiMo 生成 `summary/article.md`、`summary/article.html`、`summary/cards.json`、`summary/review.json`、`summary/summary_status.json` 的能力，但当前已从队列主流程和工作台 UI 隔离。
+- 资料列表和档案：扫描 `data/materials/{up_id}/{video_id}`，显示清洗、字数、大小等状态。
+- 灵犀索引：遗留兼容新写入隔离到 `data/legacy/knowledge/knowledge_library.json`。
+- 设置：当前 UI 只保留字幕主线需要的 B 站、MiMo 清洗、本地转写和输出配置；MiniMax、Obsidian、SMTP 邮件和 TTS 旧配置值保留在兼容层，不作为当前 UI 主入口。
+- 后台自动化框架：托盘驻留、定时检查、立即检查、暂停恢复、队列顺序处理和同一 BV 去重逻辑已存在；新建项默认进入 `subtitle_only`。
+- TTS 朗读：旧服务和 UI 入口已剪枝；旧配置值仍在兼容层保留，但不进入字幕主流程。
+- Obsidian 导出：旧 IPC / CLI / 导出模块已剪枝；旧配置值只作为兼容字段保留，不属于 NotebookLM 主输出。
 - 浏览器预览兜底：非 Electron 环境下提供只读或空实现，方便界面预览。
 
 ## 产品功能分级
@@ -109,12 +109,12 @@ YYYY-MM-DD_标题_来源ID.md
 | B 站视频输入 | 明确保留 | 这是当前最主要的视频来源入口。 |
 | 字幕获取 | 明确保留 | 有字幕时直接获取，比转写更快、更省钱、更稳定。 |
 | 字幕清洗 | 明确保留 | 软件的核心价值是把视频内容变成可读资料。 |
-| NotebookLM 清洗稿资料库 | 明确保留 | `output/notebooklm/` 是长视频和本地媒体的最终出口，可直接导入 NotebookLM。 |
+| NotebookLM 清洗稿资料库 | 明确保留 | 每个材料包内的 `exports/notebooklm.md` 是最终出口，可直接导入 NotebookLM。 |
 | 本地视频和音频输入 | 明确保留 | 本地资料不依赖平台，适合个人已有文件。 |
 | 本地语音转写 | 明确保留 | 无字幕视频、本地音视频都需要转写兜底。 |
-| MiMo 内容生成 | 明确保留 | 短视频精读、后续摘要和推送都依赖稳定的文稿生成能力。 |
+| MiMo 字幕清洗增强 | 明确保留 | 有 Key 时可增强字幕清洗；没有 Key 时应能回退规则清洗。 |
 | 任务队列 | 明确保留 | 批量处理视频时需要排队、去重、失败可见，避免手工盯着。 |
-| `.course_material` | 明确保留为内部工作目录 | 现有代码和资料都依赖它；暂时不改名、不迁移，但它不是用户最终出口。 |
+| 本地视频注册表 | 明确保留 | 保证 UP 主视频列表跨刷新、跨会话稳定，不让 API 临时缺失导致视频消失。 |
 
 ### B. 保留但需要改变
 
@@ -122,14 +122,14 @@ YYYY-MM-DD_标题_来源ID.md
 
 | 功能 | 当前判断 | 需要改变什么 |
 |---|---|---|
-| 长视频处理 | 保留但需要改变 | 未来重点是写入 `output/notebooklm/long-video/` 的 NotebookLM 清洗稿，不再走旧课程/学习包路线。 |
-| 短视频处理 | 保留但需要改变 | 未来重点应是更轻、更快、更适合日常阅读的精读稿，不追求长篇大而全。 |
-| 当前精读稿格式 | 保留但需要改变 | 现有 `article.md/html/cards/review/status` 可先保留，但下一版应服务“轻量、清晰、适合快速阅读”。 |
+| 长视频处理 | 保留但需要改变 | 未来重点是写入同一 `data/materials/{up_id}/{video_id}` 结构，不再走旧课程/学习包路线。 |
+| 短视频处理 | 保留但需要改变 | 当前先进入字幕清洗主线；是否生成总结由后续独立 Summary Pipeline 决定。 |
+| 当前精读稿格式 | 保留但暂停主线推进 | 现有 `article.md/html/cards/review/status` 可先保留，但本阶段不优化总结质量或格式。 |
 | 后台自动发现 | 保留但需要改变 | 能力有价值，但要先确认是否真的需要自动跑、跑多频繁、是否需要人工确认后再制作。 |
 | 收藏来源和关注来源 | 保留但需要改变 | 来源管理仍重要，但“收藏来源/关注来源”的产品语言和流程需要简化。 |
-| 邮件推送 | 保留但需要改变 | 是否单篇、日报、批次推送尚未确定；需要先定阅读场景。 |
+| 邮件推送 | 已退出当前主线 | 邮件发送服务已剪枝；如未来恢复，只能作为独立消费层重新设计，不能参与字幕清洗主流程。 |
 | 统计和 metrics | 保留但需要改变 | 未来应服务“花了多久、花了多少钱、产出是否值得”，而不是追旧材料缺失指标。 |
-| TTS | 保留但需要改变 | 朗读可以保留为辅助能力，但不是当前内容制作主线。 |
+| TTS | 已退出当前主线 | TTS 服务和 UI 入口已剪枝；旧配置值只作为兼容字段存在。 |
 
 ### C. 进入旧版遗留
 
@@ -148,32 +148,35 @@ YYYY-MM-DD_标题_来源ID.md
 
 这些需要项目负责人进一步确认，确认前不要开始重构或新功能开发。
 
-| 问题 | 选项 | 差别 |
-|---|---|---|
-| 短视频精读稿应该多长？ | 选项 1：很短，像日报卡片；选项 2：中等，3～6 分钟读完；选项 3：较长，接近深度文章 | 越短越适合每天快速看，越长越适合保存和复盘，但成本和阅读负担更高。 |
-| NotebookLM 清洗稿是否需要导读？ | 选项 1：只放元信息和正文；选项 2：正文前加一小段导读；选项 3：正文前加章节目录 | 选项 1 最稳定，选项 3 更适合长材料但制作规则更多。 |
-| 后台发现新视频后是否自动制作？ | 选项 1：只提醒不制作；选项 2：加入队列等待确认；选项 3：自动制作 | 自动化越强越省事，但越容易消耗 API、生成不需要的资料。 |
-| 邮件推送形态是什么？ | 选项 1：不推送，只在软件里看；选项 2：单篇完成后推送；选项 3：每日/每批合刊 | 单篇及时但容易打扰；合刊更像日报，但需要更明确的整理规则。 |
-| 旧档案/灵犀要不要迁移？ | 选项 1：不迁移，只保留历史；选项 2：以后按需导入少量重要资料；选项 3：全面迁移 | 不迁移最快；全面迁移最完整但会消耗大量稳定化时间。 |
+| 问题 | 当前处理 |
+|---|---|
+| Summary Pipeline 何时恢复 | 暂不决定。先完成字幕清洗-only 队列模式，再讨论总结、精读稿、邮件和 TTS 如何独立消费清洗产物。 |
+| NotebookLM 清洗稿是否需要导读 | 暂不决定。本阶段只保护字幕清洗正文和可导入资料，不设计导读格式。 |
+| 后台发现新视频后是否自动制作 | 暂不决定。当前先避免批量入队触发强制编稿。 |
+| 邮件推送形态 | 暂不决定。邮件不参与当前字幕清洗主线。 |
+| 旧档案/灵犀是否迁移 | 暂不决定。旧档案、旧灵犀、旧 course / lesson / 学习包体系暂不迁移。 |
 
 ### 已实现但存在问题
 
 - 旧档案、旧灵犀、旧学习包和旧材料映射主要是历史测试数据问题，已进入旧版遗留，暂不继续修复。
-- `output/materials` 中现有 51 个材料包里，50 个有 `manifest.json`、50 个有 `raw_transcript.txt`、50 个有 `exports/notebooklm.md`、49 个有 `summary/article.md`，但 0 个检测到 `metrics.json`。这先作为旧数据状态记录，不作为当前最高优先级。
+- 旧 `output/` 测试生成内容已按项目负责人确认删除，不再作为当前数据状态或验收对象。
 - `docs/VERIFICATION_BACKLOG.md` 中的问题仍是“待验证候选问题”，不能直接视为当前 Bug。
 - 项目可以通过 TypeScript 和 Python 语法检查；受控启动已确认首页和设置页可打开。
 
 ### 尚未实现
 
-- 邮件推送的最终产品形态尚未确认：单篇推送、日报合刊或批次推送仍需产品决定。
+- Summary Pipeline 的恢复时间和形态尚未确认；当前不推进总结质量、邮件形态或 TTS。
 - 效率观测的完整产品闭环尚未确认，尤其是耗时、token、产出质量如何展示和决策。
-- `output/notebooklm/` 目录和 `index.md` 只是本轮定义的产品契约，尚未创建，也尚未接入代码。
-- `.course_material` 仍是内部目录后缀，命名与当前“轻量资料目录”的产品语义不完全一致；本阶段不迁移，只把用户最终出口定义到 `output/notebooklm/`。
+- 新生产格式统一为 `data/materials/{up_id}/{video_id}`；不再依赖旧 `output/` 或 `.course_material` 作为当前生产数据。
+- UP 主批量加入队列已实现明确的“只清洗字幕”队列模式；当前默认创建 `pipelineMode: 'subtitle_only'`、`editorialMode: 'off'`。
 - 旧 Codex Goal 深写、课程制作、答题验收、Mermaid / KaTeX / Cytoscape 重型学习页不是当前产品方向。
 
 ## 当前不做
 
 - 不恢复旧课程制作路线。
+- 不把总结、精读稿、邮件或 TTS 作为当前主线推进。
+- 不继续设计总结内容格式、邮件形态或 TTS 体验。
+- 不在“字幕清洗-only”队列模式明确前批量加入大量 UP 主视频。
 - 不恢复 Codex Goal 长视频深写或旧 course-package 主生产流程。
 - 不继续追查旧档案、旧灵犀、旧学习包与旧材料之间的历史数据映射。
 - 不把新功能继续堆进已经职责较重的大文件。
@@ -183,34 +186,35 @@ YYYY-MM-DD_标题_来源ID.md
 
 ## 不可破坏的行为
 
-- 不能删除或覆盖 `output/materials/*.course_material` 中已有资料包。
+- 不能随意删除或覆盖新的 `data/materials` 资料。
 - 不能删除或泄露 `C:\Users\Yu\AppData\Roaming\视界专注\shijie-focus-secure.json` 及其备份里的设置、队列、来源和阅读记录。
 - 不能在文档、日志或 Git 中暴露 B 站 SESSDATA、MiMo API Key、MiniMax Key、SMTP 授权码等秘密值。
 - 同一 BV 已入队或已生成资料时，不应重复制作。
+- “清空任务队列”只移除非处理中的队列记录，不删除、归档或改写 `data/materials` 资料包。
 - 关闭窗口后仍应保留托盘和后台任务状态，除非用户明确退出或暂停。
 - 长视频和本地视频的 NotebookLM 导入稿路径和内容结构要保持可用。
-- `output/notebooklm/` 中的 Markdown 不能依赖 `.course_material` 才能理解。
-- `output/notebooklm/` 中的 Markdown 不能写入秘密值、调试日志、内部状态或复杂中间结果。
-- 短视频已有精读稿时，应能复用，不应重复消耗 API 资源。
+- `exports/notebooklm.md` 不能依赖旧目录或旧材料格式才能理解。
+- `exports/notebooklm.md` 不能写入秘密值、调试日志、内部状态或复杂中间结果。
+- 已有字幕清洗产物或精读稿时，应能复用，不应重复消耗 API 资源。
 
 ## 核心数据
 
 | 数据 | 用途 | 是否敏感 | 是否允许删除 |
 |---|---|---|---|
-| `output/materials/*.course_material` | 原始字幕、清洗稿、精读稿、索引和运行状态 | 可能包含用户资料内容 | 不允许随意删除 |
-| `output/notebooklm/*.md` | 面向用户的 NotebookLM 清洗稿最终出口 | 可能包含用户资料内容；不应包含秘密值 | 不允许随意删除 |
-| `output/knowledge/knowledge_library.json` | 灵犀归档索引 | 可能包含资料标题、路径和摘录 | 不允许随意删除 |
+| `data/materials/{up_id}/{video_id}` | 原始字幕、清洗稿、NotebookLM 导入稿、索引和运行状态 | 可能包含用户资料内容 | 不允许随意删除 |
+| `data/registry/{up_id}.json` | UP 主视频元数据注册表 | 包含视频标题、BV 号、发布时间等公开元数据 | 不允许随意删除 |
+| `data/legacy/knowledge/knowledge_library.json` | 旧灵犀归档索引 | 可能包含资料标题、路径和摘录 | 不允许随意删除 |
 | `C:\Users\Yu\AppData\Roaming\视界专注\shijie-focus-secure.json` | 设置、队列、来源、阅读记录等 Electron Store 数据 | 是，可能含 Cookie、API Key、SMTP 授权码 | 不允许删除或公开 |
 | `C:\Users\Yu\AppData\Roaming\视界专注\shijie-focus-secure*.bak*` | 历史备份 | 是 | 不允许删除 |
-| `C:\Users\Yu\AppData\Roaming\视界专注\.shijie-focus-runtime.log` | 运行日志 | 可能包含路径和错误信息 | 清理前需确认 |
-| `output/materials/cache` 和转写缓存 | 加速字幕和音频处理 | 通常不含秘密，但可能含转写中间结果 | 不在本轮删除 |
+| `data/logs/runtime.log` | 运行日志 | 可能包含路径和错误信息 | 清理前需确认 |
+| `data/cache` 和转写缓存 | 加速字幕和音频处理 | 通常不含秘密，但可能含转写中间结果 | 可再生，不随意删除 |
 | `.shijie-tts-cache` | TTS 音频缓存 | 可能包含朗读文本生成的音频 | 不在本轮删除 |
 
 ## 当前完成标准
 
 - 桌面端能按记录方式启动。
 - 不配置外部服务时，界面能清楚提示缺少配置。
-- 输入有效短视频后，能获取或转写字幕，清洗字幕，并在配置 MiMo 后生成轻量、清晰、适合快速阅读的精读稿。
-- 输入长视频或本地音视频后，能生成可直接导入 NotebookLM 的 `output/notebooklm/**/*.md` 清洗稿。
-- 已有材料包能在档案或灵犀中重新打开。
+- 从 UP 主 / 来源视频列表批量选择视频后，能安全地只获取和清洗字幕，生成 NotebookLM 可导入资料，不强制进入总结、邮件或 TTS。
+- 输入单个 B 站视频、长视频或本地音视频后，能获取或转写字幕并生成可直接导入 NotebookLM 的清洗稿。
+- 已有材料包能通过 NotebookLM 输出页打开或复制清洗稿路径；旧档案和灵犀入口只作为兼容层保留。
 - 清理、删除、队列恢复等高风险行为有人工验收或自动测试保护。

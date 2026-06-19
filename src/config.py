@@ -31,7 +31,7 @@ elif getattr(sys, "frozen", False):
 else:
     PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-DEFAULT_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
+DEFAULT_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "data")
 LOCAL_SETTINGS_PATH = os.path.abspath(
     os.environ.get("SHIJIE_FOCUS_SETTINGS_PATH", "").strip()
     or os.environ.get("BILIARCHIVE_SETTINGS_PATH", "").strip()
@@ -132,6 +132,33 @@ def get_output_dir() -> str:
 def ensure_output_dir() -> str:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     return OUTPUT_DIR
+
+
+def ensure_data_subdir(name: str) -> str:
+    data_dir = ensure_output_dir()
+    target = os.path.join(data_dir, name)
+    os.makedirs(target, exist_ok=True)
+    return target
+
+
+def ensure_materials_dir() -> str:
+    return ensure_data_subdir("materials")
+
+
+def ensure_temp_dir() -> str:
+    return ensure_data_subdir("temp")
+
+
+def ensure_cache_dir() -> str:
+    return ensure_data_subdir("cache")
+
+
+def ensure_logs_dir() -> str:
+    return ensure_data_subdir("logs")
+
+
+def ensure_legacy_dir() -> str:
+    return ensure_data_subdir("legacy")
 
 
 def get_runtime_settings() -> dict[str, str]:

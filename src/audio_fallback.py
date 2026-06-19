@@ -523,10 +523,8 @@ def _safe_slug(value: str) -> str:
 
 
 def _audio_prepare_cache_root(video_info: dict, provider_api: str) -> str:
-    output_dir = config.ensure_output_dir()
     root = os.path.join(
-        output_dir,
-        "cache",
+        config.ensure_cache_dir(),
         "audio_prepare",
         str(video_info.get("bvid") or "unknown").lower(),
         provider_api,
@@ -1212,7 +1210,13 @@ def _prepare_page_audio(
         _emit(progress_callback, f"方案2：命中 {page_label} 的音频预处理缓存，跳过下载与切片…", 64)
         return cached
 
-    prepare_root = os.path.join(_audio_prepare_cache_root(video_info, provider_api), "_work")
+    prepare_root = os.path.join(
+        config.ensure_temp_dir(),
+        "audio_prepare",
+        str(video_info.get("bvid") or "unknown").lower(),
+        provider_api,
+        "_work",
+    )
     file_stem = _sanitize_stem(f"{video_info['bvid']}_p{page_no}")
     page_dir = os.path.join(prepare_root, f"page_{page_no:02d}")
     os.makedirs(page_dir, exist_ok=True)

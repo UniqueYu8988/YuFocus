@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   buildDistillProgressSnapshot,
   formatDistillTimingSummary,
-} from '../src/lib/distillProgress.ts'
+} from '../src/domain/pipeline/distillProgress.ts'
 
 function assertSnapshot(actual, expected) {
   assert.deepEqual(actual, {

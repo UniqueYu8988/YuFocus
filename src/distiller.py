@@ -558,9 +558,21 @@ def _save_jsonl_file(file_path: str, items: list[dict[str, Any]]) -> str:
     return file_path
 
 
-def _safe_material_dir_name(title: str, bvid: str) -> str:
-    stem = config.sanitize_filename(title or bvid or "course_material")
-    return f"{stem}.course_material"
+def _safe_material_path_part(value: str, fallback: str) -> str:
+    cleaned = _slugify(str(value or "").strip(), fallback)
+    return config.sanitize_filename(cleaned) or fallback
+
+
+def _material_up_id(video_info: dict[str, Any], source: SourceDescriptor) -> str:
+    owner = video_info.get("owner") if isinstance(video_info.get("owner"), dict) else {}
+    return _safe_material_path_part(
+        str(owner.get("mid") or source.source_type or source.creator or "unknown_up"),
+        "unknown_up",
+    )
+
+
+def _material_video_id(video_info: dict[str, Any], source: SourceDescriptor, bvid: str) -> str:
+    return _safe_material_path_part(str(video_info.get("bvid") or source.source_id or bvid or "unknown_video"), "unknown_video")
 
 
 def _resolve_material_package_root(output_dir: str) -> str:
@@ -2813,8 +2825,10 @@ def build_clean_material_content(
         chunks=results,
     )
     content_path = os.path.join(material_dir, "content.md")
+    cleaned_transcript_path = os.path.join(material_dir, "cleaned_transcript.txt")
     notebooklm_path = os.path.join(exports_dir, "notebooklm.md")
     _write_text_blob(content_path, content_markdown)
+    _write_text_blob(cleaned_transcript_path, content_markdown)
     _write_text_blob(notebooklm_path, _build_notebooklm_markdown(content_markdown))
     input_chars = sum(int(item.get("input_chars") or 0) for item in results)
     output_chars = sum(int(item.get("output_chars") or 0) for item in results)
@@ -2834,6 +2848,7 @@ def build_clean_material_content(
         "compression_ratio": round(output_chars / input_chars, 4) if input_chars else 0,
         "token_totals": usage_totals,
         "content_path": "content.md",
+        "cleaned_transcript_path": "cleaned_transcript.txt",
         "notebooklm_path": "exports/notebooklm.md",
         "work_dir": "work/cleaning",
         "warnings": [
@@ -3020,7 +3035,11 @@ def save_material_package(
 ) -> str:
     bvid = str(video_info.get("bvid") or source.source_id or "unknown")
     material_root = _resolve_material_package_root(output_dir)
-    material_dir = os.path.join(material_root, _safe_material_dir_name(str(video_info.get("title") or source.title), bvid))
+    material_dir = os.path.join(
+        material_root,
+        _material_up_id(video_info, source),
+        _material_video_id(video_info, source, bvid),
+    )
     blocks_dir = os.path.join(material_dir, "blocks")
     indexes_dir = os.path.join(material_dir, "indexes")
     os.makedirs(blocks_dir, exist_ok=True)
@@ -3061,6 +3080,7 @@ def save_material_package(
         "files": {
             "raw_transcript": "raw_transcript.txt",
             "raw_tracks": "raw_tracks.json",
+            "cleaned_transcript": "cleaned_transcript.txt",
             "content": "content.md",
             "content_meta": "content.meta.json",
             "notebooklm_source": "exports/notebooklm.md",
@@ -3395,10 +3415,7 @@ def _build_subtitles_from_transcript_page_cache(page_cache: dict[str, Any]) -> l
 
 
 def _ensure_cache_dir() -> str:
-    output_dir = config.ensure_output_dir()
-    cache_dir = os.path.join(output_dir, CACHE_DIR_NAME)
-    os.makedirs(cache_dir, exist_ok=True)
-    return cache_dir
+    return config.ensure_cache_dir()
 
 
 def _round_seconds(value: float) -> float:
@@ -3538,7 +3555,7 @@ def _load_existing_material_context(material_dir: str) -> dict[str, Any]:
             raw_source = file.read()
 
     source_payload = manifest.get("source") if isinstance(manifest.get("source"), dict) else {}
-    title = str(source_payload.get("title") or os.path.basename(material_dir).replace(".course_material", ""))
+    title = str(source_payload.get("title") or os.path.basename(material_dir))
     source = SourceDescriptor(
         source_type=str(source_payload.get("source_type") or "material_transcript"),
         source_id=str(source_payload.get("source_id") or manifest.get("material_id") or os.path.basename(material_dir)),
@@ -4207,7 +4224,6 @@ def run_material_package_from_local_media(media_path: str) -> dict[str, Any]:
     import local_audio_client
 
     output_dir = config.ensure_output_dir()
-    cache_dir = _ensure_cache_dir()
     title = os.path.splitext(os.path.basename(source_path))[0] or "本地音视频材料"
     stat = os.stat(source_path)
     digest = hashlib.sha1(
@@ -4216,7 +4232,7 @@ def run_material_package_from_local_media(media_path: str) -> dict[str, Any]:
     source_id = f"local_{digest}"
     package_id = f"{_slugify(title, 'local_media')}_{digest}"
     ingested_at = datetime.now(timezone.utc).isoformat()
-    work_dir = os.path.join(cache_dir, "local_media", source_id)
+    work_dir = os.path.join(config.ensure_temp_dir(), "local_media", source_id)
     os.makedirs(work_dir, exist_ok=True)
 
     _emit_progress(f"正在准备本地音视频：{title}", 12, stage="metadata")
@@ -4341,8 +4357,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("video", nargs="?", help="B 站视频链接或 BV 号")
     parser.add_argument("--material-only", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--local-media", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--clean-material", help="重跑已有 .course_material 的字幕清洗与 NotebookLM 导出", metavar="PATH")
-    parser.add_argument("--summarize-material", help="为已有 .course_material 制作视频精读稿", metavar="PATH")
+    parser.add_argument("--clean-material", help="重跑已有材料包的字幕清洗与 NotebookLM 导出", metavar="PATH")
+    parser.add_argument("--summarize-material", help="为已有材料包制作视频精读稿", metavar="PATH")
     parser.add_argument("--result-json", action="store_true", help=argparse.SUPPRESS)
     return parser
 

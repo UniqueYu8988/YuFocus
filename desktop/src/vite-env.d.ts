@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import type { LearningLibraryPayload, LearningRecord } from './types/course'
+import type { LearningLibraryPayload, LearningRecord } from './legacy/types/course'
 
 declare global {
 type RuntimeSettings = {
@@ -60,50 +60,6 @@ type LearningLibraryRefreshResult = {
   scannedPackages: number
 }
 
-type ObsidianExportResult = {
-  vaultPath: string
-  rootDir: string
-  indexPath: string
-  progressPath: string
-  currentNodePath: string | null
-  fileCount: number
-}
-
-type ObsidianOpenResult = ObsidianExportResult & {
-  openedPath: string
-  openedUri: string | null
-  openedVia: 'obsidian-uri' | 'file-path'
-}
-
-type TtsSynthesizeResult = {
-  provider: string
-  model: string
-  voiceId: string
-  filePath: string
-  filePaths: string[]
-  dataUrl: string
-  dataUrls: string[]
-  cached: boolean
-  characters: number
-  usage: TtsUsageSnapshot
-}
-
-type TtsCacheStatusResult = {
-  cached: boolean
-  characters: number
-  filePath: string | null
-  filePaths: string[]
-  usage: TtsUsageSnapshot
-}
-
-type TtsUsageSnapshot = {
-  date: string
-  usedCharacters: number
-  dailyLimit: number
-  remainingCharacters: number
-  note: string
-}
-
 type DistillOutlinePreview = {
   packageId: string
   title: string
@@ -141,14 +97,6 @@ type BackgroundAutomationStatus = {
   lastResult: string
   lastError: string | null
   checkIntervalMinutes: number
-}
-
-type EmailSendResult = {
-  ok: boolean
-  mode: 'smtp'
-  message: string
-  configured: boolean
-  recipientCount: number
 }
 
 type WorkbenchQueueClearResult = {
@@ -259,6 +207,7 @@ type WorkbenchQueueItem = BilibiliSourceVideosPayload['sources'][number]['videos
   sourceName?: string
   queueSource?: 'manual' | 'follow_source'
   editorialMode?: 'auto' | 'force' | 'off'
+  pipelineMode?: 'subtitle_only' | 'full_editorial'
   status: 'queued' | 'processing' | 'done' | 'failed'
   materialPath?: string
   lastError?: string
@@ -326,7 +275,6 @@ type WorkflowDocumentPayload = {
       getAutomationStatus: () => Promise<BackgroundAutomationStatus>
       runAutomationCheckNow: () => Promise<BackgroundAutomationStatus>
       setAutomationPaused: (paused: boolean) => Promise<BackgroundAutomationStatus>
-      testEmailPush: () => Promise<EmailSendResult>
       copyText: (text: string) => Promise<void>
       pickDirectory: () => Promise<string | null>
       pickMediaFile: () => Promise<{ path: string; name: string } | null>
@@ -360,14 +308,6 @@ type WorkflowDocumentPayload = {
         records: MaterialPackageSummary[]
       }>
       deleteMaterialPackage: (materialPath: string) => Promise<{ deletedPaths: string[]; skippedPaths?: string[] }>
-      summarizeMaterialPackage: (payload: { materialPath: string; editorialMode?: 'auto' | 'force' | 'off' }) => Promise<{
-        materialPath: string
-        editorialArticlePath: string
-        editorialHtmlPath?: string
-        editorialCardsPath?: string
-        editorialReviewPath?: string
-        editorialSummary?: Record<string, unknown>
-      }>
       loadWorkbenchQueue: () => Promise<WorkbenchQueueItem[]>
       saveWorkbenchQueue: (items: WorkbenchQueueItem[]) => Promise<WorkbenchQueueItem[]>
       clearWorkbenchQueue: () => Promise<WorkbenchQueueClearResult>
@@ -382,10 +322,6 @@ type WorkflowDocumentPayload = {
       refreshLearningLibraryStructure: () => Promise<LearningLibraryRefreshResult>
       saveLearningRecord: (payload: LearningRecord) => Promise<LearningRecord>
       deleteLearningRecord: (recordId: string) => Promise<LearningLibraryPayload>
-      exportObsidianCourse: (payload: { course: Record<string, unknown>; currentNodeId: string | null; completedNodeIds: string[] }) => Promise<ObsidianExportResult>
-      openObsidianCourse: (payload: { course: Record<string, unknown>; currentNodeId: string | null; completedNodeIds: string[]; target?: 'current' | 'board' | 'index' }) => Promise<ObsidianOpenResult>
-      synthesizeSpeech: (payload: { text: string; nodeId?: string | null }) => Promise<TtsSynthesizeResult>
-      checkSpeechCache: (payload: { text: string; nodeId?: string | null }) => Promise<TtsCacheStatusResult>
       readTextFile: (targetPath: string) => Promise<string>
       readWorkflowDocument: (documentKey: WorkflowDocumentKey) => Promise<WorkflowDocumentPayload>
       openPath: (targetPath: string) => Promise<void>
