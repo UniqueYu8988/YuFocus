@@ -1,6 +1,7 @@
 import {
   BilibiliCredentialsSettingsBlock,
   CurrentConfigSettingsBlock,
+  FreshEmailSettingsBlock,
   MimoTextSettingsBlock,
   TranscriptionSettingsBlock,
 } from '@/ui/panels/workspace/SettingsBlocks'
@@ -66,6 +67,11 @@ export function SettingsPaneContent({
 
       <BilibiliCredentialsSettingsBlock
         icon={bilibiliIcon}
+        settingsDraft={settingsDraft}
+        onSettingsDraftChange={onSettingsDraftChange}
+      />
+
+      <FreshEmailSettingsBlock
         settingsDraft={settingsDraft}
         onSettingsDraftChange={onSettingsDraftChange}
       />

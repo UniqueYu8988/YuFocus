@@ -108,7 +108,7 @@ try {
 
   assert.match(sourceDiscovery, /listRegisteredBilibiliSourceVideos/, '来源视频读取必须通过 registry 包装函数。')
   assert.match(sourceDiscovery, /mergeVideosIntoRegistry/, 'API 结果必须合并进入 registry。')
-  assert.match(sourceDiscovery, /registryPayloadFromSources/, 'API 失败时必须能回退读取 registry。')
+  assert.match(sourceDiscovery, /readRegisteredBilibiliSourceVideos/, '本地读取和 API 失败时必须能回退读取 registry。')
   assert.match(sourceIpcHandlers, /listRegisteredBilibiliSourceVideos/, 'UI IPC 必须读取 registry 合并后的来源视频。')
   assert.match(sourceIpcHandlers, /registryRoot/, 'UI IPC 必须接收已经解析好的标准 registry 根。')
   assert.match(sourceDiscoveryRuntime, /registryRoot/, '后台发现必须接收 registry 根。')

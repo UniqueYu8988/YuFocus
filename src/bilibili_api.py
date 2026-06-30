@@ -219,15 +219,10 @@ def _select_preferred_subtitles(subtitles: list[dict]) -> list[dict]:
     chinese = [item for item in subtitles if _is_chinese_subtitle(item)]
     english = [item for item in subtitles if _is_english_subtitle(item)]
 
-    selected: list[dict] = []
     if chinese:
-        selected.append(chinese[0])
+        return [chinese[0]]
     if english:
-        english_item = english[0]
-        if all(english_item.get("lan") != item.get("lan") for item in selected):
-            selected.append(english_item)
-    if selected:
-        return selected
+        return [english[0]]
 
     return subtitles[:1]
 

@@ -226,17 +226,11 @@ export function WorkbenchPaneContent({
 
       <WorkbenchQueuePanel
         items={queueItems}
-        pagedItems={pagedQueueItems}
-        pageSize={queuePageSize}
-        canClear={canClearQueue}
+        visibleItems={pagedQueueItems.items}
+        canLoadMore={pagedQueueItems.page < pagedQueueItems.totalPages}
         distillRequestState={distillRequestState}
-        materialRootDir={materialRootDir}
-        runtimeSettings={runtimeSettings}
         editorialSummaryBuildingPath={editorialSummaryBuildingPath}
-        onClear={onClearQueue}
-        onOpenMaterialRoot={onOpenMaterialRoot}
-        onRefreshMaterials={onRefreshMaterials}
-        onPageChange={onQueuePageChange}
+        onLoadMore={() => onQueuePageChange(pagedQueueItems.page + 1)}
         getItemStatus={getItemStatus}
         getItemMeta={getItemMeta}
         getItemTitle={getItemTitle}
@@ -245,8 +239,6 @@ export function WorkbenchPaneContent({
         onRetryQueueItem={onRetryQueueItem}
         onCopyNotebookLmPath={onCopyNotebookLmPath}
         onOpenBrief={onOpenBrief}
-        onDeleteMaterial={onDeleteMaterial}
-        onRemoveQueuedVideo={onRemoveQueuedVideo}
       />
     </div>
   )

@@ -10,7 +10,7 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   loadSettingsStatus: () => ipcRenderer.invoke('settings:status'),
   getAutomationStatus: () => ipcRenderer.invoke('automation:status'),
   runAutomationCheckNow: () => ipcRenderer.invoke('automation:check-now'),
-  setAutomationPaused: (paused: boolean) => ipcRenderer.invoke('automation:set-paused', paused),
+  setAutomationPaused: (payload: boolean | { paused: boolean; durationMs?: number }) => ipcRenderer.invoke('automation:set-paused', payload),
   copyText: (text: string) => ipcRenderer.invoke('clipboard:writeText', text),
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
   pickMediaFile: () => ipcRenderer.invoke('dialog:pickMediaFile'),
@@ -26,7 +26,10 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   clearWorkbenchQueue: () => ipcRenderer.invoke('workbench:queue:clear'),
   loadPinnedBilibiliSources: () => ipcRenderer.invoke('sources:bilibili:pinned:load'),
   savePinnedBilibiliSources: (items: unknown[]) => ipcRenderer.invoke('sources:bilibili:pinned:save', items),
+  loadTrackedBilibiliSources: () => ipcRenderer.invoke('sources:bilibili:tracked:load'),
+  saveTrackedBilibiliSources: (items: unknown[]) => ipcRenderer.invoke('sources:bilibili:tracked:save', items),
   listBilibiliFollowSources: () => ipcRenderer.invoke('sources:bilibili:followings'),
+  listRegisteredBilibiliSourceVideos: (payload: { sources: Array<{ mid: string; name?: string }> }) => ipcRenderer.invoke('sources:bilibili:registered-videos', payload),
   listBilibiliSourceVideos: (payload: { sources: Array<{ mid: string; name?: string }>; pageSize?: number }) => ipcRenderer.invoke('sources:bilibili:videos', payload),
   getBilibiliVideoMetadata: (payload: { video: string }) => ipcRenderer.invoke('sources:bilibili:video', payload),
   listKnowledgeLibrary: () => ipcRenderer.invoke('knowledge:list'),
@@ -101,6 +104,8 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   onAutomationStatus: (callback: (payload: {
     enabled: boolean
     paused: boolean
+    pauseReason: 'manual' | 'duration' | ''
+    pausedUntil: number | null
     running: boolean
     lastCheckAt: number | null
     nextCheckAt: number | null
@@ -113,6 +118,8 @@ contextBridge.exposeInMainWorld('desktopAPI', {
       payload: {
         enabled: boolean
         paused: boolean
+        pauseReason: 'manual' | 'duration' | ''
+        pausedUntil: number | null
         running: boolean
         lastCheckAt: number | null
         nextCheckAt: number | null

@@ -178,6 +178,18 @@ assert.equal(subtitleOnlyNewMaterial.calls.pushMaterialEmail, 0)
 assert.equal(subtitleOnlyNewMaterial.queue[0].status, 'done')
 assert.equal(subtitleOnlyNewMaterial.queue[0].materialPath, 'memory://materials/generated-up/generated-video')
 
+const freshSubtitleOnlyNewMaterial = await runMemoryQueueScenario({
+  item: makeQueueItem({
+    queueSource: 'fresh',
+    editorialMode: 'off',
+    pipelineMode: 'subtitle_only',
+  }),
+})
+assert.equal(freshSubtitleOnlyNewMaterial.result.processed, 1)
+assert.equal(freshSubtitleOnlyNewMaterial.calls.runDistiller, 1)
+assert.equal(freshSubtitleOnlyNewMaterial.calls.runMaterialSummary, 0)
+assert.equal(freshSubtitleOnlyNewMaterial.calls.pushMaterialEmail, 1)
+
 const unnormalizedSubtitleOnly = await runMemoryQueueScenario({
   item: {
     ...baseVideo,
@@ -219,7 +231,7 @@ assert.equal(fullEditorialMaterial.result.failed, 0)
 assert.equal(fullEditorialMaterial.calls.runDistiller, 1)
 assert.equal(fullEditorialMaterial.calls.runMaterialSummary, 1)
 assert.equal(fullEditorialMaterial.calls.archiveMaterialRecord, 1)
-assert.equal(fullEditorialMaterial.calls.pushMaterialEmail, 1)
+assert.equal(fullEditorialMaterial.calls.pushMaterialEmail, 0)
 assert.equal(fullEditorialMaterial.queue[0].status, 'done')
 
 const workspacePaneSource = readProjectSource('src/ui/pages/WorkspacePane.tsx')
@@ -235,7 +247,7 @@ assert.match(
 const sourceDiscoverySource = readProjectSource('electron/providers/sourceDiscovery.ts')
 assert.match(
   sourceDiscoverySource,
-  /createBackgroundQueueItem[\s\S]*editorialMode:\s*'off'[\s\S]*pipelineMode:\s*'subtitle_only'/,
+  /createSourceQueueItem[\s\S]*editorialMode:\s*'off'[\s\S]*pipelineMode:\s*'subtitle_only'/,
 )
 
 console.log(JSON.stringify({
@@ -253,7 +265,8 @@ console.log(JSON.stringify({
     manualSingleVideoEntryUnchanged: true,
     channelBatchDoesNotCallRunMaterialSummary: true,
     subtitleOnlyDoesNotCallRunMaterialSummary: true,
-    subtitleOnlyDoesNotPushEmail: true,
+    manualSubtitleOnlyDoesNotPushEmail: true,
+    freshSubtitleOnlyPushesEmailAfterLocalConsumption: true,
     fullEditorialKeepsSummaryBehavior: true,
     noAppDataRead: true,
     noBilibiliCall: true,

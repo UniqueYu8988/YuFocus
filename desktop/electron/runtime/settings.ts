@@ -105,6 +105,13 @@ function sanitizeMimoTtsVoiceId(value: unknown, fallback = '茉莉') {
     : fallback
 }
 
+function sanitizeMimoTextModel(value: unknown, fallback = 'mimo-v2.5') {
+  const normalized = sanitizeSecret(value).trim()
+  if (!normalized || normalized === 'mimo-v2.5-pro') return fallback
+  if (normalized === 'mimo-v2.5') return normalized
+  return fallback
+}
+
 export function sanitizeNumberInRange(value: unknown, fallback: number, min: number, max: number) {
   const numeric = Number(value)
   if (!Number.isFinite(numeric)) return fallback
@@ -140,7 +147,7 @@ function defaultSettings(context: SettingsDefaultsContext): RuntimeSettings {
     minimax_tts_pitch: 0,
     mimo_api_key: '',
     mimo_text_endpoint: 'https://token-plan-cn.xiaomimimo.com/v1/chat/completions',
-    mimo_text_model: 'mimo-v2.5-pro',
+    mimo_text_model: 'mimo-v2.5',
     mimo_tts_endpoint: 'https://api.xiaomimimo.com/v1/chat/completions',
     mimo_tts_model: 'mimo-v2.5-tts',
     mimo_tts_voice_id: '茉莉',
@@ -223,7 +230,7 @@ export function normalizeSettings(
     minimax_tts_pitch: sanitizeNumberInRange(raw?.minimax_tts_pitch, defaults.minimax_tts_pitch, -12, 12),
     mimo_api_key: sanitizeSecret(raw?.mimo_api_key ?? defaults.mimo_api_key),
     mimo_text_endpoint: sanitizeBaseUrl(raw?.mimo_text_endpoint ?? defaults.mimo_text_endpoint, defaults.mimo_text_endpoint),
-    mimo_text_model: sanitizeSecret(raw?.mimo_text_model ?? defaults.mimo_text_model) || defaults.mimo_text_model,
+    mimo_text_model: sanitizeMimoTextModel(raw?.mimo_text_model ?? defaults.mimo_text_model, defaults.mimo_text_model),
     mimo_tts_endpoint: sanitizeBaseUrl(raw?.mimo_tts_endpoint ?? defaults.mimo_tts_endpoint, defaults.mimo_tts_endpoint),
     mimo_tts_model: defaults.mimo_tts_model,
     mimo_tts_voice_id: sanitizeMimoTtsVoiceId(raw?.mimo_tts_voice_id ?? defaults.mimo_tts_voice_id, defaults.mimo_tts_voice_id),

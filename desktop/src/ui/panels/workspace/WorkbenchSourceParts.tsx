@@ -76,8 +76,8 @@ export function ManualSourceForm({
               : 'text-foreground/74 hover:bg-white/[0.06] hover:text-foreground',
           )}
           disabled={!videoInput.trim() || loading}
-          aria-label={manualSourceLoading ? '正在读取视频信息' : distillRequestState === 'loading' ? '资料包生成中' : '加入任务队列'}
-          title={manualSourceLoading ? '正在读取视频信息' : distillRequestState === 'loading' ? '资料包生成中' : '加入任务队列'}
+          aria-label={manualSourceLoading ? '正在读取视频信息' : distillRequestState === 'loading' ? '资料包生成中' : '加入队列'}
+          title={manualSourceLoading ? '正在读取视频信息' : distillRequestState === 'loading' ? '资料包生成中' : '加入队列'}
         >
           {loading ? <LoaderCircle size={14} className="animate-spin" /> : <Play size={14} fill="currentColor" />}
         </Button>

@@ -2,6 +2,7 @@ import {
   AudioLines,
   Cookie,
   FolderOpen,
+  Mail,
   RefreshCcw,
   Server,
   Sparkles,
@@ -233,6 +234,100 @@ export function BilibiliCredentialsSettingsBlock({
           onChange={(event) => onSettingsDraftChange((current) => ({ ...current, sessdata: event.target.value }))}
         />
       </SettingsField>
+    </SettingsBlock>
+  )
+}
+
+export function FreshEmailSettingsBlock({
+  settingsDraft,
+  onSettingsDraftChange,
+}: {
+  settingsDraft: RuntimeSettings
+  onSettingsDraftChange: SettingsDraftUpdater
+}) {
+  return (
+    <SettingsBlock title="最近更新邮件推送" className="order-5">
+      <div className="grid gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-white/[0.07] bg-white/[0.025] px-3 py-3">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-[13px] font-semibold text-foreground/90">
+              <Mail size={14} />
+              只推送最近更新
+            </div>
+            <p className="max-w-2xl text-[12px] leading-5 text-muted-foreground">
+              开启后，仅后台自动发现的 fresh 新视频会在 MiMo 清洗和本地总结完成后发送邮件；历史补全、手动加入和重试任务不会发送。
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant={settingsDraft.email_push_enabled ? 'default' : 'outline'}
+            className="rounded-xl"
+            onClick={() => onSettingsDraftChange((current) => ({ ...current, email_push_enabled: !current.email_push_enabled }))}
+          >
+            {settingsDraft.email_push_enabled ? '已启用' : '未启用'}
+          </Button>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <SettingsField label="SMTP 主机" icon={<Server size={14} />}>
+            <Input
+              value={settingsDraft.email_smtp_host}
+              onChange={(event) => onSettingsDraftChange((current) => ({ ...current, email_smtp_host: event.target.value }))}
+              placeholder="例如 smtp.qq.com"
+            />
+          </SettingsField>
+          <SettingsField label="SMTP 端口" icon={<Server size={14} />}>
+            <Input
+              type="number"
+              value={settingsDraft.email_smtp_port}
+              onChange={(event) => onSettingsDraftChange((current) => ({ ...current, email_smtp_port: Number(event.target.value) || 465 }))}
+              placeholder="465"
+            />
+          </SettingsField>
+          <SettingsField label="发件邮箱" icon={<Mail size={14} />}>
+            <Input
+              value={settingsDraft.email_from}
+              onChange={(event) => onSettingsDraftChange((current) => ({ ...current, email_from: event.target.value }))}
+              placeholder="sender@example.com"
+            />
+          </SettingsField>
+          <SettingsField label="收件邮箱" icon={<Mail size={14} />}>
+            <Input
+              value={settingsDraft.email_to}
+              onChange={(event) => onSettingsDraftChange((current) => ({ ...current, email_to: event.target.value }))}
+              placeholder="receiver@example.com"
+            />
+          </SettingsField>
+          <SettingsField label="SMTP 用户" icon={<Mail size={14} />}>
+            <Input
+              value={settingsDraft.email_smtp_user}
+              onChange={(event) => onSettingsDraftChange((current) => ({ ...current, email_smtp_user: event.target.value }))}
+              placeholder="通常与发件邮箱一致"
+            />
+          </SettingsField>
+          <SettingsField label="SMTP 授权码" icon={<Server size={14} />}>
+            <Input
+              type="password"
+              value={settingsDraft.email_smtp_password}
+              onChange={(event) => onSettingsDraftChange((current) => ({ ...current, email_smtp_password: event.target.value }))}
+              placeholder="邮箱服务商提供的授权码"
+            />
+          </SettingsField>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 text-[11px] leading-5 text-muted-foreground">
+          <Button
+            type="button"
+            variant={settingsDraft.email_smtp_secure ? 'default' : 'outline'}
+            size="sm"
+            className="rounded-xl"
+            onClick={() => onSettingsDraftChange((current) => ({ ...current, email_smtp_secure: !current.email_smtp_secure }))}
+          >
+            SSL/TLS：{settingsDraft.email_smtp_secure ? '开启' : '关闭'}
+          </Button>
+          <span>邮件正文来自本地模型生成的 brief/email；发送失败只记录状态，不会让资料生成失败。</span>
+        </div>
+      </div>
     </SettingsBlock>
   )
 }

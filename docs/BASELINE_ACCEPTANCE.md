@@ -6,7 +6,7 @@
 ## 1. 启动基线
 
 - [x] 在 `desktop` 目录执行记录的启动方式后，桌面端能打开主窗口。
-- [x] 主要入口可见：字幕流水线、NotebookLM 输出、流程、设置。
+- [x] 主要入口可见：最近、队列、档案、流程、设置。
 - [x] 设置页能打开；本轮未复制或展示 Cookie、API Key、SMTP 授权码等秘密值。
 - [x] 启动时不会自动删除材料包、清空队列或重复加入大量任务。
 
@@ -36,8 +36,8 @@
 
 ### 流程 1：读取当前材料包
 
-- 人工验收步骤：打开桌面端，进入 NotebookLM 输出或字幕流水线，刷新材料列表。
-- 预期结果：能看到 `data/materials/{up_id}/{video_id}` 下的现有材料包；至少显示标题、状态和 NotebookLM 清洗稿入口；不会改写或删除材料。
+- 人工验收步骤：打开桌面端，进入档案或队列，刷新材料列表。
+- 预期结果：能按 UP 主 / 全部 / 拾遗查看 `data/materials/{up_id}/{video_id}` 下的现有材料包；至少显示标题、状态和 NotebookLM 清洗稿入口；不会改写或删除材料。
 - 2026-06-20 结果：桌面端 IPC 能读取 `data/materials/256724889/bv131jf68e5n`，清空队列前后材料记录路径保持一致。
 - 自动测试状态：未覆盖。
 
@@ -66,11 +66,13 @@
 
 ## 4. 页面或界面
 
+- [x] 最近页：默认打开；顶部只保留刷新图标；首次只读本地数据；侧边栏显示固定 UP 头像和名称；点击左侧 UP 后右侧显示该 UP 的视频列表；固定 UP 通过侧边栏弹窗管理；可手动把勾选视频加入队列；手动刷新只刷新视频元数据，不自动下载、转写或制作。
 - [ ] 制作台：输入 BV/链接、本地文件选择、制作进度、错误提示。
 - [x] 视频来源：已有来源读取和指定来源刷新通过；本轮未修改来源收藏。
-- [x] 任务队列：真实 subtitle-only 调度完成；清空与恢复队列回归通过。
-- [x] 字幕流水线：首页和队列入口可见；未打开具体材料。
-- [ ] NotebookLM 输出：能读取 `data/materials` 下的当前材料包。
+- [x] 队列：真实 subtitle-only 调度完成；清空与恢复队列回归通过。
+- [x] 队列：只显示队列任务信息；视频来源选择入口已前移到左侧栏和最近页。
+- [x] 队列：已改为轻量记录流；初始最多 10 条，滚动加载，新完成资料按更新时间排到已完成记录顶部，并显示单条总耗时和 Token；旧外框、分页器、清空 / 删除类按钮不回流。
+- [x] 档案：已接入只读 UP 主分组第一版；受控 Electron 验收确认 2 条真实材料按 `马督工` / `TED官方精选` 分组显示，右侧以视频资料卡片展示，并保留打开、复制路径和定位入口；验收前后 `data/materials` 文件数量保持 48。
 - [x] 设置：设置页可打开；未测试保存、刷新状态、SMTP、TTS。
 
 ## 5. 自动验证
@@ -78,6 +80,9 @@
 | 行为 | 测试位置 | 当前结果 |
 |---|---|---|
 | TypeScript 类型检查 | `desktop` 下 `npx tsc --noEmit` | 2026-06-20 通过 |
+| 首页数据与安全边界 | `desktop` 下 `node --experimental-strip-types --no-warnings scripts/check-home-dashboard-safety.mjs` | 2026-06-20 通过 |
+| 档案 UP 主分组 | `desktop` 下 `node --experimental-strip-types --no-warnings scripts/check-archive-up-grouping.mjs` | 2026-06-29 通过 |
+| 档案真实材料展示 | 临时 userData + Electron remote debugging 受控实例 | 2026-06-29 通过；2 条真实材料按 UP 主分组显示，打开 / 复制路径 / 定位入口存在，`data/materials` 文件数保持 48 |
 | Python 语法检查 | `python -m py_compile src\*.py` 指定核心文件 | 2026-06-20 通过 |
 | 进度解析纯函数检查 | `desktop` 下 `node --experimental-strip-types --no-warnings scripts/check-distill-progress.mjs` | 2026-06-20 通过 |
 | 视频注册表稳定性检查 | `desktop` 下 `node --experimental-strip-types --no-warnings scripts/check-video-registry-layer.mjs` | 2026-06-20 通过 |
@@ -85,21 +90,26 @@
 | subtitle-only 主线检查 | `desktop` 下 `node --experimental-strip-types --no-warnings scripts/check-subtitle-only-queue-mode.mjs` | 2026-06-20 通过 |
 | Python 依赖探测 | `requests`、`jsonschema`、`PySide6`、`imageio_ffmpeg` | 2026-06-12 均已安装 |
 | 完整桌面端启动 | 真实 Electron + CDP | 2026-06-20 通过并已关闭 |
-| 受控桌面端启动 | 手工 + CDP 读取页面文本 | 2026-06-12 通过启动/关闭；档案主页面为空、独立灵犀页入口不明确仍属待核对现象 |
+| 受控桌面端启动 | 手工 + CDP 读取页面文本 | 2026-06-12 通过启动/关闭；旧档案主页面为空、独立灵犀页入口不明确仍属待核对现象 |
 | B 站制作完整流程 | `BV131jF68E5n` | 2026-06-20 subtitle-only 通过 |
 | 删除/清空队列保护 | 纯内存 + 真实 IPC | 2026-06-20 通过，材料未删除 |
+| UP 自动同步调度 | `desktop` 下 `node --experimental-strip-types --no-warnings scripts/check-up-sync-scheduler.mjs` | 2026-06-29 通过 |
+| 队列记录流 | `desktop` 下 `node scripts/check-queue-record-feed.mjs` | 2026-06-29 通过 |
+| 效率观测 | `desktop` 下 `node scripts/check-efficiency-observability.mjs` | 2026-06-29 通过 |
+| 真实后台准点同步 | `data/logs/runtime.log` 只读核验 | 2026-06-28 21:00 至 2026-06-29 02:00 记录多次准点检查和队列处理 |
 
 ## 6. 当前无法验证的事项
 
 - Electron 主进程长期运行是否稳定。
 - 未测试与当前主线无关的 MiniMax、SMTP 等外部服务。
-- 后台自动化关闭窗口后是否继续运行。
+- 后台自动化关闭窗口后是否继续运行仍需长期托盘验收；软件运行期间准点后台检查和队列处理已由真实日志确认。
 - 队列恢复是否会重复加入任务。
 - 单条删除档案、删除材料的完整真实数据回归仍未执行；清空队列保护已验证。
-- NotebookLM 输出页对新 `data/materials` 材料包的完整读取仍需一次受控人工验收。
+- 档案页对新 `data/materials` 材料包的 UP 主分组读取和视频资料卡片显示已完成一次受控 Electron 验收。
+- 本轮未主动点击打开文件、复制到剪贴板或系统定位按钮；只确认真实卡片中入口存在且代码连接保留，避免制造额外系统状态变化。
 
 ## 7. 最近一次人工验收
 
-- 日期：2026-06-20
+- 日期：2026-06-29
 - 执行人：Codex 受控桌面回归
-- 结果：注册表连续刷新稳定；批量选择入口正常；真实 subtitle-only 小样本生成到 `data`；清空队列不删除材料；应用已关闭。
+- 结果：UP 自动同步调度、队列记录流和效率观测检查通过；当前 Electron / Vite 正在运行，localhost 返回 200；真实 runtime log 显示多个准点后台检查和自动队列处理；本轮只读统计 `data/materials` 文件数为 288，未执行删除、迁移、重命名或真实清空材料操作。

@@ -91,6 +91,8 @@ type DistillProgressPayload = {
 type BackgroundAutomationStatus = {
   enabled: boolean
   paused: boolean
+  pauseReason: 'manual' | 'duration' | ''
+  pausedUntil: number | null
   running: boolean
   lastCheckAt: number | null
   nextCheckAt: number | null
@@ -205,12 +207,15 @@ type BilibiliSourceVideosPayload = {
 type WorkbenchQueueItem = BilibiliSourceVideosPayload['sources'][number]['videos'][number] & {
   queueId: string
   sourceName?: string
-  queueSource?: 'manual' | 'follow_source'
+  queueSource?: 'manual' | 'follow_source' | 'fresh' | 'history' | 'retry'
   editorialMode?: 'auto' | 'force' | 'off'
   pipelineMode?: 'subtitle_only' | 'full_editorial'
-  status: 'queued' | 'processing' | 'done' | 'failed'
+  status: 'queued' | 'processing' | 'done' | 'failed' | 'skipped'
   materialPath?: string
   lastError?: string
+  retryCount?: number
+  nextRetryAt?: number
+  failedAt?: number
   queuedAt?: number
   updatedAt?: number
 }
@@ -224,6 +229,17 @@ type PinnedBilibiliSource = {
   sign: string
   officialTitle: string
   pinnedAt: number
+}
+
+type TrackedBilibiliSource = PinnedBilibiliSource & {
+  priority: number
+  trackFresh: boolean
+  trackHistory: boolean
+  historyStatus: 'idle' | 'running' | 'completed' | 'paused' | 'failed'
+  historyPage: number
+  historyReachedEnd: boolean
+  lastCheckedAt: number
+  updatedAt: number
 }
 
 type KnowledgeImportResult = {
@@ -274,7 +290,7 @@ type WorkflowDocumentPayload = {
       loadSettingsStatus: () => Promise<SettingsStatus>
       getAutomationStatus: () => Promise<BackgroundAutomationStatus>
       runAutomationCheckNow: () => Promise<BackgroundAutomationStatus>
-      setAutomationPaused: (paused: boolean) => Promise<BackgroundAutomationStatus>
+      setAutomationPaused: (payload: boolean | { paused: boolean; durationMs?: number }) => Promise<BackgroundAutomationStatus>
       copyText: (text: string) => Promise<void>
       pickDirectory: () => Promise<string | null>
       pickMediaFile: () => Promise<{ path: string; name: string } | null>
@@ -313,7 +329,10 @@ type WorkflowDocumentPayload = {
       clearWorkbenchQueue: () => Promise<WorkbenchQueueClearResult>
       loadPinnedBilibiliSources: () => Promise<PinnedBilibiliSource[]>
       savePinnedBilibiliSources: (items: PinnedBilibiliSource[]) => Promise<PinnedBilibiliSource[]>
+      loadTrackedBilibiliSources: () => Promise<TrackedBilibiliSource[]>
+      saveTrackedBilibiliSources: (items: TrackedBilibiliSource[]) => Promise<TrackedBilibiliSource[]>
       listBilibiliFollowSources: () => Promise<BilibiliFollowSourcesPayload>
+      listRegisteredBilibiliSourceVideos: (payload: { sources: Array<{ mid: string; name?: string }> }) => Promise<BilibiliSourceVideosPayload>
       listBilibiliSourceVideos: (payload: { sources: Array<{ mid: string; name?: string }>; pageSize?: number }) => Promise<BilibiliSourceVideosPayload>
       getBilibiliVideoMetadata: (payload: { video: string }) => Promise<BilibiliVideoMetadata>
       listKnowledgeLibrary: () => Promise<KnowledgeLibraryPayload>

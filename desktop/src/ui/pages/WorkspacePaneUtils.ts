@@ -12,8 +12,6 @@ import {
   hasMaterialIssue,
   isMaterialLongDraft,
   isMaterialShortDraft,
-  type ArchiveFilterItem,
-  type ArchiveShelfFilter,
   type ArchiveStats,
 } from '@/ui/panels/workspace/ArchivePaneParts'
 import type { KnowledgeSourceFilter } from '@/ui/panels/workspace/KnowledgePaneParts'
@@ -27,12 +25,18 @@ import type {
 type PinnedBilibiliSource = Awaited<ReturnType<typeof window.desktopAPI.loadPinnedBilibiliSources>>[number]
 type BilibiliFollowSource = Awaited<ReturnType<typeof window.desktopAPI.listBilibiliFollowSources>>['items'][number]
 type BilibiliSourceVideos = Awaited<ReturnType<typeof window.desktopAPI.listBilibiliSourceVideos>>
+type ArchiveShelfFilter = 'all' | 'pinned' | 'misc' | 'long' | 'short' | 'issue'
+type ArchiveFilterItem = {
+  id: ArchiveShelfFilter
+  label: string
+  count: number
+}
 
 export const FOLLOW_SOURCE_WINDOW_SIZE = 8
 export const SOURCE_VIDEO_WINDOW_SIZE = 6
-export const WORKBENCH_LIST_PAGE_SIZE = 6
+export const WORKBENCH_RECORD_BATCH_SIZE = 10
 
-export const MIMO_TEXT_MODELS = ['mimo-v2.5-pro', 'mimo-v2.5'] as const
+export const MIMO_TEXT_MODELS = ['mimo-v2.5'] as const
 
 export function buildInitialDraft(runtimeSettings: RuntimeSettingsFallback) {
   return {
@@ -51,7 +55,7 @@ export function buildInitialDraft(runtimeSettings: RuntimeSettingsFallback) {
     minimax_tts_pitch: runtimeSettings?.minimax_tts_pitch ?? 0,
     mimo_api_key: runtimeSettings?.mimo_api_key || '',
     mimo_text_endpoint: runtimeSettings?.mimo_text_endpoint || 'https://token-plan-cn.xiaomimimo.com/v1/chat/completions',
-    mimo_text_model: runtimeSettings?.mimo_text_model || 'mimo-v2.5-pro',
+    mimo_text_model: runtimeSettings?.mimo_text_model === 'mimo-v2.5-pro' ? 'mimo-v2.5' : runtimeSettings?.mimo_text_model || 'mimo-v2.5',
     mimo_tts_endpoint: runtimeSettings?.mimo_tts_endpoint || 'https://api.xiaomimimo.com/v1/chat/completions',
     mimo_tts_model: runtimeSettings?.mimo_tts_model || 'mimo-v2.5-tts',
     mimo_tts_voice_id: runtimeSettings?.mimo_tts_voice_id || '茉莉',
@@ -99,6 +103,17 @@ export function formatCompactNumber(value: number) {
   if (!Number.isFinite(value) || value <= 0) return '0'
   if (value >= 10000) return `${(value / 10000).toFixed(1)} 万`
   return String(Math.round(value))
+}
+
+export function formatElapsedSeconds(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return ''
+  if (value < 60) return `${Math.round(value)}s`
+  const minutes = Math.floor(value / 60)
+  const seconds = Math.round(value % 60)
+  if (minutes < 60) return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const restMinutes = minutes % 60
+  return restMinutes ? `${hours}h ${restMinutes}m` : `${hours}h`
 }
 
 export function getDurationBarPercent(durationSeconds: number, maxDurationSeconds: number) {
@@ -191,6 +206,10 @@ export function getWorkbenchSourceStatus(item: WorkbenchSourceItem) {
     return { label: '处理失败', tone: 'red' as const, active: false }
   }
 
+  if (item.queue?.status === 'skipped' && !record) {
+    return { label: '已跳过', tone: 'gray' as const, active: false }
+  }
+
   if (record?.editorialSummaryStatus === 'failed') {
     return { label: '编稿失败', tone: 'red' as const, active: false }
   }
@@ -225,6 +244,8 @@ export function getWorkbenchSourceMeta(item: WorkbenchSourceItem) {
       record.sourceId,
       record.creator,
       record.textLength ? `${formatCompactNumber(record.textLength)} 字` : '',
+      record.metricsElapsedSeconds ? `耗时 ${formatElapsedSeconds(record.metricsElapsedSeconds)}` : '',
+      record.metricsTotalTokens ? `Token ${formatCompactNumber(record.metricsTotalTokens)}` : '',
       formatRelativeTime(record.updatedAt),
     ].filter(Boolean)
   }
@@ -400,7 +421,8 @@ export function buildWorkbenchSourceItems(records: MaterialInventoryRecord[], qu
     processing: 0,
     failed: 1,
     queued: 2,
-    done: 4,
+    skipped: 3,
+    done: 10,
   }
   const bySource = new Map<string, WorkbenchSourceItem>()
 
@@ -413,7 +435,7 @@ export function buildWorkbenchSourceItems(records: MaterialInventoryRecord[], qu
     })
   })
 
-  queueItems.forEach((queue) => {
+  queueItems.forEach((queue, index) => {
     const key = getQueueSourceKey(queue)
     const existing = bySource.get(key)
     if (existing) {
@@ -425,9 +447,13 @@ export function buildWorkbenchSourceItems(records: MaterialInventoryRecord[], qu
     bySource.set(key, {
       key,
       queue,
-      order: queuePriority[queue.status],
+      order: queue.status === 'done' ? 10 + records.length + index : queuePriority[queue.status],
     })
   })
 
   return Array.from(bySource.values()).sort((left, right) => left.order - right.order)
+}
+
+export function getVisibleWorkbenchRecordItems(items: WorkbenchSourceItem[], visibleCount: number) {
+  return items.slice(0, Math.max(0, visibleCount))
 }

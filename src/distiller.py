@@ -203,6 +203,86 @@ class CleaningChunk:
     next_head: str = ""
 
 
+@dataclass(slots=True)
+class CleaningProfile:
+    profile_id: str
+    names: tuple[str, ...]
+    focus: str
+    keep: tuple[str, ...]
+    remove: tuple[str, ...]
+    cautions: tuple[str, ...]
+    structure_hint: str
+
+
+MIMO_CLEANING_PROFILE_VERSION = "shijie.mimo-cleaning-profile.v0.1"
+
+MIMO_CLEANING_PROFILES: tuple[CleaningProfile, ...] = (
+    CleaningProfile(
+        profile_id="juya_ai_news",
+        names=("橘鸦juya", "橘鸦"),
+        focus="AI 新闻清稿：多条新闻必须分清主体、动作、模型/产品名、版本、价格、额度、日期和影响。",
+        keep=("公司名", "产品名", "模型名", "版本号", "价格", "额度", "日期", "政策变化", "链接线索", "影响对象"),
+        remove=("片头寒暄", "背景音乐提示", "重复播报", "点赞关注话术", "广告口播", "明显识别乱码"),
+        cautions=("不得合并不同新闻条目", "不得凭常识补全模型名或公司名", "不确定术语保留原文并标注不确定"),
+        structure_hint="如果片段包含两条以上新闻，必须用二级标题、编号或项目符号分条；每条以主体/事件开头，保持原时间顺序，避免把多个发布消息揉成一个总结。",
+    ),
+    CleaningProfile(
+        profile_id="tech_tutorial",
+        names=("技术爬爬虾",),
+        focus="技术教程清稿：保留可复现步骤、命令、路径、按钮、配置项、报错和解决办法。",
+        keep=("操作步骤", "工具名", "版本", "网址", "命令", "代码", "按钮名称", "配置项", "路径", "错误处理"),
+        remove=("重复铺垫", "口癖", "无意义寒暄", "重复演示说明"),
+        cautions=("不得压缩成概念总结", "不得删除命令、路径、按钮和配置项", "教程顺序不能打乱"),
+        structure_hint="优先保持步骤顺序；可用小标题区分准备、安装、配置、验证和排错。",
+    ),
+    CleaningProfile(
+        profile_id="luopang_knowledge",
+        names=("罗胖罗振宇", "罗振宇"),
+        focus="知识谈话清稿：保留核心判断、论证链、历史人物、案例、类比、转折和限定条件。",
+        keep=("核心判断", "论据", "历史人物", "机构", "案例", "类比", "因果链", "转折", "限定条件"),
+        remove=("重复口播", "过长铺垫", "无信息量转场", "口头禅"),
+        cautions=("不得把长论证压成一句结论", "不得删除反例和限定条件", "不要替作者下新结论"),
+        structure_hint="按观点推进顺序整理，保留故事和例子的作用，不要只剩抽象道理。",
+    ),
+    CleaningProfile(
+        profile_id="madugong_public_issue",
+        names=("马督工", "睡前消息"),
+        focus="公共议题清稿：保留政策、数据、地区、行业、利益主体、证据链、作者判断和后果。",
+        keep=("公共议题", "政策", "数据", "地区", "行业", "利益主体", "因果链", "作者判断", "反例", "后果"),
+        remove=("重复设问", "情绪化转场", "口号式表达", "节目固定寒暄", "无信息量调侃"),
+        cautions=("不得把复杂因果链简化成单一立场", "争议性判断要保留证据语境", "数字和地区名称必须谨慎保留"),
+        structure_hint="可按问题、证据、影响、判断整理；不要把观点和证据拆散。",
+    ),
+    CleaningProfile(
+        profile_id="xiaodai_reference_news",
+        names=("小黛晨读",),
+        focus="参考信息清稿：多条社会资讯必须分条，保留主体、地点、政策/监管、争议点和影响人群。",
+        keep=("事件主体", "地点", "机构", "政策", "监管动作", "关键数字", "争议点", "影响人群", "后续进展"),
+        remove=("寒暄", "固定栏目口播", "重复转场", "无意义感叹", "明显识别噪声"),
+        cautions=("不得混淆不同社会新闻", "涉及法律或监管时不要自行定性", "人名机构名不确定时标注不确定"),
+        structure_hint="如果片段包含两条以上资讯，必须用二级标题、编号或项目符号分条；每条保留主体、地点、争议点、监管/政策和影响人群，不要合并成泛泛日报摘要。",
+    ),
+    CleaningProfile(
+        profile_id="yangyuxin_ai_business",
+        names=("杨彧鑫ai", "杨彧鑫", "杨曦鑫ai"),
+        focus="AI 商业和 Agent 观点清稿：保留商业判断、方法框架、案例、行动建议、风险和限定条件。",
+        keep=("商业判断", "Agent 方法", "案例", "步骤", "指标", "趋势判断", "风险", "行动建议", "工具或模型名"),
+        remove=("标题党重复", "泛泛鸡汤", "过度铺垫", "无信息量口播", "重复类比"),
+        cautions=("不得把观点包装成事实", "商业预测要保留限定条件", "方法框架不能压缩成口号"),
+        structure_hint="按判断、依据、案例、行动建议整理；保留作者假设和风险提示。",
+    ),
+    CleaningProfile(
+        profile_id="ted_speech",
+        names=("ted官方精选", "ted"),
+        focus="演讲清稿：保留故事线、问题提出、实验/案例、核心观点、转折、比喻和可引用表达。",
+        keep=("故事线", "核心观点", "实验", "案例", "数据", "转折", "比喻", "可引用表达", "启发"),
+        remove=("掌声", "舞台提示", "寒暄", "重复表达", "字幕残留噪声"),
+        cautions=("不得重新发明演讲观点", "不要把故事完全压成抽象结论", "保留关键人物和场景细节", "不要只输出定义式摘要"),
+        structure_hint="保留演讲的叙事推进；至少覆盖问题提出、例子/机制、转折和结论，可用自然段增强可读性，不要改成纯提纲或短摘要。",
+    ),
+)
+
+
 class DistillationError(RuntimeError):
     """原材料整理过程中的结构化错误。"""
 
@@ -218,6 +298,36 @@ def _normalize_whitespace(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"[ \t]+", " ", text)
     return text.strip()
+
+
+def _normalize_profile_name(value: str) -> str:
+    return re.sub(r"\s+", "", str(value or "").strip().casefold())
+
+
+def _resolve_cleaning_profile(*, title: str = "", creator: str = "") -> CleaningProfile | None:
+    haystack = _normalize_profile_name(f"{creator} {title}")
+    if not haystack:
+        return None
+    for profile in MIMO_CLEANING_PROFILES:
+        if any(_normalize_profile_name(name) and _normalize_profile_name(name) in haystack for name in profile.names):
+            return profile
+    return None
+
+
+def _cleaning_profile_prompt(profile: CleaningProfile | None) -> str:
+    if not profile:
+        return "无。按通用忠实清稿规则处理。"
+    return "\n".join(
+        [
+            f"UP 清洗策略版本：{MIMO_CLEANING_PROFILE_VERSION}",
+            f"UP 清洗策略：{profile.profile_id}",
+            f"清洗重点：{profile.focus}",
+            f"必须保留：{'、'.join(profile.keep)}",
+            f"可以过滤：{'、'.join(profile.remove)}",
+            f"特别注意：{'；'.join(profile.cautions)}",
+            f"结构建议：{profile.structure_hint}",
+        ]
+    )
 
 
 def _compact_sentences(text: str, target_chars: int) -> list[str]:
@@ -1329,6 +1439,7 @@ def _build_cleaning_prompt(
     chunk: CleaningChunk,
     *,
     title: str,
+    cleaning_profile: CleaningProfile | None = None,
     previous_output: str = "",
     repair_notes: list[str] | None = None,
 ) -> list[dict[str, str]]:
@@ -1341,6 +1452,7 @@ def _build_cleaning_prompt(
     critical_terms_text = "、".join(critical_terms[:80]) if critical_terms else "无"
     time_markers = _extract_time_markers(chunk.text)
     time_markers_text = "、".join(time_markers[:80]) if time_markers else "无"
+    profile_text = _cleaning_profile_prompt(cleaning_profile) if cleaning_profile else ""
     if previous_output:
         notes = "；".join(repair_notes or [])
         user_prompt = f"""请修订 previous_output，使它忠实对应 current_chunk。
@@ -1353,6 +1465,7 @@ def _build_cleaning_prompt(
 - current_chunk 中的关键数字/日期项必须保留：{critical_terms_text}
 - 如果 current_chunk 含有时间戳，必须保留每个时间戳，并在对应时间戳后清洗同一时间段内容：{time_markers_text}
 - 已发现的问题：{notes or "上一版存在关键事实不一致"}
+{f"- 实验性 UP 清洗策略仅供参考；如果它与忠实性冲突，以原字幕和忠实性为最高优先级：\n{profile_text}" if profile_text else "- 清洗策略：通用高保真逐字清洗。不使用 UP 专属压缩或改写策略。"}
 
 视频标题：{title}
 
@@ -1380,6 +1493,7 @@ previous_output：
 - current_chunk 中的关键数字/日期项必须保留：{critical_terms_text}
 - current_chunk 中的时间戳必须保留：{time_markers_text}
 - 可以用自然段和少量二级标题；不要写 source/block/debug 信息。
+{f"- 实验性 UP 清洗策略仅供参考；如果它与忠实性冲突，以原字幕和忠实性为最高优先级：\n{profile_text}" if profile_text else "- 清洗策略：通用高保真逐字清洗。不使用 UP 专属压缩或改写策略。"}
 
 视频标题：{title}
 
@@ -1403,6 +1517,7 @@ def _request_mimo_cleaning(
     *,
     title: str,
     timeout: int = 120,
+    cleaning_profile: CleaningProfile | None = None,
     previous_output: str = "",
     repair_notes: list[str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
@@ -1416,6 +1531,7 @@ def _request_mimo_cleaning(
         "messages": _build_cleaning_prompt(
             chunk,
             title=title,
+            cleaning_profile=cleaning_profile,
             previous_output=previous_output,
             repair_notes=repair_notes,
         ),
@@ -1454,6 +1570,8 @@ def _request_mimo_cleaning(
         "endpoint": endpoint,
         "model": model,
         "usage": usage,
+        "cleaning_profile": cleaning_profile.profile_id if cleaning_profile else "",
+        "cleaning_profile_version": MIMO_CLEANING_PROFILE_VERSION if cleaning_profile else "",
     }
 
 
@@ -2910,7 +3028,7 @@ def _build_run_state(
         "pipeline_version": "lightweight_video_material_v1",
         "current_stage": "content_ready",
         "completed_stages": ["raw_transcript", "content_cleaning", "notebooklm_export"],
-        "next_action": "短视频可继续生成 summary/article.md；长视频可直接把 exports/notebooklm.md 导入 NotebookLM。",
+        "next_action": "NotebookLM 主资料已就绪；后续可由本地模型生成 brief/email/decision/quality 等消费层产物。",
         "pipeline_ready": True,
         "notebooklm_ready": True,
         "summary_ready": False,
@@ -2929,9 +3047,10 @@ def _build_run_state(
             "raw_transcript": os.path.join(material_dir, "raw_transcript.txt"),
             "clean_content": os.path.join(material_dir, "content.md"),
             "notebooklm_source": os.path.join(material_dir, "exports", "notebooklm.md"),
-            "summary_article": os.path.join(material_dir, "summary", "article.md"),
-            "summary_html": os.path.join(material_dir, "summary", "article.html"),
-            "summary_status": os.path.join(material_dir, "summary", "summary_status.json"),
+            "local_brief": os.path.join(material_dir, "exports", "brief.local.md"),
+            "local_email": os.path.join(material_dir, "delivery", "email.md"),
+            "local_decision": os.path.join(material_dir, "delivery", "decision.json"),
+            "local_quality_check": os.path.join(material_dir, "work", "quality", "local_check.json"),
             "source_index": os.path.join(material_dir, "indexes", "source_index.jsonl"),
         },
         "steps": [
@@ -2948,15 +3067,15 @@ def _build_run_state(
                 "output": "content.md, exports/notebooklm.md",
             },
             {
-                "id": "editorial_summary",
-                "label": "视频精读",
-                "status": "optional",
-                "output": "summary/article.md, summary/article.html",
+                "id": "local_consumption",
+                "label": "本地总结",
+                "status": "pending",
+                "output": "exports/brief.local.md, delivery/email.md, delivery/decision.json, work/quality/local_check.json",
             },
         ],
         "notes": [
-            "当前默认主流程是：软件提取字幕并清洗为 NotebookLM 可导入资料；短视频可继续由 MiMo API 生成精读稿。",
-            "本状态文件只服务字幕资料与短视频精读两条当前主线。",
+            "当前默认主流程是：软件提取字幕并清洗为 NotebookLM 可导入资料；完成后可接本地模型消费层。",
+            "旧 MiMo 精读稿不再由 subtitle-only/material-only 主线自动触发。",
         ],
     }
 
@@ -3032,6 +3151,7 @@ def save_material_package(
     text_source_type: str,
     text_source_note: str,
     ingested_at: str,
+    skip_editorial_summary: bool = False,
 ) -> str:
     bvid = str(video_info.get("bvid") or source.source_id or "unknown")
     material_root = _resolve_material_package_root(output_dir)
@@ -3115,9 +3235,9 @@ def save_material_package(
             },
             "source_preparation": "软件先生成 raw_transcript.txt 和 content.md。content.md 是清洗后的可读资料稿，可直接作为 NotebookLM/Obsidian 前置输入；raw_transcript.txt 保留完整原始证据。",
             "transcript_cleaning": "字幕清洗只做忠实清稿：修正断句、标点、重复口癖和明显识别问题，不总结、不扩写、不删除有效信息。大文本按块调用 API，使用断点缓存和有限并发。",
-            "active_workflow": "raw_transcript -> content_cleaning -> notebooklm_export -> optional_editorial_summary",
+            "active_workflow": "raw_transcript -> content_cleaning -> notebooklm_export -> optional_local_consumption",
             "long_video_strategy": "长视频/本地长材料只生成清洗稿和 NotebookLM 导入稿，不再默认进入深度学习笔记生产。",
-            "short_video_strategy": "短视频可继续由 MiMo API 生成 summary/article.md 和 summary/article.html，供资料台、档案馆和灵犀阅读归档。",
+            "short_video_strategy": "短视频默认也不再自动触发旧 MiMo 精读稿；后续消费层优先使用本地模型生成 brief/email/decision/quality。",
             "trace_strategy": "block_id、时间范围和来源摘录保留在 indexes/source_index.jsonl 与 blocks/ 中；读者正文保持干净。",
         },
     }
@@ -3238,13 +3358,43 @@ def save_material_package(
     )
     _save_json_file(os.path.join(indexes_dir, "noise_segments.json"), _build_noise_segments_index(part_index))
 
-    editorial_summary_meta = build_editorial_summary_content(
-        material_dir=material_dir,
-        title=str(video_info.get("title") or source.title or bvid),
-        source=source,
-        video_info=video_info,
-        plan=plan,
-    )
+    if skip_editorial_summary:
+        content_path = os.path.join(material_dir, "content.md")
+        content_text = ""
+        if os.path.exists(content_path):
+            with open(content_path, "r", encoding="utf-8") as file:
+                content_text = file.read()
+        editorial_summary_meta = {
+            "schema_version": EDITORIAL_SUMMARY_VERSION,
+            "status": "skipped",
+            "eligibility": {
+                "mode": "off",
+                "eligible": False,
+                "reasons": ["subtitle_only_material_package"],
+                "duration_seconds": float(video_info.get("duration") or 0),
+                "content_chars": len(content_text),
+                "text_length": plan.text_length,
+                "block_count": len(material_blocks),
+            },
+            "paths": {
+                "article_md": "summary/article.md",
+                "article_html": "summary/article.html",
+                "cards": "summary/cards.json",
+                "review": "summary/review.json",
+                "work_dir": "summary/work",
+            },
+            "review_status": "",
+            "reason": "subtitle_only_material_package",
+            "error": "",
+        }
+    else:
+        editorial_summary_meta = build_editorial_summary_content(
+            material_dir=material_dir,
+            title=str(video_info.get("title") or source.title or bvid),
+            source=source,
+            video_info=video_info,
+            plan=plan,
+        )
     manifest["editorial_summary"] = {
         key: editorial_summary_meta.get(key)
         for key in (
@@ -4170,6 +4320,7 @@ def run_distillation_from_bilibili(video_input: str, *, material_only: bool = Fa
         text_source_type=text_source_type,
         text_source_note=text_source_note,
         ingested_at=ingested_at,
+        skip_editorial_summary=material_only,
     )
     material_write_seconds = perf_counter() - material_write_started_at
 

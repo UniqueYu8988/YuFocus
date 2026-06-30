@@ -8,7 +8,6 @@ import {
   ArchivePaneContent,
   getMaterialLibraryReadHtmlPath,
   getMaterialLibraryReadPath,
-  type ArchiveShelfFilter,
 } from '@/ui/panels/workspace/ArchivePaneParts'
 import {
   KnowledgePaneContent,
@@ -17,9 +16,7 @@ import {
 import {
   SettingsPaneContent,
 } from '@/ui/panels/workspace/SettingsPaneParts'
-import {
-  WorkbenchPaneContent,
-} from '@/ui/panels/workspace/WorkbenchPaneParts'
+import { WorkbenchQueuePanel } from '@/ui/panels/workspace/WorkbenchQueueParts'
 import {
   getPageSlice,
   type MaterialInventory,
@@ -37,15 +34,13 @@ import {
   FOLLOW_SOURCE_WINDOW_SIZE,
   MIMO_TEXT_MODELS,
   SOURCE_VIDEO_WINDOW_SIZE,
-  WORKBENCH_LIST_PAGE_SIZE,
-  buildArchiveFilters,
+  WORKBENCH_RECORD_BATCH_SIZE,
   buildArchiveStats,
   buildInitialDraft,
   buildRecordSearchText,
   buildWorkbenchSourceItems,
   canOpenMaterialBrief,
   createWorkbenchQueueItem,
-  filterArchiveMaterialRecords,
   filterFollowSources,
   filterKnowledgeMaterialRecords,
   flattenBilibiliSourceVideos,
@@ -57,6 +52,7 @@ import {
   getNotebookLmImportPath,
   getNotebookLmPathTitle,
   getQueueSourceKey,
+  getVisibleWorkbenchRecordItems,
   getWorkbenchSourceMeta,
   getWorkbenchSourceStatus,
   getWorkbenchSourceTitle,
@@ -65,6 +61,11 @@ import {
   normalizeWorkbenchSourceKey,
   stripKnowledgeBriefMetadata,
 } from '@/ui/pages/WorkspacePaneUtils'
+import {
+  ARCHIVE_ALL_GROUP_ID,
+  buildArchiveCreatorGroups,
+  findArchiveCreatorGroup,
+} from '@/ui/pages/archiveGrouping'
 import { copyTextToClipboard } from '@/services/filesystem/clipboard'
 import { useLearningStore } from '@/state/store'
 import archiveCurrentRecordIcon from '@/assets/archive-current-record.svg'
@@ -73,7 +74,7 @@ import settingsBilibiliIcon from '@/assets/settings-bilibili.svg'
 import settingsTranscriptionIcon from '@/assets/settings-transcription.svg'
 import videoIcon from '@/assets/video-icon.svg'
 
-export type WorkspaceView = 'workbench' | 'knowledge' | 'archive' | 'workflow' | 'settings'
+export type WorkspaceView = 'home' | 'workbench' | 'knowledge' | 'archive' | 'workflow' | 'settings'
 
 type WorkspacePaneProps = {
   view: WorkspaceView
@@ -106,7 +107,7 @@ export function WorkspacePane({
   const workbenchQueueRemoteUpdateRef = useRef(false)
   const [libraryQuery, setLibraryQuery] = useState('')
   const [librarySortMode, setLibrarySortMode] = useState<LibrarySortMode>('recent')
-  const [archiveShelfFilter, setArchiveShelfFilter] = useState<ArchiveShelfFilter>('all')
+  const [activeArchiveGroupId, setActiveArchiveGroupId] = useState(ARCHIVE_ALL_GROUP_ID)
   const [libraryStructureRefreshing, setLibraryStructureRefreshing] = useState(false)
   const [materialSourceMode, setMaterialSourceMode] = useState<MaterialSourceMode>('bilibili')
   const [materialInventory, setMaterialInventory] = useState<MaterialInventory | null>(null)
@@ -126,7 +127,7 @@ export function WorkspacePane({
   const [manualSourceLoading, setManualSourceLoading] = useState(false)
   const [followSourcePage, setFollowSourcePage] = useState(1)
   const [sourceVideoPage, setSourceVideoPage] = useState(1)
-  const [workbenchListPage, setWorkbenchListPage] = useState(1)
+  const [workbenchRecordVisibleCount, setWorkbenchRecordVisibleCount] = useState(WORKBENCH_RECORD_BATCH_SIZE)
   const [knowledgeInventory, setKnowledgeInventory] = useState<KnowledgeInventory | null>(null)
   const [knowledgeQuery, setKnowledgeQuery] = useState('')
   const [knowledgeSourceFilter, setKnowledgeSourceFilter] = useState<KnowledgeSourceFilter>({ kind: 'all', title: '全部资料' })
@@ -288,7 +289,7 @@ export function WorkspacePane({
   }, [onRuntimeSettingsSaved, refreshSettingsStatus, setRuntimeSettings, settingsDraft, view])
 
   useEffect(() => {
-    if (view !== 'workbench' && view !== 'settings' && view !== 'knowledge') return
+    if (view !== 'workbench' && view !== 'settings' && view !== 'knowledge' && view !== 'archive') return
     let alive = true
     window.desktopAPI.listMaterialPackages()
       .then((result) => {
@@ -330,12 +331,7 @@ export function WorkspacePane({
   }, [])
 
   useEffect(() => {
-    if (view !== 'workbench') return
-    void refreshBilibiliFollowSources()
-  }, [refreshBilibiliFollowSources, runtimeSettings?.sessdata, view])
-
-  useEffect(() => {
-    if (view !== 'workbench') return
+    if (view !== 'archive') return
     let alive = true
     window.desktopAPI.loadPinnedBilibiliSources()
       .then((items) => {
@@ -415,7 +411,7 @@ export function WorkspacePane({
   }, [bilibiliSourceVideos?.fetchedAt])
 
   useEffect(() => {
-    setWorkbenchListPage(1)
+    setWorkbenchRecordVisibleCount(WORKBENCH_RECORD_BATCH_SIZE)
   }, [materialInventory?.records.length, workbenchQueue.length])
 
   useEffect(() => {
@@ -474,23 +470,44 @@ export function WorkspacePane({
     () => getArchiveMaterialRecords(sortedMaterialRecords),
     [sortedMaterialRecords],
   )
-  const archiveFilteredRecords = useMemo(
-    () => filterArchiveMaterialRecords({
+  const archiveCreatorGroups = useMemo(
+    () => buildArchiveCreatorGroups({
       records: archiveMaterialRecords,
-      shelfFilter: archiveShelfFilter,
-      query: libraryQuery,
       pinnedSources: pinnedBilibiliSources,
     }),
-    [archiveMaterialRecords, archiveShelfFilter, libraryQuery, pinnedBilibiliSources],
+    [archiveMaterialRecords, pinnedBilibiliSources],
+  )
+  const activeArchiveGroup = useMemo(
+    () => findArchiveCreatorGroup(archiveCreatorGroups, activeArchiveGroupId),
+    [activeArchiveGroupId, archiveCreatorGroups],
+  )
+  const archiveFilteredRecords = useMemo(
+    () => {
+      const normalizedQuery = libraryQuery.trim().toLocaleLowerCase('zh-CN')
+      const records = activeArchiveGroup?.records ?? []
+      if (!normalizedQuery) return records
+      return records.filter((record) => [
+        record.title,
+        record.creator,
+        record.sourceId,
+        record.sourceUrl,
+        record.workflowStageLabel,
+        record.path,
+      ].join(' ').toLocaleLowerCase('zh-CN').includes(normalizedQuery))
+    },
+    [activeArchiveGroup?.records, libraryQuery],
   )
   const archiveStats = useMemo(
     () => buildArchiveStats(archiveMaterialRecords),
     [archiveMaterialRecords],
   )
-  const archiveFilters = useMemo(
-    () => buildArchiveFilters(archiveMaterialRecords, pinnedBilibiliSources),
-    [archiveMaterialRecords, pinnedBilibiliSources],
-  )
+
+  useEffect(() => {
+    if (archiveCreatorGroups.length > 0 && !archiveCreatorGroups.some((group) => group.id === activeArchiveGroupId)) {
+      setActiveArchiveGroupId(ARCHIVE_ALL_GROUP_ID)
+    }
+  }, [activeArchiveGroupId, archiveCreatorGroups])
+
   const filteredKnowledgeMaterialRecords = useMemo(
     () => filterKnowledgeMaterialRecords({
       records: sortedMaterialRecords,
@@ -536,11 +553,11 @@ export function WorkspacePane({
     () => buildWorkbenchSourceItems(sortedMaterialRecords, workbenchQueue),
     [sortedMaterialRecords, workbenchQueue],
   )
-  const pagedWorkbenchItems = useMemo(
-    () => getPageSlice(workbenchSourceItems, workbenchListPage, WORKBENCH_LIST_PAGE_SIZE),
-    [workbenchListPage, workbenchSourceItems],
+  const visibleWorkbenchItems = useMemo(
+    () => getVisibleWorkbenchRecordItems(workbenchSourceItems, workbenchRecordVisibleCount),
+    [workbenchRecordVisibleCount, workbenchSourceItems],
   )
-  const canClearWorkbenchQueue = workbenchSourceItems.length > 0 || workbenchQueue.length > 0
+  const canLoadMoreWorkbenchItems = visibleWorkbenchItems.length < workbenchSourceItems.length
   const runtimeModeLabel = window.desktopAPI.isElectron ? '原生桌面端' : '浏览器预览'
   const automationStatusLabel = automationStatus?.running
     ? '后台检查中'
@@ -620,7 +637,7 @@ export function WorkspacePane({
       setVideoInput(video.bvid)
 
       if (alreadyQueued || alreadyBuilt) {
-        pushToast(alreadyBuilt ? '资料已存在' : '已在任务队列', video.title, 'info')
+        pushToast(alreadyBuilt ? '资料已存在' : '已在队列', video.title, 'info')
         return
       }
 
@@ -628,7 +645,7 @@ export function WorkspacePane({
         if (current.some((item) => getQueueSourceKey(item) === sourceKey)) return current
         return [...current, createWorkbenchQueueItem(video)]
       })
-      pushToast('已加入任务队列', video.title, 'success')
+      pushToast('已加入队列', video.title, 'success')
     } catch (error) {
       pushToast('读取视频信息失败', error instanceof Error ? error.message : '无法读取这条 B 站视频。', 'error')
     } finally {
@@ -746,10 +763,6 @@ export function WorkspacePane({
     pushToast('已加入处理队列', `${nextItems.length} 条视频等待处理。`, 'success')
   }
 
-  const handleRemoveQueuedVideo = (queueId: string) => {
-    setWorkbenchQueue((current) => current.filter((item) => item.queueId !== queueId))
-  }
-
   const handleStartQueuedVideo = async (queueId: string) => {
     const target = workbenchQueue.find((item) => item.queueId === queueId)
     if (!target || target.status === 'processing') return
@@ -757,29 +770,6 @@ export function WorkspacePane({
       current.map((item) => item.queueId === queueId ? { ...item, status: 'queued', lastError: '', updatedAt: Date.now() } : item),
     )
     pushToast(target.status === 'failed' ? '已重新加入队列' : '已加入队列', target.title, 'success')
-  }
-
-  const handleClearWorkbenchQueue = async () => {
-    const shouldClear = globalThis.confirm('确定清空任务队列吗？这只会移除队列记录，不会删除字幕、清洗稿或 NotebookLM 资料；正在处理的任务会保留到本轮结束。')
-    if (!shouldClear) return
-    try {
-      const result = await window.desktopAPI.clearWorkbenchQueue()
-      const [queue, materials] = await Promise.all([
-        window.desktopAPI.loadWorkbenchQueue(),
-        window.desktopAPI.listMaterialPackages(),
-      ])
-      setWorkbenchQueue(queue)
-      setMaterialInventory(materials)
-      await refreshLibrary()
-      notifyMaterialPackagesChanged()
-      const summary = [
-        result.clearedCount ? `移除 ${result.clearedCount} 条队列记录` : '',
-        queue.some((item) => item.status === 'processing') ? '正在处理的任务已保留' : '',
-      ].filter(Boolean).join('，') || '队列已经是空的'
-      pushToast('队列已清空', summary, 'success')
-    } catch (error) {
-      pushToast('清空失败', error instanceof Error ? error.message : '无法清空任务队列。', 'error')
-    }
   }
 
   const handleOpenMarkdownDocument = async (title: string, targetPath: string, kind: MarkdownDocumentKind = 'brief') => {
@@ -813,7 +803,7 @@ export function WorkspacePane({
       const content = await window.desktopAPI.readTextFile(targetPath)
       const readableContent = stripKnowledgeBriefMetadata(content)
       if (!readableContent || isRejectedModelDocument(readableContent)) {
-        throw new Error('这份正文不是可读资料，可能是模型拒绝文本或空文件。请回到字幕流水线重新生成资料。')
+        throw new Error('这份正文不是可读资料，可能是模型拒绝文本或空文件。请回到队列重新生成资料。')
       }
       setKnowledgeBriefOpen(true)
       setKnowledgeBriefTitle(title)
@@ -922,7 +912,7 @@ export function WorkspacePane({
       setRuntimeSettings(next)
       onRuntimeSettingsSaved(next)
       setSettingsError('')
-      pushToast('设置已保存', '字幕流水线配置已更新', 'success')
+      pushToast('设置已保存', '任务配置已更新', 'success')
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : '保存设置失败')
     }
@@ -947,90 +937,29 @@ export function WorkspacePane({
     return (
       <>
         <WorkspaceShell
-          eyebrow="Source Flow"
-          title="字幕流水线"
-          description="从 UP 主视频列表选择视频，进入字幕获取、清洗和 NotebookLM 输出队列。"
+          eyebrow="Queue"
+          title="队列"
+          description="查看已经加入队列的视频、处理状态和已生成资料。视频来源选择已前移到最近页和侧边栏。"
           windowFocused={windowFocused}
         >
-          <WorkbenchPaneContent
-            activeSource={activeFollowSource}
-            activeSourceId={activeFollowSourceId ?? ''}
-            allSourceCount={bilibiliFollowSources?.items.length ?? 0}
-            filteredSourceCount={filteredFollowSources.length}
-            filteredSources={filteredFollowSources}
-            pagedSources={pagedFollowSources}
-            pinnedSourceIds={pinnedBilibiliSourceIds}
-            pinnedOnly={followSourcePinnedOnly}
-            sourceQuery={followSourceQuery}
-            sourcesLoading={bilibiliFollowSourcesLoading}
-            sourcesError={bilibiliFollowSourcesError ?? ''}
-            sourcesMessage={bilibiliFollowSources?.message || undefined}
-            sourceVideos={flatSourceVideos}
-            pagedSourceVideos={pagedSourceVideos}
-            selectedVideoIds={selectedSourceVideoIds}
-            sourceVideoMaxDurationSeconds={sourceVideoMaxDurationSeconds}
-            sourceVideoPage={sourceVideoPage}
-            sourceVideosFetchedAt={bilibiliSourceVideos?.fetchedAt ?? 0}
-            sourceVideosLoading={bilibiliSourceVideosLoading}
-            sourceVideosError={bilibiliSourceVideosError ?? ''}
-            materialSourceMode={materialSourceMode}
-            videoInput={videoInput}
-            manualSourceLoading={manualSourceLoading}
-            distillRequestState={distillRequestState}
-            distillProgressPercent={distillProgressPercent}
-            distillError={distillError ?? ''}
-            automationStatus={automationStatus}
-            automationStatusLabel={automationStatusLabel}
-            automationLastCheckLabel={automationLastCheckLabel}
-            queueItems={workbenchSourceItems}
-            pagedQueueItems={pagedWorkbenchItems}
-            queuePageSize={WORKBENCH_LIST_PAGE_SIZE}
-            canClearQueue={canClearWorkbenchQueue}
-            materialRootDir={materialRootDir}
-            runtimeSettings={runtimeSettings}
-            editorialSummaryBuildingPath=""
-            onAddSelectedVideos={() => handleAddSelectedVideosToQueue()}
-            onPickLocalMedia={() => void handlePickLocalMedia()}
-            onTogglePinnedOnly={() => setFollowSourcePinnedOnly((value) => !value)}
-            onRefreshSources={() => {
-              if (activeFollowSource) {
-                void refreshBilibiliSourceVideos([activeFollowSource.mid])
-              } else {
-                void refreshBilibiliFollowSources()
-              }
-            }}
-            onSourceQueryChange={setFollowSourceQuery}
-            onSourcePageChange={setFollowSourcePage}
-            onOpenSource={handleOpenFollowSource}
-            onTogglePinnedSource={(source) => void handleTogglePinnedFollowSource(source)}
-            onVideoInputChange={setVideoInput}
-            onMaterialSourceModeChange={setMaterialSourceMode}
-            onSubmitManualSource={() => void handleDistillCourse()}
-            onToggleVideo={handleToggleSourceVideo}
-            onSourceVideoPageChange={setSourceVideoPage}
-            onClearQueue={() => void handleClearWorkbenchQueue()}
-            onOpenMaterialRoot={() => runtimeSettings?.output_dir ? void window.desktopAPI.openPath(materialRootDir) : undefined}
-            onRefreshMaterials={async () => {
-              try {
-                setMaterialInventory(await window.desktopAPI.listMaterialPackages())
-              } catch {
-                pushToast('刷新失败', '无法读取原材料目录。', 'error')
-              }
-            }}
-            onQueuePageChange={setWorkbenchListPage}
-            getDurationBarPercent={getDurationBarPercent}
-            formatRelativeTime={formatRelativeTime}
-            getItemStatus={getWorkbenchSourceStatus}
-            getItemMeta={getWorkbenchSourceMeta}
-            getItemTitle={getWorkbenchSourceTitle}
-            canOpenBrief={canOpenMaterialBrief}
-            getNotebookLmPathTitle={getNotebookLmPathTitle}
-            onRetryQueueItem={(queueId) => void handleStartQueuedVideo(queueId)}
-            onCopyNotebookLmPath={(record) => void handleCopyNotebookLmImportPath(record)}
-            onOpenBrief={(record) => void handleOpenKnowledgeBriefInLearning(record)}
-            onDeleteMaterial={(record) => void handleDeleteMaterialPackage(record)}
-            onRemoveQueuedVideo={handleRemoveQueuedVideo}
-          />
+          <div className="grid min-h-0 w-full grid-cols-1 gap-5">
+            <WorkbenchQueuePanel
+              items={workbenchSourceItems}
+              visibleItems={visibleWorkbenchItems}
+              canLoadMore={canLoadMoreWorkbenchItems}
+              distillRequestState={distillRequestState}
+              editorialSummaryBuildingPath=""
+              onLoadMore={() => setWorkbenchRecordVisibleCount((current) => Math.min(workbenchSourceItems.length, current + WORKBENCH_RECORD_BATCH_SIZE))}
+              getItemStatus={getWorkbenchSourceStatus}
+              getItemMeta={getWorkbenchSourceMeta}
+              getItemTitle={getWorkbenchSourceTitle}
+              canOpenBrief={canOpenMaterialBrief}
+              getNotebookLmPathTitle={getNotebookLmPathTitle}
+              onRetryQueueItem={(queueId) => void handleStartQueuedVideo(queueId)}
+              onCopyNotebookLmPath={(record) => void handleCopyNotebookLmImportPath(record)}
+              onOpenBrief={(record) => void handleOpenKnowledgeBriefInLearning(record)}
+            />
+          </div>
         </WorkspaceShell>
         {workspaceDialogs}
       </>
@@ -1095,19 +1024,19 @@ export function WorkspacePane({
       <>
         <WorkspaceShell
           eyebrow="Archive"
-          title="NotebookLM 输出"
-          description="查看已生成的字幕清洗资料和 NotebookLM 导入稿。"
+          title="档案"
+          description="按 UP 主查看已生成的字幕清洗资料和 NotebookLM 导入稿。"
           windowFocused={windowFocused}
         >
           <ArchivePaneContent
             stats={archiveStats}
-            filters={archiveFilters}
-            activeFilter={archiveShelfFilter}
+            groups={archiveCreatorGroups}
+            activeGroup={activeArchiveGroup}
             query={libraryQuery}
             records={archiveFilteredRecords}
             materialRootDir={materialRootDir}
             canOpenRoot={Boolean(materialInventory?.rootDir)}
-            onFilterChange={setArchiveShelfFilter}
+            onGroupChange={setActiveArchiveGroupId}
             onQueryChange={setLibraryQuery}
             onOpenRoot={() => void window.desktopAPI.openPath(materialRootDir)}
             onRefresh={() => {

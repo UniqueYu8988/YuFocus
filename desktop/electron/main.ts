@@ -25,8 +25,11 @@ import { registerKnowledgeIpcHandlers } from './ipc/knowledgeIpcHandlers'
 import { registerSettingsAutomationIpcHandlers } from './ipc/settingsAutomationIpcHandlers'
 import { registerSystemIpcHandlers } from './ipc/systemIpcHandlers'
 import { createPinnedSourcesStore } from './services/pinnedSourcesStore'
+import { createTrackedSourcesStore } from './services/trackedSourcesStore'
 import { createSourceDiscoveryRuntime } from './providers/sourceDiscoveryRuntime'
 import { createMaterialRecordBridge } from './services/materialRecordBridge'
+import { runLocalConsumptionForMaterial } from './services/localConsumptionRunner'
+import { pushFreshMaterialEmail } from './services/emailDeliveryService'
 import { resolveVideoRegistryRoot } from './services/videoRegistry'
 import {
   createRuntimePaths,
@@ -52,6 +55,7 @@ import {
 import { registerWindowIpcHandlers } from './ipc/windowIpcHandlers'
 import { registerWorkbenchQueueIpcHandlers } from './ipc/workbenchQueueIpcHandlers'
 import { createWorkbenchQueueStore } from './queue/workbenchQueueStore'
+import { isWorkbenchQueueItemClaimable } from './queue/workbenchQueue'
 
 const APP_NAME = '视界专注'
 const APP_ID = 'ShijieFocus'
@@ -68,8 +72,9 @@ const DISTILL_PROCESS_TIMEOUT_MS = Number(process.env.SHIJIE_DISTILL_PROCESS_TIM
 const BACKGROUND_DISCOVERY_WINDOW_MS = 24 * 60 * 60 * 1000
 const BILIBILI_SOURCE_QUERY_BATCH_SIZE = 12
 const BILIBILI_RECENT_VIDEO_PAGE_SIZE = 20
-const BACKGROUND_CHECK_INTERVAL_MINUTES = 360
-const WORKBENCH_QUEUE_CONCURRENCY = 3
+const BILIBILI_HISTORY_BACKFILL_PAGE_SIZE = 30
+const BACKGROUND_CHECK_INTERVAL_MINUTES = 60
+const WORKBENCH_QUEUE_CONCURRENCY = 1
 
 const runtimePaths = createRuntimePaths({
   isPackaged: app.isPackaged,
@@ -185,12 +190,42 @@ const pinnedSourcesStore = createPinnedSourcesStore({
 
 const {
   loadPinnedSources: loadPinnedBilibiliSources,
-  savePinnedSources: savePinnedBilibiliSources,
+  savePinnedSources: savePinnedBilibiliSourcesRaw,
 } = pinnedSourcesStore
+
+const trackedSourcesStore = createTrackedSourcesStore({
+  readTrackedSources: () => secureStore.get('trackedBilibiliSources'),
+  writeTrackedSources: (items) => secureStore.set('trackedBilibiliSources', items),
+})
+
+const {
+  loadTrackedSources: loadTrackedBilibiliSources,
+  saveTrackedSources: saveTrackedBilibiliSources,
+  syncTrackedSourcesWithPinnedSources,
+} = trackedSourcesStore
+
+const savePinnedBilibiliSources = (items: unknown) => {
+  const pinnedSources = savePinnedBilibiliSourcesRaw(items)
+  syncTrackedSourcesWithPinnedSources(pinnedSources)
+  return pinnedSources
+}
+
+syncTrackedSourcesWithPinnedSources(loadPinnedBilibiliSources())
+
+const loadFreshTrackedBilibiliSources = () => loadTrackedBilibiliSources()
+  .filter((source) => source.trackFresh)
+  .sort((left, right) => left.priority - right.priority || right.pinnedAt - left.pinnedAt)
+
+const loadHistoryTrackedBilibiliSources = () => loadTrackedBilibiliSources()
+  .filter((source) => source.trackHistory)
+  .sort((left, right) => left.priority - right.priority || right.pinnedAt - left.pinnedAt)
+
+const hasClaimableWorkbenchItems = () => loadWorkbenchQueue().some((item) => isWorkbenchQueueItemClaimable(item))
 
 const sourceDiscoveryRuntime = createSourceDiscoveryRuntime({
   loadSettings,
-  loadPinnedSources: loadPinnedBilibiliSources,
+  loadPinnedSources: loadFreshTrackedBilibiliSources,
+  loadHistorySources: loadHistoryTrackedBilibiliSources,
   loadQueue: loadWorkbenchQueue,
   listMaterialPackages,
   appendRuntimeLog,
@@ -201,8 +236,78 @@ const sourceDiscoveryRuntime = createSourceDiscoveryRuntime({
 })
 
 const {
+  discoverHistoryBackfillVideoForWorkbench,
+  fetchHistoryBackfillPageForWorkbench,
   discoverPinnedSourceVideosForWorkbench,
 } = sourceDiscoveryRuntime
+
+const discoverFreshTrackedSourceVideosForWorkbench = async (settings = loadSettings(), trigger = 'timer') => {
+  const trackedSources = loadTrackedBilibiliSources()
+  const freshTrackedSourceIds = new Set(trackedSources.filter((source) => source.trackFresh).map((source) => source.mid))
+  const result = trigger === 'idle-backfill'
+    ? { discovered: [], checkedSourceCount: 0, totalVideoCount: 0 }
+    : await discoverPinnedSourceVideosForWorkbench(settings)
+  if (result.checkedSourceCount > 0 && freshTrackedSourceIds.size > 0) {
+    const now = Date.now()
+    saveTrackedBilibiliSources(trackedSources.map((source) => (
+      freshTrackedSourceIds.has(source.mid)
+        ? { ...source, lastCheckedAt: now, updatedAt: now }
+        : source
+    )))
+  }
+  if (result.discovered.length || hasClaimableWorkbenchItems()) return result
+
+  let historyItem = discoverHistoryBackfillVideoForWorkbench(settings)
+  if (!historyItem) {
+    const trackedSources = loadTrackedBilibiliSources()
+    const targetSource = trackedSources
+      .filter((source) => source.trackHistory && !source.historyReachedEnd && source.historyStatus !== 'completed')
+      .sort((left, right) => left.priority - right.priority || right.pinnedAt - left.pinnedAt)[0]
+    if (!targetSource) return result
+
+    const nextPage = Math.max(1, (targetSource.historyPage || 0) + 1)
+    try {
+      const pageResult = await fetchHistoryBackfillPageForWorkbench(
+        targetSource,
+        nextPage,
+        BILIBILI_HISTORY_BACKFILL_PAGE_SIZE,
+        settings,
+      )
+      const now = Date.now()
+      saveTrackedBilibiliSources(trackedSources.map((source) => (
+        source.mid === targetSource.mid
+          ? {
+              ...source,
+              historyPage: pageResult.page,
+              historyReachedEnd: !pageResult.hasMore,
+              historyStatus: pageResult.hasMore ? 'running' : 'completed',
+              updatedAt: now,
+            }
+          : source
+      )))
+      historyItem = discoverHistoryBackfillVideoForWorkbench(settings)
+    } catch (error) {
+      const now = Date.now()
+      saveTrackedBilibiliSources(trackedSources.map((source) => (
+        source.mid === targetSource.mid
+          ? {
+              ...source,
+              historyStatus: 'failed',
+              updatedAt: now,
+            }
+          : source
+      )))
+      appendRuntimeLog(`history backfill page failed mid=${targetSource.mid} page=${nextPage}: ${error instanceof Error ? error.message : String(error)}`)
+      return result
+    }
+  }
+  if (!historyItem) return result
+
+  return {
+    ...result,
+    discovered: [historyItem],
+  }
+}
 
 const materialRecordBridge = createMaterialRecordBridge({
   listMaterialPackages,
@@ -220,6 +325,23 @@ const {
   isMaterialRecordCleaned,
   isMaterialRecordSummaryReady,
 } = materialRecordBridge
+
+async function pushMaterialEmail(
+  record: ReturnType<typeof findMaterialRecordByPath> | null,
+  context: { queueSource?: Parameters<typeof pushFreshMaterialEmail>[0]['queueSource'] },
+) {
+  if (!record?.path) {
+    appendRuntimeLog('fresh email delivery skipped: missing material record')
+    return
+  }
+  const result = await pushFreshMaterialEmail({
+    materialPath: record.path,
+    queueSource: context.queueSource,
+    settings: loadSettings(),
+    appendRuntimeLog,
+  })
+  appendRuntimeLog(`fresh email delivery ${result.status}: ${result.reason}`)
+}
 
 const backendRuntime = createBackendRuntime({
   devProjectRoot,
@@ -246,10 +368,13 @@ const automationRuntime = createAutomationRuntime({
   checkIntervalMinutes: BACKGROUND_CHECK_INTERVAL_MINUTES,
   queueConcurrency: WORKBENCH_QUEUE_CONCURRENCY,
   loadSettings,
-  readPaused: () => Boolean(secureStore.get('backgroundAutomationPaused')),
-  writePaused: (paused) => secureStore.set('backgroundAutomationPaused', paused),
-  loadPinnedSources: loadPinnedBilibiliSources,
-  discoverPinnedSourceVideos: discoverPinnedSourceVideosForWorkbench,
+  readPauseState: () => secureStore.get('backgroundAutomationPause') ?? Boolean(secureStore.get('backgroundAutomationPaused')),
+  writePauseState: (pauseState) => {
+    secureStore.set('backgroundAutomationPause', pauseState)
+    secureStore.set('backgroundAutomationPaused', pauseState.paused)
+  },
+  loadPinnedSources: loadFreshTrackedBilibiliSources,
+  discoverPinnedSourceVideos: discoverFreshTrackedSourceVideosForWorkbench,
   appendQueueItems: appendWorkbenchQueueItems,
   loadQueue: loadWorkbenchQueue,
   recoverQueue: recoverInterruptedWorkbenchQueue,
@@ -260,8 +385,10 @@ const automationRuntime = createAutomationRuntime({
   isMaterialRecordSummaryReady,
   isMaterialRecordCleaned,
   archiveMaterialRecord,
+  pushMaterialEmail,
   runDistiller: runPythonDistiller,
   runMaterialSummary: runPythonMaterialSummary,
+  runLocalConsumption: (materialPath) => runLocalConsumptionForMaterial(materialPath, { appendRuntimeLog }),
   getMaterialPathFromDistillResult,
   appendRuntimeLog,
   getMainWindow: () => windowController.getMainWindow(),
@@ -381,6 +508,8 @@ registerBilibiliSourceIpcHandlers({
   loadSettings,
   loadPinnedBilibiliSources,
   savePinnedBilibiliSources,
+  loadTrackedBilibiliSources,
+  saveTrackedBilibiliSources,
   registryRoot: videoRegistryRoot,
 })
 

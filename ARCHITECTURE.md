@@ -5,7 +5,7 @@
 ## 1. 项目概览
 
 - 软件类型：本地优先的 Electron 桌面应用，配套 Python 后端脚本。
-- 主要技术：React、TypeScript、Vite、Electron、Tailwind CSS、Python、B 站接口、本地 SenseVoice 转写、MiMo 字幕清洗等外部服务。
+- 主要技术：React、TypeScript、Vite、Electron、Tailwind CSS、Python、B 站接口、本地 SenseVoice 转写、MiMo 字幕清洗、本地 Ollama 总结和 SMTP 邮件通知。
 - 启动方式：开发模式通常进入 `desktop` 后执行 `npm run dev`。本轮未启动主进程，避免写入真实用户数据或触发后台队列。
 - 项目入口：前端入口 `desktop/src/main.tsx`、桌面主进程入口 `desktop/electron/main.ts`、预加载入口 `desktop/electron/preload.ts`、Python 整理入口 `src/distiller.py`。
 - 数据存储位置：默认数据根目录 `C:\Users\Yu\AI\视界专注\data`；Electron 用户数据目录 `C:\Users\Yu\AppData\Roaming\视界专注` 保存设置和敏感配置。
@@ -50,7 +50,10 @@
 | 前端 state 层 | 保存前端状态和旧兼容状态 | UI action、IPC 返回 | React 可订阅状态 | `desktop/src/state` |
 | Electron 主进程 | 装配窗口、设置、队列、后台、IPC 和文件操作 | 前端 IPC、系统事件、定时器 | 文件读写、子进程、状态广播 | `desktop/electron/*` |
 | Python 字幕整理链路 | 获取字幕或转写音频，清洗正文，生成内部材料包和 NotebookLM 导入稿 | B 站链接/BV、本地音视频、环境变量配置 | `data/materials/{up_id}/{video_id}` | requests、yt-dlp、SenseVoice、MiMo |
+| MiMo 清洗提示词实验层 | 为重点 UP 主生成清洗 profile，并用真实字幕小样本循环比较通用 prompt、UP prompt 和修订轮次 | `data/materials` 中已有 `raw_transcript.txt`、旧清洗稿、MiMo 设置 | `data/temp/mimo-cleaning-prompt-lab/` 临时报告 | `src/distiller.py` 的 profile 纯函数、`desktop/scripts/generate_mimo_cleaning_prompt_lab.py`；当前不写正式材料包，也不进入生产队列 |
 | Summary Pipeline | 遗留消费层，后续如恢复也只能独立读取字幕清洗产物 | 已完成的字幕清洗资料 | `summary/*`、邮件或音频等消费产物 | MiMo、SMTP、TTS 服务；当前已从主流程和主 UI 隔离 |
+| 本地消费层 | 读取 NotebookLM 主资料，生成本地 brief、邮件草稿、价值判断和质量检查；作为 subtitle-only 材料完成后的正式后置步骤 | `exports/notebooklm.md`、`raw_transcript.txt`、本地模型配置 | `exports/brief.local.md`、`delivery/email.md`、`delivery/decision.json`、`work/quality/local_check.json`、`work/local_consumption/run_meta.json` | `desktop/src/domain/localConsumption.ts` 生成请求计划；`desktop/electron/services/localOllamaAdapter.ts` 执行 Ollama；`desktop/electron/services/localConsumptionRunner.ts` 限制写入当前材料包并更新 manifest/metrics/run_state |
+| 通知层 / 最近更新邮件 | 只把 fresh 最近更新视频的本地总结发送到邮箱，不生成内容、不参与清洗 | 队列来源、本地 brief/email、decision、quality、SMTP 设置 | `delivery/email_status.json`、SMTP 邮件 | `desktop/electron/services/emailDeliveryService.ts`、`desktop/electron/queue/queueExecutor.ts`、`nodemailer` |
 | 材料清单 | 扫描 `data/materials`，判断资料阶段 | `{up_id}/{video_id}` 材料目录 | 输出页列表数据 | Node.js fs |
 | 视频注册表 | 合并 UP 主视频元数据，稳定刷新行为 | B 站 API 返回、已有 registry | `data/registry/{up_id}.json` 和稳定视频列表 | Node.js fs |
 | 后台自动化 | 按来源发现最近视频，加入队列并处理 | 收藏/关注来源、队列、已有材料包 | 队列项目、材料包 | B 站接口、Python 后端 |
@@ -62,6 +65,30 @@
 
 ## 4. 核心数据流
 
+### 流程 0：简洁首页数据更新
+
+```text
+打开桌面端
+→ 只读固定来源、本地 `data/registry`、队列和材料清单
+→ 展示最近视频、独立视频来源区和处理状态
+
+用户点击“更新数据”
+→ 请求固定来源的视频元数据
+→ 合并写入 `data/registry/{up_id}.json`
+→ 重新展示数据
+
+用户点击“管理固定 UP”
+→ 读取 B 站关注来源
+→ 选择固定或取消固定 UP
+→ 保存固定来源并重新读取本地注册表快照
+
+用户在视频来源区选择视频并点击“加入队列”
+→ 保存任务队列记录，模式为 subtitle-only
+→ 不直接启动下载、转写或材料制作入口
+```
+
+首页不挂载原字幕流水线工作区，也不调用自动化检查、下载、转写或材料制作入口。主进程通过 `sources:bilibili:registered-videos` 提供只读本地注册表快照；现有来源刷新 IPC 只在用户点击“更新数据”后调用。固定 UP 弹窗只保存来源订阅，不创建处理任务；“加入队列”按钮只保存队列记录。
+
 ### 流程 1：UP 主驱动的字幕清洗主流程
 
 ```text
@@ -70,16 +97,29 @@
 → 前端调用 preload 暴露的 desktopAPI
 → 工作台队列记录视频
 → Electron 主进程调用 `src/distiller.py`
-→ Python 获取字幕，必要时走转写兜底
+→ Python 获取字幕，同一分 P 只选择一条首选语言轨；必要时走转写兜底
 → 清洗字幕
 → 生成 NotebookLM 可导入资料
 ```
 
-当前行为：刷新 UP 主视频时先调用 B 站 API，再合并进 `data/registry/{up_id}.json`，界面显示 registry 中的稳定列表。UP 主批量入队路径和后台来源发现都会创建 `pipelineMode: 'subtitle_only'`、`editorialMode: 'off'` 的队列项。队列执行到字幕清洗和 NotebookLM 导入稿完成后结束，不继续触发精读稿、邮件或 TTS。
+当前行为：刷新 UP 主视频时先调用 B 站 API，再合并进 `data/registry/{up_id}.json`，界面显示 registry 中的稳定列表。UP 主批量入队路径和后台来源发现都会创建 `pipelineMode: 'subtitle_only'`、`editorialMode: 'off'` 的队列项。队列执行到字幕清洗和 NotebookLM 导入稿完成后，会尝试运行本地消费层；只有 `fresh` 最近更新视频在质量门控通过且邮件设置启用时才进入通知层。旧精读稿、旧邮件模板和 TTS 不会被 subtitle-only 主线触发。
 
 运行时明确区分项目根和标准数据根：开发环境的标准数据根是项目下的 `data`，视频注册表由主进程解析为 `data/registry` 后统一传给前台刷新和后台发现。旧设置中的项目 `output` 根只用于单向规范化到 `data`，不再作为材料扫描或生产写入位置。
 
 “清空任务队列”只清理非处理中的队列记录，保留正在处理的任务；该操作不扫描、不归档、不删除材料包。资料包删除仍是独立操作，必须经过路径安全检查和单条确认。
+
+### 流程 1.1：MiMo UP 定制清洗提示词实验层
+
+```text
+只读已有 `data/materials/{up_id}/{video_id}`
+→ 截取真实 `raw_transcript.txt` 小样本
+→ MiMo 通用 prompt 清洗 baseline
+→ MiMo UP profile prompt 清洗 profiled
+→ 如评分未达标，带 repair notes 跑 iteration-2
+→ 写入 `data/temp/mimo-cleaning-prompt-lab/` 对比报告
+```
+
+说明：该实验层用于保存 UP 定制清洗提示词的历史实验结论。当前生产路线已经回到通用高保真逐字清洗；实验层只读正式材料，只写临时目录，不覆盖 `cleaned_transcript.txt`、`content.md` 或 `exports/notebooklm.md`，也不接入队列、邮件或本地 Ollama。
 
 ### 流程 2：单个视频和本地媒体辅助输入
 
@@ -103,7 +143,36 @@
 → 生成精读稿、邮件或 TTS 等消费产物
 ```
 
-说明：总结、精读稿、邮件和 TTS 当前暂停作为主线推进，不应继续绑在字幕清洗主流程里。
+说明：旧 Summary Pipeline 和 TTS 当前暂停作为主线推进。最近更新邮件已经恢复为独立通知层，但它只消费本地 brief，不参与字幕清洗，也不恢复旧精读稿链路。
+
+### 流程 3.1：本地消费层正式后置步骤
+
+```text
+已完成的 NotebookLM 主资料
+→ 本地 brief / email / decision / quality 请求计划
+→ Ollama adapter 执行
+→ 写入同一 `data/materials/{up_id}/{video_id}` 材料包
+→ 更新 manifest / metrics / run_state
+```
+
+说明：`desktop/src/domain/localConsumption.ts` 只负责纯计算和请求计划，不直接调用网络、HTTP 客户端或子进程。`desktop/electron/services/localOllamaAdapter.ts` 只负责调用 Ollama 并归一化结果，不读取材料包、不写文件。`desktop/electron/services/localConsumptionRunner.ts` 负责读取材料包、执行本地消费层、把产物写回当前材料包，并更新 `manifest.json`、`metrics.json`、`run_state.json`。
+
+当前行为：subtitle-only 队列项生成 NotebookLM 主资料后，会自动尝试生成 `exports/brief.local.md`、`delivery/email.md`、`delivery/decision.json` 和 `work/quality/local_check.json`。本地消费层失败或需复核不会让 NotebookLM 主资料失败；通知层如果要发邮件，只读取 `delivery/email.md` 或 `exports/brief.local.md`，不能重新绑回旧 Summary Pipeline。
+
+临时验收脚本 `desktop/scripts/generate-local-ollama-samples.mjs` 仍可用于离线抽样比较，但不再代表正式写入路径。
+
+### 流程 3.2：fresh-only 最近更新邮件通知
+
+```text
+subtitle-only 材料包完成
+→ 本地消费层生成 brief / email / decision / quality
+→ 队列来源是 fresh
+→ 邮件推送已启用且 SMTP 配置完整
+→ 质量门控通过且同一内容未发送过
+→ 发送邮件并写入 delivery/email_status.json
+```
+
+说明：`history`、`manual`、`retry`、`follow_source` 队列项不会自动发送邮件。邮件发送失败只写入 `delivery/email_status.json` 和运行日志，不把队列项改成失败。邮件正文不附带本机材料目录，只提示资料已保存在本机档案。
 
 ### 流程 4：后台来源和队列
 
@@ -155,7 +224,7 @@
 | Summary Pipeline 路由 | 遗留兼容路径，控制非主线编稿参数 | `SHIJIE_EDITORIAL_SUMMARY_MODE`、`SHIJIE_EDITORIAL_SUMMARY_MAX_DURATION_SECONDS`、`SHIJIE_EDITORIAL_SUMMARY_MAX_CONTENT_CHARS` | 当前 `subtitle_only` 队列不会进入该路径 |
 | MiniMax TTS | 旧配置兼容字段，当前没有主线 IPC / UI 入口 | Electron Store | 不影响字幕清洗主线 |
 | 本地 SenseVoice | 无字幕视频或本地音视频转写 | 设置中的本地转写根目录、Python 路径、模型和设备 | 无字幕材料无法转写 |
-| SMTP 邮件 | 旧配置兼容字段，当前邮件发送服务已剪枝 | Electron Store | 不影响字幕清洗主线 |
+| SMTP 邮件 | 最近更新邮件通知；只发送 fresh 队列项的本地总结产物 | Electron Store；发送服务只读取必要 SMTP 字段，不写出授权码 | 未配置或发送失败不会影响字幕清洗和材料生成 |
 | Obsidian 路径 | 旧配置兼容字段，当前 Obsidian IPC / CLI 已剪枝 | Electron Store | 不影响 NotebookLM 输出 |
 
 不要在本文档写入真实密码或密钥值。
@@ -180,7 +249,8 @@
 - `data` 是当前运行数据根；`desktop/dist`、`desktop/dist-electron` 是构建产物，不作为核心源码维护。
 - 删除真实材料包前必须通过路径安全检查，并在人工验收中覆盖。
 - `data/materials/{up_id}/{video_id}` 是当前内部材料目录，其中 `exports/notebooklm.md` 是用户最终出口；不应把内部状态暴露到最终清洗稿。
-- 字幕 Pipeline 是当前核心数据层；Summary Pipeline、邮件和 TTS 是后续独立消费层。
+- 字幕 Pipeline 是当前核心数据层；旧 Summary Pipeline 和 TTS 仍是暂停状态；最近更新邮件是独立通知层，只允许消费本地总结产物。
+- 邮件通知层只能读取本地消费层产物，不能直接调用 MiMo、不能读取旧 `summary/`，也不能对历史补全自动群发。
 - 开发模式下，`desktop/electron/runtimePaths.ts` 通过多个稳定标志探测项目根目录：`AGENTS.md`、`PRODUCT.md`、`ARCHITECTURE.md`、`src/distiller.py`、`desktop/package.json`。不再依赖 `PROJECT_CONTEXT.md`。
 - `CoursePackage`、`lesson`、`quiz_question`、`standard_answer`、`quizzing` 等旧字段只允许作为兼容层存在，不应影响新的产品语言、制作流程或对外文件命名。
 - 前端分层规则：`desktop/src/domain`、`desktop/src/services`、`desktop/src/state`、`desktop/src/legacy` 不应引用 `desktop/src/ui`。
@@ -215,11 +285,11 @@ data/materials/{up_id}/{video_id}/exports/notebooklm.md
 - 已完成一次 `data` 根下的真实桌面端 subtitle-only 小样本；后续仍需持续积累不同来源和失败场景验收。
 - 旧历史文档仍包含已退出路线，容易误导后续改造。
 - 旧 `output/` 测试生成内容已删除；新生产格式已改为 `data/materials/{up_id}/{video_id}`。
-- 当前主界面已收束为字幕流水线和 NotebookLM 输出；旧专注、灵犀、档案消费代码已进入 `legacy` 兼容层，不再是主导航入口。
+- 当前主界面默认进入简洁首页；任务队列和 NotebookLM 输出保留为明确入口。旧专注、灵犀、档案消费代码已进入 `legacy` 兼容层，不再是主导航入口。
 - `PROJECT_CONTEXT.md` 不再是流程页白名单或开发项目根探测依赖；原文件已归档到 `docs/history/legacy-md/PROJECT_CONTEXT.md`。
 - 旧系统优化审计、旧视频编稿流程和旧聊天记录已归档到 `docs/history/legacy-md/`；日常技术事实以本文档和当前代码为准。
 
 ## 11. 最近核对
 
-- 日期：2026-06-20
-- 与当前代码是否一致：桌面端源码已迁移到清晰分层目录；生产输出统一到 `data/materials/{up_id}/{video_id}`，视频注册表统一到 `data/registry`，清空队列不再删除材料包。
+- 日期：2026-06-30
+- 与当前代码是否一致：桌面端源码已迁移到清晰分层目录；生产输出统一到 `data/materials/{up_id}/{video_id}`，视频注册表统一到 `data/registry`，清空队列不再删除材料包；本地消费层已接在 subtitle-only 后置步骤，最近更新邮件通知只允许 `fresh` 队列项触发。

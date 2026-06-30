@@ -2,7 +2,9 @@ import type { MaterialPackageSummary } from '../services/materialInventory'
 import type { RuntimeSettings } from '../runtime/settings'
 import {
   collectKnownWorkbenchBvids,
+  discoverHistoryBackfillVideo,
   discoverPinnedSourceVideos,
+  fetchAndMergeHistoryBackfillPage,
   type PinnedBilibiliSource,
 } from './sourceDiscovery'
 import type { WorkbenchQueueItem } from '../queue/workbenchQueue'
@@ -10,6 +12,7 @@ import type { WorkbenchQueueItem } from '../queue/workbenchQueue'
 type SourceDiscoveryRuntimeDeps = {
   loadSettings: () => RuntimeSettings
   loadPinnedSources: () => PinnedBilibiliSource[]
+  loadHistorySources?: () => PinnedBilibiliSource[]
   loadQueue: () => WorkbenchQueueItem[]
   listMaterialPackages: (settings: RuntimeSettings) => { records: MaterialPackageSummary[] }
   appendRuntimeLog: (message: string) => void
@@ -22,6 +25,7 @@ type SourceDiscoveryRuntimeDeps = {
 export function createSourceDiscoveryRuntime({
   loadSettings,
   loadPinnedSources,
+  loadHistorySources,
   loadQueue,
   listMaterialPackages,
   appendRuntimeLog,
@@ -51,8 +55,33 @@ export function createSourceDiscoveryRuntime({
     })
   }
 
+  const discoverHistoryBackfillVideoForWorkbench = (settings = loadSettings()) => {
+    return discoverHistoryBackfillVideo({
+      registryRoot,
+      sources: loadHistorySources ? loadHistorySources() : loadPinnedSources(),
+      knownBvids: collectKnownBvidsForDiscovery(settings),
+    })
+  }
+
+  const fetchHistoryBackfillPageForWorkbench = async (
+    source: PinnedBilibiliSource,
+    page: number,
+    pageSize: number,
+    settings = loadSettings(),
+  ) => {
+    return fetchAndMergeHistoryBackfillPage({
+      settings,
+      registryRoot,
+      source,
+      page,
+      pageSize,
+    })
+  }
+
   return {
     collectKnownBvidsForDiscovery,
+    discoverHistoryBackfillVideoForWorkbench,
     discoverPinnedSourceVideosForWorkbench,
+    fetchHistoryBackfillPageForWorkbench,
   }
 }

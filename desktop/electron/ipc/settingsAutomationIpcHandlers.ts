@@ -8,7 +8,7 @@ type SettingsAutomationIpcDeps = {
   saveSettings: (settings: RuntimeSettings) => RuntimeSettings
   getBackgroundAutomationStatus: () => BackgroundAutomationStatus
   runBackgroundAutomationCheck: (trigger: 'manual') => Promise<BackgroundAutomationStatus>
-  setBackgroundAutomationPaused: (paused: boolean) => BackgroundAutomationStatus
+  setBackgroundAutomationPaused: (paused: boolean, durationMs?: number) => BackgroundAutomationStatus
 }
 
 export function registerSettingsAutomationIpcHandlers({
@@ -28,6 +28,10 @@ export function registerSettingsAutomationIpcHandlers({
 
   ipcMain.handle('automation:check-now', async () => runBackgroundAutomationCheck('manual'))
 
-  ipcMain.handle('automation:set-paused', (_event, paused: boolean) => setBackgroundAutomationPaused(Boolean(paused)))
+  ipcMain.handle('automation:set-paused', (_event, payload: boolean | { paused?: boolean; durationMs?: number }) => {
+    const paused = typeof payload === 'boolean' ? payload : Boolean(payload?.paused)
+    const durationMs = typeof payload === 'object' ? Number(payload.durationMs ?? 0) || undefined : undefined
+    return setBackgroundAutomationPaused(paused, durationMs)
+  })
 
 }

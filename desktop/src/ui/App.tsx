@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, type PointerEvent as ReactPointerEven
 import { AppChrome } from '@/ui/components/AppChrome'
 import { SourceSidebarPane } from '@/ui/panels/SourceSidebarPane'
 import { WorkspacePane, type WorkspaceView } from '@/ui/pages/WorkspacePane'
+import { HomePane } from '@/ui/pages/HomePane'
 import { Button } from '@/ui/components/base/button'
 import { Card, CardContent } from '@/ui/components/base/card'
 import { ensureDesktopApiFallback } from '@/services/filesystem/desktopApiFallback'
@@ -11,10 +12,10 @@ import { useLearningStore } from '@/state/store'
 
 ensureDesktopApiFallback()
 
-const SIDEBAR_WIDTH_STORAGE_KEY = 'shijie-focus-sidebar-width'
-const SIDEBAR_MIN_WIDTH = 220
-const SIDEBAR_MAX_WIDTH = 380
-const SIDEBAR_DEFAULT_WIDTH = 240
+const SIDEBAR_WIDTH_STORAGE_KEY = 'shijie-focus-sidebar-width-v2'
+const SIDEBAR_MIN_WIDTH = 176
+const SIDEBAR_MAX_WIDTH = 280
+const SIDEBAR_DEFAULT_WIDTH = 208
 
 function clampSidebarWidth(value: number) {
   return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, Math.round(value)))
@@ -26,7 +27,8 @@ function loadSidebarWidth() {
 }
 
 function App() {
-  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('workbench')
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('home')
+  const [activeBilibiliSourceId, setActiveBilibiliSourceId] = useState('')
   const [windowFocused, setWindowFocused] = useState(true)
   const [windowMaximized, setWindowMaximized] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
@@ -45,6 +47,16 @@ function App() {
 
   const handleSelectWorkspaceView = useCallback((view: WorkspaceView) => {
     setWorkspaceView(view)
+  }, [])
+
+  const handleSelectRecent = useCallback(() => {
+    setActiveBilibiliSourceId('')
+    setWorkspaceView('home')
+  }, [])
+
+  const handleSelectBilibiliSource = useCallback((sourceId: string) => {
+    setActiveBilibiliSourceId(sourceId)
+    setWorkspaceView('home')
   }, [])
 
   useEffect(() => {
@@ -103,8 +115,8 @@ function App() {
               <LoaderCircle className="size-5 animate-spin" />
             </div>
             <div className="space-y-1">
-              <p className="text-sm font-medium text-foreground">正在恢复字幕流水线</p>
-              <p className="text-sm text-muted-foreground">来源、队列和输出记录都会在这里续上。</p>
+              <p className="text-sm font-medium text-foreground">正在打开最近</p>
+              <p className="text-sm text-muted-foreground">来源、队列和档案记录都会在这里续上。</p>
             </div>
           </CardContent>
         </Card>
@@ -172,6 +184,9 @@ function App() {
         <SourceSidebarPane
           workspaceView={workspaceView}
           onSelectView={handleSelectWorkspaceView}
+          activeBilibiliSourceId={activeBilibiliSourceId}
+          onSelectRecent={handleSelectRecent}
+          onSelectBilibiliSource={handleSelectBilibiliSource}
           sidebarWidth={sidebarWidth}
           windowFocused={windowFocused}
         />
@@ -192,16 +207,24 @@ function App() {
             )}
           />
         </div>
-        <WorkspacePane
-          view={workspaceView}
-          runtimeSettings={runtimeSettings}
-          windowFocused={windowFocused}
-          onRuntimeSettingsSaved={(next) => {
-            setRuntimeSettings(next)
-          }}
-          onRequestWorkbench={() => setWorkspaceView('workbench')}
-          onRequestArchive={() => setWorkspaceView('archive')}
-        />
+        {workspaceView === 'home' ? (
+          <HomePane
+            windowFocused={windowFocused}
+            activeSourceId={activeBilibiliSourceId}
+            onActiveSourceChange={setActiveBilibiliSourceId}
+          />
+        ) : (
+          <WorkspacePane
+            view={workspaceView}
+            runtimeSettings={runtimeSettings}
+            windowFocused={windowFocused}
+            onRuntimeSettingsSaved={(next) => {
+              setRuntimeSettings(next)
+            }}
+            onRequestWorkbench={() => setWorkspaceView('workbench')}
+            onRequestArchive={() => setWorkspaceView('archive')}
+          />
+        )}
       </div>
     </div>
   )

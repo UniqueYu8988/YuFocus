@@ -1,7 +1,9 @@
 import Store from 'electron-store'
 import type { LearningLibraryState } from '../legacy/learningLibraryStore'
 import type { RuntimeSettings } from './settings'
+import type { BackgroundAutomationPauseState } from './automationController'
 import type { PinnedBilibiliSource } from '../providers/sourceDiscovery'
+import type { TrackedBilibiliSource } from '../services/trackedSourcesStore'
 import type { WorkbenchQueueItem } from '../queue/workbenchQueue'
 
 type RuntimeStoreSchema = {
@@ -9,7 +11,9 @@ type RuntimeStoreSchema = {
   learningLibrary: LearningLibraryState
   workbenchQueue: WorkbenchQueueItem[]
   pinnedBilibiliSources: PinnedBilibiliSource[]
+  trackedBilibiliSources: TrackedBilibiliSource[]
   backgroundAutomationPaused: boolean
+  backgroundAutomationPause: BackgroundAutomationPauseState
 }
 
 type LegacyRuntimeStoreSchema = {

@@ -46,6 +46,16 @@ export type BilibiliSourceVideosPayload = {
   }>
 }
 
+export type BilibiliSourceVideoPageResult = {
+  mid: string
+  name: string
+  page: number
+  pageSize: number
+  total: number
+  hasMore: boolean
+  videos: BilibiliVideoMetadata[]
+}
+
 export type BilibiliVideoMetadata = {
   bvid: string
   aid: string
@@ -298,10 +308,11 @@ async function fetchBilibiliVideosForSource(
   mixinKey: string,
   source: { mid: string; name: string },
   pageSize: number,
+  page = 1,
 ) {
   const baseParams = {
     mid: source.mid,
-    pn: 1,
+    pn: Math.max(1, Math.floor(page) || 1),
     ps: pageSize,
     tid: 0,
     keyword: '',
@@ -334,9 +345,15 @@ async function fetchBilibiliVideosForSource(
       const data = payload.data && typeof payload.data === 'object' ? payload.data as Record<string, unknown> : {}
       const list = data.list && typeof data.list === 'object' ? data.list as Record<string, unknown> : {}
       const rawVideos = Array.isArray(list.vlist) ? list.vlist : Array.isArray(data.vlist) ? data.vlist : []
-      return rawVideos
+      const pageInfo = data.page && typeof data.page === 'object' ? data.page as Record<string, unknown> : {}
+      const total = Number(pageInfo.count ?? pageInfo.total ?? data.count ?? 0) || 0
+      const videos = rawVideos
         .map((item) => normalizeBilibiliVideoItem(item, source.mid, source.name))
         .filter((item): item is NonNullable<typeof item> => Boolean(item))
+      return {
+        total,
+        videos,
+      }
     } catch (error) {
       lastError = error instanceof Error ? error.message : '投稿列表读取失败'
     }
@@ -467,12 +484,12 @@ export async function listBilibiliSourceVideos(
 
   for (const source of normalizedSources) {
     try {
-      const videos = await fetchBilibiliVideosForSource(headers, mixinKey, source, safePageSize)
+      const result = await fetchBilibiliVideosForSource(headers, mixinKey, source, safePageSize)
       resultSources.push({
         mid: source.mid,
         name: source.name,
         error: '',
-        videos,
+        videos: result.videos,
       })
     } catch (error) {
       resultSources.push({
@@ -489,5 +506,42 @@ export async function listBilibiliSourceVideos(
     fetchedAt: Date.now(),
     totalVideos: resultSources.reduce((sum, source) => sum + source.videos.length, 0),
     sources: resultSources,
+  }
+}
+
+export async function listBilibiliSourceVideoPage(
+  settings: BilibiliSettings,
+  source: { mid: string; name?: string },
+  page = 1,
+  pageSize = 30,
+): Promise<BilibiliSourceVideoPageResult> {
+  const normalizedSource = {
+    mid: sanitizeDisplayText(source.mid),
+    name: sanitizeDisplayText(source.name ?? source.mid),
+  }
+  if (!normalizedSource.mid) {
+    throw new Error('缺少 UP 主 MID。')
+  }
+
+  const status = await fetchSettingsStatus(settings)
+  if (!status.bilibili.valid) {
+    throw new Error(status.bilibili.configured ? status.bilibili.message : '请先在设置中配置 SESSDATA。')
+  }
+
+  const cookie = buildBilibiliCookie(settings)
+  const headers = buildBilibiliHeaders(cookie)
+  const mixinKey = await fetchBilibiliWbiMixinKey(headers).catch(() => '')
+  const safePage = Math.max(1, Math.floor(page) || 1)
+  const safePageSize = Math.max(1, Math.min(30, Math.floor(pageSize) || 30))
+  const result = await fetchBilibiliVideosForSource(headers, mixinKey, normalizedSource, safePageSize, safePage)
+  const total = result.total || 0
+  return {
+    mid: normalizedSource.mid,
+    name: normalizedSource.name,
+    page: safePage,
+    pageSize: safePageSize,
+    total,
+    hasMore: result.videos.length >= safePageSize && (total <= 0 || safePage * safePageSize < total),
+    videos: result.videos,
   }
 }

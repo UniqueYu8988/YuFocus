@@ -293,12 +293,13 @@ function buildPythonEnv(settings: RuntimeSettings, extraEnv: NodeJS.ProcessEnv =
       : configuredLocalDevice
   const mimoApiKey = settings.mimo_api_key.trim() || process.env.SHIJIE_MIMO_API_KEY || ''
   const mimoTextEndpoint = resolveMiMoTextEndpoint(settings)
+  const configuredMimoTextModel = settings.mimo_text_model.trim()
   const mimoTextModel =
-    settings.mimo_text_model.trim() ||
+    (configuredMimoTextModel === 'mimo-v2.5-pro' ? 'mimo-v2.5' : configuredMimoTextModel) ||
     process.env.SHIJIE_MIMO_EDITORIAL_MODEL ||
     process.env.SHIJIE_MIMO_CLEANING_MODEL ||
     process.env.SHIJIE_MIMO_MODEL ||
-    'mimo-v2.5-pro'
+    'mimo-v2.5'
   const mimoTtsEndpoint = resolveMiMoTtsEndpoint(settings)
   const mimoTtsModel = settings.mimo_tts_model.trim() || 'mimo-v2.5-tts'
   const contentCleaningWorkers = resourceMode === 'background' ? '1' : resourceMode === 'fast' ? '3' : '2'

@@ -18,7 +18,7 @@ const defaultRuntimeSettings: RuntimeSettingsShape = {
   minimax_tts_pitch: 0,
   mimo_api_key: '',
   mimo_text_endpoint: 'https://token-plan-cn.xiaomimimo.com/v1/chat/completions',
-  mimo_text_model: 'mimo-v2.5-pro',
+  mimo_text_model: 'mimo-v2.5',
   mimo_tts_endpoint: 'https://api.xiaomimimo.com/v1/chat/completions',
   mimo_tts_model: 'mimo-v2.5-tts',
   mimo_tts_voice_id: '茉莉',
@@ -46,12 +46,25 @@ const defaultRuntimeSettings: RuntimeSettingsShape = {
 const defaultAutomationStatus = {
   enabled: true,
   paused: false,
+  pauseReason: '' as const,
+  pausedUntil: null,
   running: false,
   lastCheckAt: null,
   nextCheckAt: null,
   lastResult: '浏览器预览模式不运行后台任务。',
   lastError: null,
   checkIntervalMinutes: 360,
+}
+
+function buildPreviewAutomationPauseStatus(payload: boolean | { paused?: boolean; durationMs?: number }) {
+  const paused = typeof payload === 'boolean' ? payload : Boolean(payload?.paused)
+  const durationMs = typeof payload === 'object' ? Number(payload.durationMs ?? 0) || 0 : 0
+  return {
+    ...defaultAutomationStatus,
+    paused,
+    pauseReason: paused ? (durationMs ? 'duration' as const : 'manual' as const) : '' as const,
+    pausedUntil: paused && durationMs ? Date.now() + durationMs : null,
+  }
 }
 
 function loadBrowserSettings() {
@@ -118,7 +131,7 @@ export function ensureDesktopApiFallback() {
     window.desktopAPI.pickImageFile ??= async () => null
     window.desktopAPI.getAutomationStatus ??= async () => defaultAutomationStatus
     window.desktopAPI.runAutomationCheckNow ??= async () => defaultAutomationStatus
-    window.desktopAPI.setAutomationPaused ??= async (paused) => ({ ...defaultAutomationStatus, paused })
+    window.desktopAPI.setAutomationPaused ??= async (payload) => buildPreviewAutomationPauseStatus(payload)
     window.desktopAPI.listMaterialPackages ??= async () => ({
       rootDir: '',
       records: [],
@@ -137,6 +150,8 @@ export function ensureDesktopApiFallback() {
     })
     window.desktopAPI.loadPinnedBilibiliSources ??= async () => []
     window.desktopAPI.savePinnedBilibiliSources ??= async (items) => items
+    window.desktopAPI.loadTrackedBilibiliSources ??= async () => []
+    window.desktopAPI.saveTrackedBilibiliSources ??= async (items) => items
     window.desktopAPI.listBilibiliFollowSources ??= async () => ({
       provider: 'bilibili',
       configured: false,
@@ -146,6 +161,12 @@ export function ensureDesktopApiFallback() {
       message: '浏览器预览模式暂不读取关注源。',
       nextAction: '请在桌面端使用关注源',
       items: [],
+    })
+    window.desktopAPI.listRegisteredBilibiliSourceVideos ??= async () => ({
+      provider: 'bilibili',
+      fetchedAt: 0,
+      totalVideos: 0,
+      sources: [],
     })
     window.desktopAPI.listBilibiliSourceVideos ??= async () => ({
       provider: 'bilibili',
@@ -192,7 +213,7 @@ export function ensureDesktopApiFallback() {
     }),
     getAutomationStatus: async () => defaultAutomationStatus,
     runAutomationCheckNow: async () => defaultAutomationStatus,
-    setAutomationPaused: async (paused) => ({ ...defaultAutomationStatus, paused }),
+    setAutomationPaused: async (payload) => buildPreviewAutomationPauseStatus(payload),
     copyTextFile: async () => {
       throw unavailable('复制文件文本')
     },
@@ -254,6 +275,8 @@ export function ensureDesktopApiFallback() {
     }),
     loadPinnedBilibiliSources: async () => [],
     savePinnedBilibiliSources: async (items) => items,
+    loadTrackedBilibiliSources: async () => [],
+    saveTrackedBilibiliSources: async (items) => items,
     listBilibiliFollowSources: async () => ({
       provider: 'bilibili',
       configured: false,
@@ -263,6 +286,12 @@ export function ensureDesktopApiFallback() {
       message: '浏览器预览模式暂不读取关注源。',
       nextAction: '请在桌面端使用关注源',
       items: [],
+    }),
+    listRegisteredBilibiliSourceVideos: async () => ({
+      provider: 'bilibili',
+      fetchedAt: 0,
+      totalVideos: 0,
+      sources: [],
     }),
     listBilibiliSourceVideos: async () => ({
       provider: 'bilibili',

@@ -1,9 +1,17 @@
-import { extractBilibiliBvid, listBilibiliSourceVideos, type BilibiliSettings, type BilibiliSourceVideosPayload, type BilibiliVideoMetadata } from './bilibiliSourceApi'
+import {
+  extractBilibiliBvid,
+  listBilibiliSourceVideoPage,
+  listBilibiliSourceVideos,
+  type BilibiliSettings,
+  type BilibiliSourceVideosPayload,
+  type BilibiliVideoMetadata,
+} from './bilibiliSourceApi'
 import type { MaterialPackageSummary } from '../services/materialInventory'
 import type { WorkbenchQueueItem } from '../queue/workbenchQueue'
 import {
   listRegistryVideos,
   mergeVideosIntoRegistry,
+  readVideoRegistry,
 } from '../services/videoRegistry'
 
 export type PinnedBilibiliSource = {
@@ -19,6 +27,12 @@ export type SourceDiscoveryResult = {
   discovered: WorkbenchQueueItem[]
   checkedSourceCount: number
   totalVideoCount: number
+}
+
+type HistoryBackfillSource = PinnedBilibiliSource & {
+  priority?: number
+  trackHistory?: boolean
+  historyStatus?: string
 }
 
 function sanitizeDisplayText(value: unknown, fallback = '') {
@@ -56,13 +70,17 @@ export function normalizePinnedBilibiliSources(raw: unknown): PinnedBilibiliSour
   return normalized.sort((left, right) => right.pinnedAt - left.pinnedAt).slice(0, 48)
 }
 
-export function createBackgroundQueueItem(video: BilibiliVideoMetadata, sourceName = ''): WorkbenchQueueItem {
+function createSourceQueueItem(
+  video: BilibiliVideoMetadata,
+  sourceName = '',
+  queueSource: WorkbenchQueueItem['queueSource'],
+): WorkbenchQueueItem {
   const now = Date.now()
   return {
     ...video,
     sourceName: sourceName || video.authorName,
     queueId: `${video.bvid}-${now}`,
-    queueSource: 'follow_source',
+    queueSource,
     editorialMode: 'off',
     pipelineMode: 'subtitle_only',
     status: 'queued',
@@ -70,6 +88,14 @@ export function createBackgroundQueueItem(video: BilibiliVideoMetadata, sourceNa
     queuedAt: now,
     updatedAt: now,
   }
+}
+
+export function createBackgroundQueueItem(video: BilibiliVideoMetadata, sourceName = ''): WorkbenchQueueItem {
+  return createSourceQueueItem(video, sourceName, 'fresh')
+}
+
+export function createHistoryBackfillQueueItem(video: BilibiliVideoMetadata, sourceName = ''): WorkbenchQueueItem {
+  return createSourceQueueItem(video, sourceName, 'history')
 }
 
 export function tryExtractBilibiliBvid(input: unknown) {
@@ -110,24 +136,30 @@ function normalizeSourceRequest(source: { mid: string; name?: string }) {
   }
 }
 
-function registryPayloadFromSources(options: {
+export function readRegisteredBilibiliSourceVideos(options: {
   registryRoot: string
-  sources: Array<{ mid: string; name: string }>
-  fetchedAt?: number
+  sources: Array<{ mid: string; name?: string }>
   error?: string
 }): BilibiliSourceVideosPayload {
-  const fetchedAt = options.fetchedAt ?? Date.now()
-  const resultSources = options.sources.map((source) => ({
-    mid: source.mid,
-    name: source.name,
-    error: options.error ?? '',
-    videos: listRegistryVideos(options.registryRoot, source.mid),
-  }))
+  const sources = options.sources
+    .map(normalizeSourceRequest)
+    .filter((source) => source.mid)
+    .slice(0, 12)
+  const resultSources = sources.map((source) => {
+    const registry = readVideoRegistry(options.registryRoot, source.mid)
+    return {
+      mid: source.mid,
+      name: source.name,
+      error: options.error ?? '',
+      videos: listRegistryVideos(options.registryRoot, source.mid),
+      lastSync: Date.parse(registry.last_sync || '') || 0,
+    }
+  })
   return {
     provider: 'bilibili',
-    fetchedAt,
+    fetchedAt: resultSources.reduce((latest, source) => Math.max(latest, source.lastSync), 0),
     totalVideos: resultSources.reduce((sum, source) => sum + source.videos.length, 0),
-    sources: resultSources,
+    sources: resultSources.map(({ lastSync: _lastSync, ...source }) => source),
   }
 }
 
@@ -155,7 +187,7 @@ export async function listRegisteredBilibiliSourceVideos(options: {
   try {
     apiPayload = await listBilibiliSourceVideos(options.settings, normalizedSources, options.pageSize)
   } catch (error) {
-    return registryPayloadFromSources({
+    return readRegisteredBilibiliSourceVideos({
       registryRoot: options.registryRoot,
       sources: normalizedSources,
       error: error instanceof Error ? error.message : '投稿列表读取失败',
@@ -242,5 +274,59 @@ export async function discoverPinnedSourceVideos(options: {
     discovered,
     checkedSourceCount,
     totalVideoCount,
+  }
+}
+
+export function discoverHistoryBackfillVideo(options: {
+  registryRoot: string
+  sources: HistoryBackfillSource[]
+  knownBvids: Set<string>
+}) {
+  const sources = options.sources
+    .filter((source) => source.trackHistory !== false)
+    .sort((left, right) => (
+      (left.priority ?? Number.MAX_SAFE_INTEGER) - (right.priority ?? Number.MAX_SAFE_INTEGER) ||
+      right.pinnedAt - left.pinnedAt
+    ))
+
+  for (const source of sources) {
+    const candidate = listRegistryVideos(options.registryRoot, source.mid)
+      .filter((video) => video.bvid && !options.knownBvids.has(video.bvid))
+      .sort((left, right) => (right.pubdate || 0) - (left.pubdate || 0))[0]
+    if (!candidate) continue
+    options.knownBvids.add(candidate.bvid)
+    return createHistoryBackfillQueueItem(candidate, source.name)
+  }
+
+  return null
+}
+
+export async function fetchAndMergeHistoryBackfillPage(options: {
+  settings: BilibiliSettings
+  registryRoot: string
+  source: HistoryBackfillSource
+  page: number
+  pageSize: number
+}) {
+  const result = await listBilibiliSourceVideoPage(
+    options.settings,
+    { mid: options.source.mid, name: options.source.name },
+    options.page,
+    options.pageSize,
+  )
+  if (result.videos.length) {
+    mergeVideosIntoRegistry({
+      registryRoot: options.registryRoot,
+      upId: options.source.mid,
+      videos: result.videos,
+    })
+  }
+  return {
+    sourceMid: options.source.mid,
+    page: result.page,
+    pageSize: result.pageSize,
+    fetchedVideoCount: result.videos.length,
+    total: result.total,
+    hasMore: result.hasMore,
   }
 }

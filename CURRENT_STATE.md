@@ -2,21 +2,21 @@
 
 本文件只记录项目“现在”的状态，不保存完整历史。
 
-最后更新：2026-06-20
+最后更新：2026-06-30
 
 ## 当前阶段
 
 项目底层工作流改造已完成，后续进入常规小步稳定化开发。  
 下一阶段主线已调整为“UP 主驱动的字幕清洗”：UP 主 / 来源视频列表 → 批量选择 → 字幕获取 → 字幕清洗 → NotebookLM 可导入资料。
-字幕系统是当前核心数据层；总结、精读稿、邮件和 TTS 不再作为主线推进。
+字幕系统是当前核心数据层；旧精读稿和 TTS 不再作为主线推进。最近更新邮件已恢复为独立通知层：只消费本地总结产物，只对 `fresh` 新视频发送，历史补全不发送。
 旧档案、旧灵犀和旧学习包兼容链路暂时降级为旧版遗留，后续只做必要兼容，不作为当前稳定化最高优先级。
 
 ## 当前可正常使用
 
 - 代码层面已确认存在桌面端、Python 后端、材料包扫描、设置、队列、后台自动化和字幕清洗主线；TTS、邮件测试和 Obsidian IPC / CLI 入口已在安全剪枝中移除。
-- 桌面端可以启动并显示首页。
+- 桌面端可以启动并默认显示“最近”页；最近页首次只读本地数据，手动更新只刷新来源视频元数据，不自动入队、下载或转写。
 - 设置页可以打开；本轮未复制或输出 Cookie、API Key、SMTP 授权码等秘密值。
-- 左侧栏保留字幕流水线、输出、流程、设置入口；旧灵犀 / 学习入口不再作为主导航。
+- 左侧栏保留最近、队列、档案、流程、设置入口，并承载固定 UP 视频来源列表；旧灵犀 / 学习入口不再作为主导航。
 - 安全检查通过：`npx tsc --noEmit`、Python 语法检查、`desktop/scripts/check-distill-progress.mjs`、`desktop/scripts/check-subtitle-only-queue-mode.mjs`、`desktop/scripts/check-data-layer-normalization.mjs`。
 - 已安装的本机基础环境：Node.js `v24.13.0`、npm `11.6.2`、Python `3.12.10`。
 - Python 依赖探测显示 `requests`、`jsonschema`、`PySide6`、`imageio_ffmpeg` 已安装。
@@ -42,9 +42,23 @@
 - 第十一个数据稳定性任务已完成：新增 `data/registry/{up_id}.json` 视频注册表层，UP 主视频刷新改为 API 结果合并入本地 registry 后再返回列表，避免 API 临时缺失导致视频消失；后台来源发现也走同一稳定列表。
 - 第十二个稳定性任务已完成：修正运行时注册表路径，4 个旧注册表无损迁移到 `data/registry` 并保留独立备份；连续真实刷新保持每表 30 条、0 重复。
 - 本机旧 `output_dir` 已在备份 Store 后通过应用自身设置 API 持久化为项目 `data` 根。
-- “清空任务队列”已改为只清理队列记录，不再扫描、归档或删除材料包；纯内存检查和真实 IPC 回归均通过。
+- “清空队列”已改为只清理队列记录，不再扫描、归档或删除材料包；纯内存检查和真实 IPC 回归均通过。
 - 真实桌面端小样本 `BV131jF68E5n` 已在 `data/materials/256724889/bv131jf68e5n` 完成 subtitle-only 流程。
 - 本轮已把代码、文档和目录迁移收敛为一个 Git 稳定存档点；`data/` 真实运行数据由 `.gitignore` 排除。
+- “最近”页已完成：顶部已精简为只保留刷新图标；左侧栏显示“最近”和固定 UP 视频来源，固定 UP 以圆形头像加名称呈现，并通过侧边栏“管理固定 UP”弹窗设置；右侧默认显示最近视频，点击左侧某个 UP 后显示该 UP 的视频列表；用户可勾选视频并手动加入队列。真实桌面端手动刷新后只更新元数据，不自动触发下载、转写或制作。
+- 主导航命名已收敛为“最近 / 队列 / 档案 / 流程 / 设置”；档案页已接入只读 UP 主分组，并改为上下结构：上方横向展示 UP / 全部 / 拾遗圆形头像入口，头像右上角显示对应视频数量角标；下方显示当前分组的视频资料卡片；当前不迁移、不删除、不改写真实资料。
+- 档案页视觉密度已进一步优化：头像数量角标改为半透明毛玻璃效果；顶部统计只保留总字数、占用、耗时、Token 四项；UP 主头像条和资料列表合并为一个轻量容器；资料列表删除阶段、原字、清洗、文稿、HTML、长稿等低价值标签，改为突出标题、BV / 来源、更新时间、字数、占用、耗时和 Token。
+- UP 主自动同步调度升级已完成，并已追加后台自动运行补丁：工作台队列强制一次只处理 1 条；固定 UP 会同步出 `trackedBilibiliSources` 追踪状态；侧边栏固定 UP 列表按 tracking 优先级展示，并可通过提高 / 降低按钮保存 UP 历史补足优先级；后台自动化默认对齐下一个整点，每小时检查启用 `trackFresh` 的 UP，新发现视频以 `fresh` 来源自动入队；当没有 fresh 和可立即领取的队列项时，会从 registry 或 B 站历史分页中按 UP 优先级补 `history` 任务，并保存每个 UP 的 `historyPage` / `historyReachedEnd` 游标；队列空闲后会触发 `idle-backfill` 继续补下一条历史任务，不再等下一个整点；未来才到期的 retry 项不会阻塞历史补足，retry 到点会自动唤醒；付费、充电、权限受限、`HTTP 412` 或无音频轨等不可重试媒体访问错误会标记为 `skipped / 已跳过`，不再自动重试；最近页已提供暂停 2h、5h、手动暂停和恢复入口，并新增一条极简实时状态提示，用来显示正在处理的视频、等待数量、暂停状态、下次检查时间或同步异常；临时失败会按 5 分钟、30 分钟、2 小时最多重试 3 次，配置类失败会暂停后台同步；队列页已改为轻量记录流，初始 10 条，滚动加载，去除旧外框、分页器、清空 / 删除类按钮，并显示单条已完成视频的总耗时和 Token；真实运行中已看到 2026-06-28 21:00 至 2026-06-29 02:00 多次准点后台检查和自动队列处理记录；本轮只读统计 `data/materials` 为 288 个文件，未执行删除、迁移或重命名材料操作。
+- B 站多语言字幕误合并补丁已完成：同一分 P 同时存在中文和英文字幕时，正文只使用中文轨；没有中文时才使用英文兜底，避免中英两套完整字幕同时进入 `raw_transcript.txt`、`content.md` 和 `exports/notebooklm.md`。已生成的旧材料包不会自动改写，需重跑对应视频后才会得到新产物。
+- MiMo 字幕清洗默认模型已从 `mimo-v2.5-pro` 切换为非 Pro 的 `mimo-v2.5`；旧设置中保存的 Pro 值在加载和后台运行时都会自动降级，降低 Token Plan Credits 消耗。
+- MiMo UP 定制清洗提示词实验层已完成：`src/distiller.py` 已新增 7 个重点 UP 的清洗 profile；`desktop/scripts/generate_mimo_cleaning_prompt_lab.py` 可在 `data/temp/mimo-cleaning-prompt-lab/` 中循环生成 baseline / profiled / iteration-2 对比结果，并支持 `--reevaluate-existing` 不重复消耗 MiMo token 重评质量；真实小样本最终 7/7 通过。该机制尚未接入正式 `data/materials` 生成链路。
+- “MiMo 主资料 + 本地模型消费层 / 门控”已接入正式后置链路：subtitle-only 材料生成 NotebookLM 主资料后，会调用本地 Ollama `shijie-qwen3-8b-q4-chat` 生成 `exports/brief.local.md`、`delivery/email.md`、`delivery/decision.json`、`work/quality/local_check.json` 和 `work/local_consumption/run_meta.json`，并更新 `manifest.json`、`metrics.json`、`run_state.json`；本地消费层失败或需复核不会让 NotebookLM 主资料失败。
+- 本机 Ollama + Qwen3-8B 本地模型试运行已完成：模型原始文件位于 `C:\Users\Yu\AI\Cuda\models\Qwen3-8B-GGUF\Qwen3-8B-Q4_K_M.gguf`，Ollama 运行仓库已同步到 `C:\Users\Yu\AI\Cuda\ollama-models`，推荐接入模型名为 `shijie-qwen3-8b-q4-chat`。该模型通过了 brief、邮件草稿和 JSON 判断的最小冒烟测试；旧模型名 `shijie-qwen3-8b-q4` 缺少正确聊天模板，不建议接入。
+- “本地 Ollama adapter 试接”已完成：任务文件 `docs/tasks/local-ollama-adapter-phase2.md` 和详细计划 `docs/plans/local-ollama-adapter-phase2-plan.md` 已补充完成记录。4 个真实小样本均生成成功，brief / email / decision / quality_check 全部为 `ok`；重复运行会跳过已完成样本；该阶段仍不接入队列、不改写真实材料包、不发送邮件。
+- “本地消费层正式闭环补丁”已完成：任务文件 `docs/tasks/autopilot-local-summary-closure-patch.md` 和计划 `docs/plans/autopilot-local-summary-closure-patch-plan.md` 已记录完成结果。新约 10 分钟样本 `BV1MBjx6cEHw` 完整跑通 B 站元数据 → SenseVoice 转写 → MiMo 清洗 → NotebookLM 主资料 → 本地 Ollama brief/email/decision/quality，材料生成 57.207 秒，本地消费层 18.476 秒；`--material-only` 不再生成旧 `summary/`，`manifest.editorial_summary.status=skipped`。
+- 本地 brief / email 成稿门控补丁已完成：任务文件 `docs/tasks/local-brief-output-guard-fix.md` 已记录完成结果。Markdown 输出预算从 256 提升到 1024，brief / email 增加自我分析文字、过短、无标题和半句截断检查，失败会用严格成稿提示词自动重试一次。中文样本 `BV1i5jy6bECe` 重跑后 `exports/brief.local.md` 为 1100 字、`delivery/email.md` 为 558 字，均无过程性文字，`quality.riskLevel=low`。
+- 最近更新邮件转发生产化补丁已完成：正式 MiMo 清洗回到通用高保真逐字清洗，UP 定制 prompt 只保留为 `data/temp/mimo-cleaning-prompt-lab/` 实验层；本地 brief 升级为事实门控版高信息密度总结，Ollama 上下文和输出预算提高；新增 `desktop/electron/services/emailDeliveryService.ts` 使用 `nodemailer` 发送邮件，只允许 `queueSource === 'fresh'` 的最近更新视频在本地总结和质量门控通过后发送。`history`、`manual`、`retry`、`follow_source` 不发送；重复内容通过 `delivery/email_status.json` 跳过；SMTP 密码不写入状态、日志或产物；邮件失败不影响队列完成。
+- UI 板块切换性能补丁已完成：撤回“双面板常驻 hidden”方案，保持当前主面板单独挂载；“最近”页新增内存快照缓存，切回时优先恢复上一次本地数据，切换左侧不同 UP 来源不再触发完整本地快照重载。该补丁不修改队列、转写、MiMo 清洗、本地总结、邮件发送或真实材料数据。
 
 ## 已知问题
 
@@ -56,7 +70,7 @@
 | 旧上下文归档后的历史引用仍存在 | 历史文档和旧任务记录仍会提到 `PROJECT_CONTEXT.md` | 低 | 这些只作为历史文字，不作为日常入口 |
 | 旧清理基线已归档 | 历史文档仍会提到 `docs/cleanup-baseline.md` | 低 | 这些只作为历史文字，不作为日常入口 |
 | 旧 Markdown 治理阶段已结束 | 继续整理历史文档会拖延代码层稳定化 | 中 | 停止集中整理历史文档，进入代码层稳定化 |
-| 档案主页面待核对现象 | 受控验收时主区域显示为空，与旧计数和材料包数量不一致 | 低 | 旧版遗留候选问题，暂不修复 |
+| 档案状态文案后续统一 | 档案页已完成 UP 主分组和视频资料卡片；最近页、队列页、档案页之间的同一 BV 状态文案还可以进一步统一 | 低 | 后续另开小任务，不影响当前档案结构目标 |
 | 独立灵犀页入口待核对 | 受控验收时未找到明确入口 | 低 | 旧版遗留候选问题，暂不修复 |
 | 现有 51 个材料包未检测到 `metrics.json` | 旧测试数据计量不完整 | 低 | 旧版遗留，暂不回填 |
 | `src/distiller.py` 职责很重 | 字幕、清洗、编稿、缓存、文件写出混在一个大文件，修改风险高 | 中 | 稳定化前不拆分，只加验收保护 |
@@ -81,16 +95,19 @@
 
 ## 下一步只做什么
 
-1. 普通后续任务可以继续按 `AGENTS.md` 新工作流小步推进。
-2. 后续真实运行继续小批量进行，先核对队列和 `data/materials`，再加入新视频。
-3. 如果继续剪枝，下一步应优先审计旧学习库 / 精读稿兼容链是否仍有真实数据读取价值；不删除旧数据，不碰 subtitle-only 主线。
-4. 如果继续架构收敛，下一步只能做“小步抽离 UI 页面中的纯 action / selector”，不要直接拆 `WorkspacePane.tsx` 或改 pipeline 行为。
+1. 下一步不要把 MiMo UP 定制清洗 profile 接入正式字幕清洗链路；如未来重新实验，只能继续写入 `data/temp/mimo-cleaning-prompt-lab/`，不能覆盖已有 `data/materials`。
+2. 下一步如继续本地消费层，应优先观察真实队列自动生成的 `exports/brief.local.md`、`delivery/email.md`、`work/quality/local_check.json` 和 `delivery/email_status.json` 阅读质量；真实 SMTP 发送只建议先用 1 条 fresh 小样本验证。
+3. MiMo prompt lab 结果仍只能写入 `data/temp/mimo-cleaning-prompt-lab/`，不要覆盖已有正式 `data/materials` 清洗稿。
+4. 普通后续任务继续按 `AGENTS.md` 新工作流小步推进。
+5. 后续真实运行继续小批量进行，先核对队列和 `data/materials`，再加入新视频。
+6. 如果继续剪枝，下一步应优先审计旧学习库 / 精读稿兼容链是否仍有真实数据读取价值；不删除旧数据，不碰 subtitle-only 主线。
+7. 如果继续架构收敛，下一步只能做“小步抽离 UI 页面中的纯 action / selector”，不要直接拆 `WorkspacePane.tsx` 或改 pipeline 行为。
 
 ## 暂时不做
 
 - 不改生产主流程代码。
 - 不批量加入大量 UP 主视频队列；真实试运行前只允许 1 条短视频小样本。
-- 不推进总结质量、邮件形态、TTS 或 Obsidian。
+- 不推进旧精读稿格式、复杂邮件模板、TTS 或 Obsidian。
 - 不更新依赖。
 - 不无备份地直接修改数据库或 Electron Store。
 - 不删除、移动或重命名 `data/materials` 下的任何资料，除非任务明确要求且已完成备份或确认。
@@ -131,10 +148,14 @@
 
 ## 当前验证状态
 
-- 项目能否启动：2026-06-12 受控短时间启动成功，验收后无残留 Electron 进程。
-- 核心人工验收：首页通过；设置页可打开；左侧灵犀来源区可读取；档案主页面和独立灵犀页仍属待核对现象。
+- 项目能否启动：2026-06-29 当前可见 `npm run dev`、Vite 和 Electron 进程，`http://localhost:5173/` 返回 200；2026-06-12 曾完成受控短时间启动并关闭。
+- 核心人工验收：首页通过；设置页可打开；左侧灵犀来源区可读取；档案页已完成 UP 主分组第一版代码接入，并通过受控 Electron 验收确认 2 条真实材料按 `马督工` / `TED官方精选` 分组展示，视频资料卡片保留打开 / 复制路径 / 定位入口；独立灵犀页仍属待核对现象。
 - 自动测试：未发现完整测试套件；执行了 `desktop/scripts/check-distill-progress.mjs`、`desktop/scripts/check-subtitle-only-queue-mode.mjs`、`desktop/scripts/check-data-layer-normalization.mjs` 和产品表面检查，结果通过；脚本已覆盖 UP 主批量入队、后台来源发现、subtitle-only 创建规则和数据层路径规则。
 - 产品收束静态检查：新增 `desktop/scripts/check-product-refactor-surface.mjs`，覆盖默认入口、主导航、队列文稿按钮隐藏、设置页邮件/TTS/Obsidian 隔离和 subtitle-only 执行器守卫。
+- 最近页安全检查：新增 `desktop/scripts/check-home-dashboard-safety.mjs`，覆盖默认最近页、首次只读本地注册表、仅手动刷新元数据、侧边栏来源选择、极简实时状态提示，以及最近页不接入制作、自动化检查、下载或转写入口。
+- 档案 UP 主分组检查：新增 `desktop/scripts/check-archive-up-grouping.mjs`，覆盖只读分组模型、固定 UP 空分组、同 UP 聚合、全部 / 拾遗入口和时间排序；不读取、不写入、不删除真实 `data/materials`。
+- 档案视觉减负检查：`desktop/scripts/check-archive-up-grouping.mjs` 已同步覆盖毛玻璃头像角标、顶部四项统计、资料列表去除原字 / 清洗 / 文稿 / HTML / 长稿标签，并确认打开 / 复制路径 / 定位入口保留。
+- 档案真实 Electron 验收：使用临时 userData 和远程调试端口启动受控开发实例，确认真实 `data/materials` 中 2 条资料显示为 UP 主分组和视频资料卡片；点击 `马督工` / `TED官方精选` 分组后右侧分别只显示对应资料；验收前后 `data/materials` 文件数量保持 48。
 - 数据层标准化检查：新增 `desktop/scripts/check-data-layer-normalization.mjs`，覆盖 `data` 默认根、`data/materials`、`data/registry`、`data/cache`、`data/temp`、`data/logs`、`data/legacy`、Python 子进程环境变量和标准材料扫描，并防止旧 `output` 兼容根回流。
 - 视频注册表检查：新增 `desktop/scripts/check-video-registry-layer.mjs`，使用临时目录验证 registry 合并不删除历史视频、不重复、保留本地状态、API 失败可读旧列表，并静态确认 UI IPC 和后台发现接入 registry。
 - 清队列保护检查：`desktop/scripts/check-queue-clear-safety.mjs` 证明清空队列不读取材料设置、不扫描材料包、不归档材料，也不返回删除路径。
@@ -142,16 +163,30 @@
 - v1.0 最终遗留清理验证：`check-subtitle-only-queue-mode`、`check-data-layer-normalization`、`check-product-refactor-surface`、`check-distill-progress`、核心 Python `py_compile` 和 `npx tsc --noEmit` 均通过；未启动软件、未运行真实队列、未调用外部服务。
 - 真实小样本：`TED官方精选` 的 `BV131jF68E5n` 已以 `pipelineMode: 'subtitle_only'`、`editorialMode: 'off'` 在新 `data` 根完成；生成原始转写、清洗稿、NotebookLM 稿、manifest 和 run_state，`run_state` 为 `content_ready`，summary 为 `skipped`，日志中 summary / 邮件 / TTS 调用均为 0。
 - 真实清队列保护：清理 2 条已完成队列记录后，材料清单前后保持同一路径，返回 `deletedMaterialCount: 0` 和空删除路径；随后原队列记录已恢复。
+- UP 自动同步目标验证：`check-up-sync-scheduler`、`check-queue-record-feed`、`check-efficiency-observability`、`check-home-dashboard-safety`、`check-tracked-sources-store`、`check-subtitle-only-queue-mode`、`check-queue-clear-safety`、`check-video-registry-layer`、`check-product-refactor-surface`、`npx tsc --noEmit` 和 `git diff --check` 均通过；`git diff --check` 只有 Windows 换行提示。
+- 字幕语言选择补丁验证：`node desktop/scripts/check-subtitle-language-selection.mjs` 通过，覆盖中文 + 英文只选中文、仅英文时英文兜底、无中英文时取第一条；`python -m py_compile src/bilibili_api.py` 通过。
+- MiMo 非 Pro 默认检查：`node desktop/scripts/check-mimo-non-pro-default.mjs` 通过，覆盖设置默认、旧 Pro 自动降级、后台 Python 环境和前端设置候选项。
+- MiMo UP 定制清洗提示词实验验证：`python desktop/scripts/generate_mimo_cleaning_prompt_lab.py --force --samples-per-up 1 --raw-limit 3000` 真实调用 MiMo 后 6/7 通过；修正新闻分条提示和英文原文 → 中文清稿评分后，`python desktop/scripts/generate_mimo_cleaning_prompt_lab.py --reevaluate-existing --samples-per-up 1 --raw-limit 3000` 不重复调用 MiMo 重评为 7/7 通过；`node desktop/scripts/check-mimo-cleaning-prompt-lab.mjs` 通过。
+- 本地消费层第一阶段检查：`node desktop/scripts/check-local-consumption-layer.mjs` 通过，覆盖 brief / email / decision / quality 产物路径、UP profile 推断、缓存失效边界、本地模型请求计划、提示词输入边界、domain 层无外部调用和基础 decision 草案；`node desktop/scripts/generate-local-consumption-samples.mjs` 通过，生成 4 个 `data/temp/local-consumption-samples` 临时样本；`npx tsc --noEmit`、`check-subtitle-only-queue-mode` 和 `check-product-refactor-surface` 继续通过。
+- 本地 Ollama adapter 第二阶段检查：`node desktop/scripts/check-local-ollama-adapter.mjs` 通过，覆盖假响应、offline、timeout、HTTP error、invalid JSON、`<think>` 清理和静态红线；`node desktop/scripts/generate-local-ollama-samples.mjs --force` 使用 `shijie-qwen3-8b-q4-chat` 生成 4 个真实样本，全部 brief / email / decision / quality_check 为 `ok`；再次运行不带 `--force` 时 4 个样本全部跳过；样本输出未发现 `<think>`、本机路径、API Key、Cookie、SMTP 字样。
+- 本地消费层夜间闭环检查：`node desktop/scripts/generate-local-ollama-samples.mjs --force` 使用 `shijie-qwen3-8b-q4-chat` 覆盖 7 个已有材料 UP，7 个样本全部 `ok`；再次运行不带 `--force` 时 7 个样本全部跳过；`node desktop/scripts/check-local-ollama-samples.mjs` 通过，报告 `sampleCount=7`、`okCount=7`、`failedCount=0`、`forbiddenHitCount=0`；样本产物未发现推理标签、本机路径、密钥、浏览器会话、邮件服务或授权令牌字样。
+- 本地消费层正式闭环检查：`BV1MBjx6cEHw` 真实约 10 分钟视频完整跑通，材料生成 57.207 秒，本地 Ollama 消费层 18.476 秒，`local_consumption.status=ok`、`quality.riskLevel=low`；旧 `summary/article.md`、`summary/meta.json`、`summary/summary_status.json` 均未生成，`manifest.editorial_summary.status=skipped`。补充样本 `BV1toJ36aE9o` 使用新 quality 规则重跑后同样为 `status=ok`、`riskLevel=low`。
+- 本地 brief / email 输出门控检查：`BV1i5jy6bECe` 中文样本只重跑本地消费层后，brief / email 均为完整 Markdown 成稿；检查确认不含“我现在需要 / 首先我会 / 用户希望 / 接下来我”等过程性文字，不在半句处截断；`decision.importance=5`，`quality.riskLevel=low`。
+- 最近更新邮件转发生产化检查：`python -m py_compile src/distiller.py` 通过；`node desktop/scripts/check-mimo-cleaning-production-mode.mjs` 通过，确认生产清洗不注入 UP profile；`node desktop/scripts/check-fresh-email-delivery.mjs` 通过，覆盖 fresh dry-run、重复发送跳过、history 禁止发送、邮件关闭跳过、状态文件不含 SMTP 密码、邮件正文不附带本机材料路径和 SMTP 报错脱敏；`node desktop/scripts/check-local-consumption-layer.mjs`、`node desktop/scripts/check-local-ollama-adapter.mjs`、`node desktop/scripts/check-subtitle-only-queue-mode.mjs`、`node desktop/scripts/check-product-refactor-surface.mjs`、`check-home-dashboard-safety`、`check-up-sync-scheduler`、`check-queue-record-feed`、`check-efficiency-observability` 和 `npx tsc --noEmit` 均通过；`git diff --check` 仅有 Windows 换行提示，退出码 0。
+- UI 板块切换性能检查：`node desktop/scripts/check-ui-panel-switch-performance.mjs`、`node desktop/scripts/check-home-dashboard-safety.mjs`、`node desktop/scripts/check-product-refactor-surface.mjs` 和 `npx tsc --noEmit` 均通过；浏览器预览 smoke test 未发现控制台错误。
+- 本地 Ollama 冒烟测试：`shijie-qwen3-8b-q4-chat` 在 `http://127.0.0.1:11434/api/chat` 下可用；brief 约 `7.95s`、邮件草稿约 `3.8s`、JSON 判断约 `2.63s`。运行时显示 100% GPU，context `4096`。输出可能带空 `<think>` 标签，后续 adapter 需要过滤。
+- 真实自动同步运行证据：`data/logs/runtime.log` 记录 2026-06-28 21:00、22:00、23:00、2026-06-29 00:00、01:00、02:00 的准点后台检查，并产生队列处理记录。
+- 数据安全核验：本轮只读统计 `data/materials` 文件数为 288；未执行删除、迁移、重命名或真实清空材料操作。
 - 类型检查：`desktop` 下 `npx tsc --noEmit` 通过。
 - 清晰架构迁移验证：`desktop/scripts/check-product-refactor-surface.mjs`、`desktop/scripts/check-subtitle-only-queue-mode.mjs`、`desktop/scripts/check-distill-progress.mjs` 均已在新目录下通过；简单 import 图循环检测结果为 0。
 - Python 语法检查：`py_compile` 通过。
 - 构建：未执行，因为会写入构建产物。
 - 产品边界：下一阶段主线已调整为 UP 主驱动的字幕清洗；Summary Pipeline 暂停作为主线推进。
-- 队列状态：启动前后均为 53 项，全部 `done`，没有新增任务，没有自动执行任务。
+- 队列状态：旧 2026-06-12 启动验收时启动前后均为 53 项、全部 `done`；当前自动同步目标中已允许软件运行期间准点发现新视频并自动入队处理。
 - 旧材料状态：此前测试生成的旧 `output/` 内容已按项目负责人确认删除，不再作为当前验收对象。
 - 写入差异：运行日志增加；窗口状态更新；`shijie-focus-secure.json` 修改时间更新但大小和 SHA1 不变；`knowledge_library.json` 未变化。
-- 启动前风险审计：后台自动化启用且未暂停，启动只设置定时器；本轮短时间关闭，未到后台定时检查时间点。
-- 最近一次验证日期：2026-06-12。
+- 启动前风险审计：旧验收确认启动只设置定时器；当前真实日志已确认运行期间准点后台检查会触发自动同步。
+- 最近一次验证日期：2026-06-30。
 - 最近一次独立接管评估：2026-06-12，通过。
 
 ## 新对话需要知道
