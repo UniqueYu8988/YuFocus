@@ -26,35 +26,49 @@
 - UP 主视频列表以本地 `data/registry/{up_id}.json` 为稳定事实来源；B 站 API 只用于刷新和补充元数据，不能因为 API 临时缺失就删除本地视频。
 - 总结系统是后续独立消费层：以后可以读取字幕清洗产物，但不应继续绑在字幕清洗主流程里。
 - 旧课程系统、旧学习包、旧档案数据映射和旧独立灵犀页面进入遗留状态，暂时不作为下一版重点。
-- 新生产输出统一写入 `data/materials/{up_id}/{video_id}/`。
-- 每个材料包内部的 `exports/notebooklm.md` 是 NotebookLM 导入稿的唯一主出口。
+- 新生产过程先写入 `data/materials/{up_id}/{video_id}/` 工作区；处理完成后，最终 Markdown 成品同步到 `data/library/`。
+- `data/library/notebooklm/{UP 主}/{视频标题}.md` 是 NotebookLM 清洗稿的长期主出口；`data/library/email/{UP 主}/{视频标题}.md` 是邮件稿长期出口。
+- `data/materials` 完成后会自动瘦身，只保留 manifest、metrics、run_state、library_refs 和少量状态文件；原始字幕、清洗稿副本、临时索引和本地模型中间产物可重跑再生。
 - 当前主队列已进入 subtitle-only 模式：UP 主批量加入和后台来源发现会显式创建 `pipelineMode: 'subtitle_only'`、`editorialMode: 'off'`。队列完成 NotebookLM 导入稿后会进入本地消费层生成 `brief.local.md` 和邮件草稿；只有 `fresh` 最近更新视频在质量门控通过且用户启用邮件后才会发送邮件，历史补全不发送。
 
 ## NotebookLM 清洗稿资料库
 
-`data/materials/{up_id}/{video_id}/exports/notebooklm.md` 是核心产品能力。它保存用户可以直接打开、阅读、复制或导入 NotebookLM 的最终 Markdown 文件。
+`data/library/notebooklm/{UP 主}/{视频标题}.md` 是核心产品能力。它保存用户可以直接打开、阅读、复制或导入 NotebookLM 的最终 Markdown 文件。
 
-第一版目录结构：
+当前长期成品目录结构：
+
+```text
+data/library/
+├── index.json
+├── notebooklm/
+│   └── {UP 主名称}/
+│       └── {视频标题}.md
+└── email/
+    └── {UP 主名称}/
+        └── {视频标题}.md
+```
+
+`data/materials` 是内部工作区。视频完成后，材料目录通常只保留轻量记录：
 
 ```text
 data/materials/{up_id}/{video_id}/
-├── raw_transcript.txt
-├── cleaned_transcript.txt
-├── content.md
 ├── manifest.json
+├── metrics.json
 ├── run_state.json
-└── exports/
-    └── notebooklm.md
+├── library_refs.json
+└── delivery/
+    └── email_status.json
 ```
 
 | 路径 | 用途 |
 |---|---|
-| `data/materials/{up_id}/{video_id}/raw_transcript.txt` | 原始字幕或转写文本证据。 |
-| `data/materials/{up_id}/{video_id}/cleaned_transcript.txt` | 清洗后的正文文本。 |
-| `data/materials/{up_id}/{video_id}/content.md` | 清洗后的 Markdown 资料。 |
-| `data/materials/{up_id}/{video_id}/exports/notebooklm.md` | NotebookLM 导入稿。 |
+| `data/library/notebooklm/{UP 主}/{视频标题}.md` | NotebookLM 清洗稿最终成品。 |
+| `data/library/email/{UP 主}/{视频标题}.md` | 本地模型生成的邮件稿最终成品。 |
+| `data/library/index.json` | BV、标题、UP、发布时间、材料包路径和成品路径索引。 |
 | `data/materials/{up_id}/{video_id}/manifest.json` | 材料包元数据。 |
+| `data/materials/{up_id}/{video_id}/metrics.json` | 处理耗时、原始 token 和 MiMo Credits 估算等轻量计量。 |
 | `data/materials/{up_id}/{video_id}/run_state.json` | 当前处理状态。 |
+| `data/materials/{up_id}/{video_id}/library_refs.json` | 指向长期成品库中对应 Markdown 的轻量引用。 |
 
 第一版文件至少包含：
 
@@ -75,23 +89,49 @@ data/materials/{up_id}/{video_id}/
 - 复杂中间结果；
 - 只有软件内部才能理解的字段。
 
-当前生产资料只写入 `data/materials/{up_id}/{video_id}`。此前测试产生的旧 `output/` 内容已按项目负责人确认删除，后续不再作为生产输出或兼容读取来源。
+当前生产过程不再依赖旧 `output/`。此前测试产生的旧 `output/` 内容已按项目负责人确认删除，后续不再作为生产输出或兼容读取来源。
+
+## 长期成品库
+
+`data/library/` 是面向长期使用的成品文件夹。它从单视频材料包中同步用户真正会直接使用的 Markdown 文件，便于几千条视频长期浏览、排序和导入外部工具。
+
+第一阶段目录结构：
+
+```text
+data/library/
+├── index.json
+├── notebooklm/
+│   └── {UP 主名称}/
+│       └── {视频标题}.md
+└── email/
+    └── {UP 主名称}/
+        └── {视频标题}.md
+```
+
+当前规则：
+
+- `notebooklm/` 保存可导入 NotebookLM 的清洗稿。
+- `email/` 保存本地模型生成的邮件稿；它是成品草稿，不代表一定已经发送。
+- 文件名尽量只保留视频标题，并移除 Windows 禁止字符；同一 UP 下标题冲突时才追加 ` (2)` 这类短后缀。
+- 能获取视频发布时间时，会尽量把文件修改时间设置为视频发布时间；文件名本身不写日期。
+- `index.json` 只保存轻量索引：BV、标题、UP、发布日期、来源材料包和成品路径，不写入 Cookie、API Key、SMTP 授权码等秘密值。
+- 成品同步成功后，队列会把对应 `data/materials` 工作区瘦身为轻记录；自动发现去重以 `data/library/index.json` 和队列记录为准。
 
 ## 当前真实功能
 
 ### 已由代码确认存在，仍需人工验收确认
 
-- 桌面端主界面：默认进入“最近”页，顶部保持极简，只保留刷新图标；左侧栏显示“最近”和固定 UP 视频来源，固定 UP 以圆形头像加名称呈现，并通过侧边栏“管理固定 UP”弹窗设置。右侧默认显示最近视频；点击左侧某个 UP 后，右侧显示该 UP 的视频列表。用户手动点击刷新图标时只更新来源视频元数据；用户勾选视频并点击“加入队列”时只保存任务记录，不自动下载或转写。最近页会用一条极简状态提示显示后台同步是否暂停、是否正在处理某个视频、等待队列数量、下次检查时间或最近异常。主导航保留最近、队列、档案、流程和设置；队列页已改为轻量记录流，初始最多显示 10 条，滚动加载更多，新完成资料按更新时间进入已完成记录顶部，并显示单条已完成视频的总耗时和 Token；付费、充电或权限受限视频会显示为“已跳过”，不再自动重试。旧专注、灵犀和学习包入口从主导航降级。档案页已按上下结构展示：顶部只保留总字数、占用、耗时、Token 四项小指标；UP / 全部 / 拾遗以横向圆形头像入口呈现，头像右上角显示半透明毛玻璃视频数量角标；下方资料列表与 UP 入口融合为轻量容器，资料卡片突出标题、BV / 来源、更新时间、字数、占用、耗时和 Token。
+- 桌面端主界面：默认进入“最近”页，顶部保持极简；左侧栏显示“最近”和固定 UP 视频来源，固定 UP 以圆形头像加名称呈现，并通过侧边栏“管理固定 UP”弹窗设置。右侧默认显示最近视频；点击左侧某个 UP 后，右侧显示该 UP 的视频列表。用户手动点击视频列表右侧刷新图标时只更新来源视频元数据；用户勾选视频并点击“加入队列”时只保存任务记录，不自动下载或转写。最近页会用一条极简状态提示显示后台同步是否暂停、是否正在处理某个视频、等待队列数量、下次检查时间或最近异常。主导航保留最近、队列、档案、流程和设置；队列页已改为轻量记录流，初始最多显示 10 条，滚动加载更多，新完成资料按更新时间进入已完成记录顶部，并显示单条已完成视频的总耗时和 MiMo Credits；付费、充电或权限受限视频会显示为“已跳过”，不再自动重试。旧专注、灵犀和学习包入口从主导航降级。档案页已按上下结构展示：顶部只保留总字数、占用、耗时、MiMo Credits 四项小指标；UP / 全部 / 拾遗以横向圆形头像入口呈现，头像右上角显示半透明毛玻璃视频数量角标；下方资料列表与 UP 入口融合为轻量容器，资料卡片突出标题、BV / 来源、更新时间、字数、占用、耗时和 MiMo Credits。清洗稿和 email 稿按钮会直接调用系统默认外部 Markdown 应用打开，不再进入软件内部查看器。
 - 流程透明页：代码中存在用于查看当前正式工作流文档的入口，已不再把旧项目语境、旧编稿流程、旧系统审计或旧清理基线作为默认入口。
 - B 站视频处理：读取视频信息、字幕、关注来源和来源视频；依赖 B 站 SESSDATA。同一分 P 存在多语言字幕时，正文默认只使用一条首选字幕轨：优先中文，没有中文时使用英文兜底，避免中英双轨同时进入清洗稿。
 - UP 主视频注册表：刷新来源视频时会把 API 结果合并进 `data/registry/{up_id}.json`，界面读取合并后的本地列表。
 - 本地音视频处理：通过文件选择入口进入整理流程。
-- Python 后端整理：生成 `data/materials/{up_id}/{video_id}` 资料目录，包含原始字幕、清洗稿、NotebookLM 导入稿和运行状态。
+- Python 后端整理：先生成 `data/materials/{up_id}/{video_id}` 工作目录，包含原始字幕、清洗稿、NotebookLM 导入稿和运行状态；队列完成后同步到 `data/library` 并瘦身工作目录。
 - 短视频精读：代码中仍存在调用 MiMo 生成 `summary/article.md`、`summary/article.html`、`summary/cards.json`、`summary/review.json`、`summary/summary_status.json` 的能力，但当前已从队列主流程和工作台 UI 隔离。
-- 资料列表和档案：扫描 `data/materials/{up_id}/{video_id}`，按 UP 主 / 全部 / 拾遗分组显示清洗、字数、大小等状态，并保留打开清洗稿、复制 NotebookLM 路径和定位资料目录的能力。
+- 资料列表和档案：扫描 `data/materials/{up_id}/{video_id}` 轻记录并读取 `data/library/index.json`，按 UP 主 / 全部 / 拾遗分组显示资料；列表操作收束为打开清洗稿、打开 email 稿和删除单条资料。
 - 灵犀索引：遗留兼容新写入隔离到 `data/legacy/knowledge/knowledge_library.json`。
 - 设置：当前 UI 保留字幕主线需要的 B 站、MiMo 清洗、本地转写和输出配置；MiMo 字幕清洗默认使用非 Pro 的 `mimo-v2.5`，旧 `mimo-v2.5-pro` 设置会自动降级；最近更新邮件推送提供最小 SMTP 配置入口；MiniMax、Obsidian 和 TTS 旧配置值保留在兼容层，不作为当前 UI 主入口。
-- 本地消费层：subtitle-only 材料完成后，会以 `exports/notebooklm.md` 为主资料来源，调用本地 Ollama 生成 brief、邮件草稿、价值判断和质量检查，并写入同一材料包；本地模型不接管核心字幕清洗。
+- 本地消费层：subtitle-only 材料完成后，会以材料包内临时 `exports/notebooklm.md` 为主资料来源，调用本地 Ollama 生成 brief、邮件草稿、价值判断和质量检查；随后成品同步到 `data/library`，材料包可瘦身为轻记录。本地模型不接管核心字幕清洗。
 - 最近更新邮件推送：仅当队列来源为 `fresh`、邮件推送已启用、SMTP 配置完整、质量门控通过且同一内容未发送过时，才把本地总结产物发送到邮箱。`history`、`manual`、`retry`、`follow_source` 不自动发送邮件；邮件失败只记录状态，不让资料生成失败。
 - 后台自动化框架：托盘驻留、定时检查、立即检查、暂停恢复、队列顺序处理和同一 BV 去重逻辑已存在；新建项默认进入 `subtitle_only`。后台处理坚持单工，一次只处理 1 条；空闲时会持续补历史视频，未到期重试不会阻塞历史补足，重试到点会自动唤醒；付费、充电、权限受限或 `HTTP 412` / 无音频轨等不可重试媒体访问错误会标记为已跳过。
 - TTS 朗读：旧服务和 UI 入口已剪枝；旧配置值仍在兼容层保留，但不进入字幕主流程。
@@ -111,7 +151,7 @@ data/materials/{up_id}/{video_id}/
 | B 站视频输入 | 明确保留 | 这是当前最主要的视频来源入口。 |
 | 字幕获取 | 明确保留 | 有字幕时直接获取，比转写更快、更省钱、更稳定。 |
 | 字幕清洗 | 明确保留 | 软件的核心价值是把视频内容变成可读资料。 |
-| NotebookLM 清洗稿资料库 | 明确保留 | 每个材料包内的 `exports/notebooklm.md` 是最终出口，可直接导入 NotebookLM。 |
+| NotebookLM 清洗稿资料库 | 明确保留 | `data/library/notebooklm/{UP 主}/{视频标题}.md` 是最终出口，可直接导入 NotebookLM。 |
 | 本地视频和音频输入 | 明确保留 | 本地资料不依赖平台，适合个人已有文件。 |
 | 本地语音转写 | 明确保留 | 无字幕视频、本地音视频都需要转写兜底。 |
 | MiMo 字幕清洗增强 | 明确保留 | 有 Key 时可增强字幕清洗；没有 Key 时应能回退规则清洗。 |
@@ -195,8 +235,8 @@ data/materials/{up_id}/{video_id}/
 - “清空队列”只移除非处理中的队列记录，不删除、归档或改写 `data/materials` 资料包。
 - 关闭窗口后仍应保留托盘和后台任务状态，除非用户明确退出或暂停。
 - 长视频和本地视频的 NotebookLM 导入稿路径和内容结构要保持可用。
-- `exports/notebooklm.md` 不能依赖旧目录或旧材料格式才能理解。
-- `exports/notebooklm.md` 不能写入秘密值、调试日志、内部状态或复杂中间结果。
+- 长期成品库中的 NotebookLM Markdown 不能依赖旧目录或旧材料格式才能理解。
+- 长期成品库中的 NotebookLM Markdown 不能写入秘密值、调试日志、内部状态或复杂中间结果。
 - 已有字幕清洗产物或精读稿时，应能复用，不应重复消耗 API 资源。
 - 最近更新邮件必须只由 `fresh` 队列项触发；历史补全和手动任务不能自动发邮件。
 
@@ -205,6 +245,7 @@ data/materials/{up_id}/{video_id}/
 | 数据 | 用途 | 是否敏感 | 是否允许删除 |
 |---|---|---|---|
 | `data/materials/{up_id}/{video_id}` | 原始字幕、清洗稿、NotebookLM 导入稿、索引和运行状态 | 可能包含用户资料内容 | 不允许随意删除 |
+| `data/library` | 长期成品库，按 UP 主保存 NotebookLM 清洗稿、邮件稿和轻量索引 | 可能包含用户资料内容 | 不允许随意删除 |
 | `data/registry/{up_id}.json` | UP 主视频元数据注册表 | 包含视频标题、BV 号、发布时间等公开元数据 | 不允许随意删除 |
 | `data/legacy/knowledge/knowledge_library.json` | 旧灵犀归档索引 | 可能包含资料标题、路径和摘录 | 不允许随意删除 |
 | `C:\Users\Yu\AppData\Roaming\视界专注\shijie-focus-secure.json` | 设置、队列、来源、阅读记录等 Electron Store 数据 | 是，可能含 Cookie、API Key、SMTP 授权码 | 不允许删除或公开 |

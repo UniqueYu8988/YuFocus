@@ -30,6 +30,9 @@ import { createSourceDiscoveryRuntime } from './providers/sourceDiscoveryRuntime
 import { createMaterialRecordBridge } from './services/materialRecordBridge'
 import { runLocalConsumptionForMaterial } from './services/localConsumptionRunner'
 import { pushFreshMaterialEmail } from './services/emailDeliveryService'
+import { listLibraryExportItems, syncMaterialToLibrary } from './services/libraryExportService'
+import { runEnvironmentCheck } from './services/environmentCheckService'
+import { slimMaterialPackage } from './services/materialSlimmingService'
 import { resolveVideoRegistryRoot } from './services/videoRegistry'
 import {
   createRuntimePaths,
@@ -69,9 +72,9 @@ const WINDOW_DEFAULT_HEIGHT = 800
 const WINDOW_MIN_WIDTH = 1000
 const WINDOW_MIN_HEIGHT = 700
 const DISTILL_PROCESS_TIMEOUT_MS = Number(process.env.SHIJIE_DISTILL_PROCESS_TIMEOUT_MS || process.env.ONBOARD_DISTILL_PROCESS_TIMEOUT_MS || 1_800_000)
-const BACKGROUND_DISCOVERY_WINDOW_MS = 24 * 60 * 60 * 1000
 const BILIBILI_SOURCE_QUERY_BATCH_SIZE = 12
 const BILIBILI_RECENT_VIDEO_PAGE_SIZE = 20
+const BILIBILI_RECENT_FEED_LIMIT = 9
 const BILIBILI_HISTORY_BACKFILL_PAGE_SIZE = 30
 const BACKGROUND_CHECK_INTERVAL_MINUTES = 60
 const WORKBENCH_QUEUE_CONCURRENCY = 1
@@ -228,11 +231,12 @@ const sourceDiscoveryRuntime = createSourceDiscoveryRuntime({
   loadHistorySources: loadHistoryTrackedBilibiliSources,
   loadQueue: loadWorkbenchQueue,
   listMaterialPackages,
+  listLibraryItems: () => listLibraryExportItems(path.join(canonicalDataRoot, 'library')).items,
   appendRuntimeLog,
   registryRoot: videoRegistryRoot,
-  discoveryWindowMs: BACKGROUND_DISCOVERY_WINDOW_MS,
   sourceQueryBatchSize: BILIBILI_SOURCE_QUERY_BATCH_SIZE,
   recentVideoPageSize: BILIBILI_RECENT_VIDEO_PAGE_SIZE,
+  recentFeedLimit: BILIBILI_RECENT_FEED_LIMIT,
 })
 
 const {
@@ -343,6 +347,25 @@ async function pushMaterialEmail(
   appendRuntimeLog(`fresh email delivery ${result.status}: ${result.reason}`)
 }
 
+function syncMaterialLibrary(
+  materialPath: string,
+  context: { queueItem: Parameters<typeof syncMaterialToLibrary>[0]['queueItem'] },
+) {
+  return syncMaterialToLibrary({
+    libraryRoot: path.join(canonicalDataRoot, 'library'),
+    materialPath,
+    queueItem: context.queueItem,
+  })
+}
+
+function slimCompletedMaterial(materialPath: string) {
+  return slimMaterialPackage({
+    materialRoot: resolveMaterialOutputDir(loadSettings()),
+    libraryRoot: path.join(canonicalDataRoot, 'library'),
+    materialPath,
+  })
+}
+
 const backendRuntime = createBackendRuntime({
   devProjectRoot,
   dataRoot,
@@ -386,6 +409,8 @@ const automationRuntime = createAutomationRuntime({
   isMaterialRecordCleaned,
   archiveMaterialRecord,
   pushMaterialEmail,
+  syncMaterialLibrary,
+  slimMaterialPackage: slimCompletedMaterial,
   runDistiller: runPythonDistiller,
   runMaterialSummary: runPythonMaterialSummary,
   runLocalConsumption: (materialPath) => runLocalConsumptionForMaterial(materialPath, { appendRuntimeLog }),
@@ -436,6 +461,7 @@ function listMaterialPackages(settings: RuntimeSettings) {
 const materialDeletion = createMaterialDeletion({
   loadSettings,
   resolveMaterialOutputDir,
+  resolveLibraryRoot: () => path.join(canonicalDataRoot, 'library'),
   resolveKnowledgeOutputDir,
   resolveOutputRoot: (settings) => path.resolve(settings.output_dir || resolveCanonicalOutputRoot(devProjectRoot)),
   listMaterialPackages,
@@ -469,6 +495,7 @@ registerAppLifecycle({
   windowController,
   recoverInterruptedWorkbenchQueue,
   refreshBackgroundAutomationSchedule,
+  runBackgroundAutomationCheck,
 })
 
 registerWindowIpcHandlers({
@@ -480,6 +507,16 @@ registerWindowIpcHandlers({
 registerSettingsAutomationIpcHandlers({
   loadSettings,
   saveSettings,
+  runEnvironmentCheck: () => runEnvironmentCheck({
+    devProjectRoot,
+    dataRoot,
+    canonicalDataRoot,
+    userDataRoot,
+    resourcesPath: process.resourcesPath,
+    execPath: process.execPath,
+    isPackaged: app.isPackaged,
+    loadSettings,
+  }),
   getBackgroundAutomationStatus,
   runBackgroundAutomationCheck,
   setBackgroundAutomationPaused,

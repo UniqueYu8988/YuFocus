@@ -1,11 +1,13 @@
 import { ipcMain } from 'electron'
 import { fetchSettingsStatus } from '../providers/bilibiliSourceApi'
+import type { EnvironmentCheckPayload } from '../services/environmentCheckService'
 import type { BackgroundAutomationStatus } from '../runtime/automationController'
 import type { RuntimeSettings } from '../runtime/settings'
 
 type SettingsAutomationIpcDeps = {
   loadSettings: () => RuntimeSettings
   saveSettings: (settings: RuntimeSettings) => RuntimeSettings
+  runEnvironmentCheck: () => Promise<EnvironmentCheckPayload>
   getBackgroundAutomationStatus: () => BackgroundAutomationStatus
   runBackgroundAutomationCheck: (trigger: 'manual') => Promise<BackgroundAutomationStatus>
   setBackgroundAutomationPaused: (paused: boolean, durationMs?: number) => BackgroundAutomationStatus
@@ -14,6 +16,7 @@ type SettingsAutomationIpcDeps = {
 export function registerSettingsAutomationIpcHandlers({
   loadSettings,
   saveSettings,
+  runEnvironmentCheck,
   getBackgroundAutomationStatus,
   runBackgroundAutomationCheck,
   setBackgroundAutomationPaused,
@@ -23,6 +26,8 @@ export function registerSettingsAutomationIpcHandlers({
   ipcMain.handle('settings:save', (_event, payload: RuntimeSettings) => saveSettings(payload))
 
   ipcMain.handle('settings:status', async () => fetchSettingsStatus(loadSettings()))
+
+  ipcMain.handle('settings:environment-check', async () => runEnvironmentCheck())
 
   ipcMain.handle('automation:status', () => getBackgroundAutomationStatus())
 

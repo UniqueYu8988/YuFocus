@@ -31,6 +31,13 @@ if (Test-Path -LiteralPath $shareZipPath) {
 New-Item -ItemType Directory -Path $stagingDir | Out-Null
 Copy-Item -LiteralPath $portableExe.FullName -Destination (Join-Path $stagingDir $portableExe.Name)
 
+$backendResourceDir = Join-Path $releaseDir 'win-unpacked\resources\backend'
+if (Test-Path -LiteralPath $backendResourceDir) {
+  $stagingBackendDir = Join-Path $stagingDir 'resources\backend'
+  New-Item -ItemType Directory -Path $stagingBackendDir -Force | Out-Null
+  Copy-Item -Path (Join-Path $backendResourceDir '*') -Destination $stagingBackendDir -Recurse -Force
+}
+
 if (Test-Path -LiteralPath $readmePath) {
   Copy-Item -LiteralPath $readmePath -Destination (Join-Path $stagingDir (Split-Path $readmePath -Leaf))
 }

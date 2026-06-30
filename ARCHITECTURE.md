@@ -30,7 +30,8 @@
 | `desktop/electron/legacy` | 旧学习库 / 旧学习包兼容服务 | 只在兼容旧数据时修改 |
 | `src` | Python 后端：配置、B 站读取、音频转写兜底、字幕清洗、精读稿生成 | 修改资料生成链路时 |
 | `assets` | 应用图标等静态资源 | 修改品牌图标或打包资源时 |
-| `data/materials` | 当前生产材料包数据，结构为 `{up_id}/{video_id}` | 用户制作或清理资料时，不能随意删除 |
+| `data/materials` | 当前生产工作区，结构为 `{up_id}/{video_id}`；完成后只保留轻量记录和成品引用 | 用户制作或清理资料时，不能随意删除 |
+| `data/library` | 长期成品库，按 UP 主分组保存 NotebookLM 清洗稿、邮件稿和索引 | 队列完成材料后同步写入；不能随意删除 |
 | `data/registry` | UP 主视频注册表，结构为 `{up_id}.json` | 刷新来源视频时合并写入；不能随意删除 |
 | `data/temp` | 音频、下载、切片等临时中间文件 | 字幕转写兜底运行时；完成后可丢弃 |
 | `data/cache` | B 站字幕、转写、断点等缓存 | 加速重复处理；删除后不应影响正确性 |
@@ -54,7 +55,8 @@
 | Summary Pipeline | 遗留消费层，后续如恢复也只能独立读取字幕清洗产物 | 已完成的字幕清洗资料 | `summary/*`、邮件或音频等消费产物 | MiMo、SMTP、TTS 服务；当前已从主流程和主 UI 隔离 |
 | 本地消费层 | 读取 NotebookLM 主资料，生成本地 brief、邮件草稿、价值判断和质量检查；作为 subtitle-only 材料完成后的正式后置步骤 | `exports/notebooklm.md`、`raw_transcript.txt`、本地模型配置 | `exports/brief.local.md`、`delivery/email.md`、`delivery/decision.json`、`work/quality/local_check.json`、`work/local_consumption/run_meta.json` | `desktop/src/domain/localConsumption.ts` 生成请求计划；`desktop/electron/services/localOllamaAdapter.ts` 执行 Ollama；`desktop/electron/services/localConsumptionRunner.ts` 限制写入当前材料包并更新 manifest/metrics/run_state |
 | 通知层 / 最近更新邮件 | 只把 fresh 最近更新视频的本地总结发送到邮箱，不生成内容、不参与清洗 | 队列来源、本地 brief/email、decision、quality、SMTP 设置 | `delivery/email_status.json`、SMTP 邮件 | `desktop/electron/services/emailDeliveryService.ts`、`desktop/electron/queue/queueExecutor.ts`、`nodemailer` |
-| 材料清单 | 扫描 `data/materials`，判断资料阶段 | `{up_id}/{video_id}` 材料目录 | 输出页列表数据 | Node.js fs |
+| 材料清单 | 扫描 `data/materials` 轻记录，并读取 `data/library/index.json` 解析成品路径 | `{up_id}/{video_id}` 材料目录、长期成品索引 | 输出页列表数据 | Node.js fs、`materialInventory.ts` |
+| 长期成品库同步 | 把单视频材料包中的 NotebookLM 清洗稿和邮件稿同步到按 UP 主分组的长期目录，并更新 BV 索引 | `exports/notebooklm.md`、`delivery/email.md`、`manifest.json`、队列视频元数据 | `data/library/notebooklm/*`、`data/library/email/*`、`data/library/index.json`、`library_refs.json` | `desktop/electron/services/libraryExportService.ts` |
 | 视频注册表 | 合并 UP 主视频元数据，稳定刷新行为 | B 站 API 返回、已有 registry | `data/registry/{up_id}.json` 和稳定视频列表 | Node.js fs |
 | 后台自动化 | 按来源发现最近视频，加入队列并处理 | 收藏/关注来源、队列、已有材料包 | 队列项目、材料包 | B 站接口、Python 后端 |
 | 设置与密钥 | 保存运行配置和秘密值 | 设置页面输入 | Electron Store 记录、环境变量注入 | electron-store |
@@ -130,7 +132,8 @@
 → 获取字幕或本地转写
 → 清洗正文
 → 写入用户可直接使用的 Markdown 清洗稿
-→ 输出到 `data/materials/{up_id}/{video_id}/exports/notebooklm.md`
+→ 输出临时 NotebookLM 稿到材料包
+→ 同步最终清洗稿到 `data/library/notebooklm/{UP 主}/{视频标题}.md`
 ```
 
 说明：当前代码在材料包内生成 NotebookLM 相关文件；新生产材料包统一位于 `data/materials/{up_id}/{video_id}`，不再依赖旧 `output/` 目录。
@@ -158,6 +161,8 @@
 说明：`desktop/src/domain/localConsumption.ts` 只负责纯计算和请求计划，不直接调用网络、HTTP 客户端或子进程。`desktop/electron/services/localOllamaAdapter.ts` 只负责调用 Ollama 并归一化结果，不读取材料包、不写文件。`desktop/electron/services/localConsumptionRunner.ts` 负责读取材料包、执行本地消费层、把产物写回当前材料包，并更新 `manifest.json`、`metrics.json`、`run_state.json`。
 
 当前行为：subtitle-only 队列项生成 NotebookLM 主资料后，会自动尝试生成 `exports/brief.local.md`、`delivery/email.md`、`delivery/decision.json` 和 `work/quality/local_check.json`。本地消费层失败或需复核不会让 NotebookLM 主资料失败；通知层如果要发邮件，只读取 `delivery/email.md` 或 `exports/brief.local.md`，不能重新绑回旧 Summary Pipeline。
+
+本地消费层和通知层之后，会同步长期成品库。同步会复制成品 Markdown、更新轻量索引，并在成品存在后把 `data/materials` 工作区瘦身为 manifest、metrics、run_state、library_refs 和必要状态文件。
 
 临时验收脚本 `desktop/scripts/generate-local-ollama-samples.mjs` 仍可用于离线抽样比较，但不再代表正式写入路径。
 
@@ -190,8 +195,11 @@ subtitle-only 材料包完成
 
 | 数据或文件 | 位置 | 谁会读写 | 备份要求 |
 |---|---|---|---|
-| 生产材料包 | `data/materials/{up_id}/{video_id}` | Python 写入，Electron 扫描/删除，前端读取 | 重要，删除前必须独立备份 |
-| NotebookLM 清洗稿 | `data/materials/{up_id}/{video_id}/exports/notebooklm.md` | Python 写入，用户直接读取和导入 NotebookLM | 重要，是用户最终出口 |
+| 生产工作区轻记录 | `data/materials/{up_id}/{video_id}` | Python 写入，Electron 扫描/删除和瘦身，前端读取 | 重要，删除前确认对应成品库文件 |
+| NotebookLM 清洗稿成品 | `data/library/notebooklm/{up_name}/{title}.md` | Electron 同步写入，用户直接读取和导入 NotebookLM | 重要，是用户最终出口 |
+| 长期 NotebookLM 成品库 | `data/library/notebooklm/{up_name}` | Electron 队列完成后同步写入 | 重要，可由材料包再生成，但删除前需确认 |
+| 长期邮件稿成品库 | `data/library/email/{up_name}` | Electron 队列完成后同步写入 | 重要，可由材料包再生成，但删除前需确认 |
+| 长期成品索引 | `data/library/index.json` | Electron 队列完成后更新 | 重要，用于 BV 去重和长期追踪 |
 | UP 主视频注册表 | `data/registry/{up_id}.json` | Electron 合并 API 结果并读取给前端/后台 | 重要，删除后视频列表历史会丢失 |
 | 灵犀索引 | `data/legacy/knowledge/knowledge_library.json` | Electron 遗留兼容读写 | 重要，删除前必须备份 |
 | Electron Store | `C:\Users\Yu\AppData\Roaming\视界专注\shijie-focus-secure.json` | Electron Store 读写 | 非常重要，含设置和可能的秘密值 |
@@ -239,7 +247,7 @@ subtitle-only 材料包完成
 - UP 主批量入队：当前已显式使用 `pipelineMode: 'subtitle_only'`、`editorialMode: 'off'`；风险转为防止旧 UI 或旧兼容入口重新暴露 summary / email / TTS。
 - `desktop/electron/runtime/runtimePaths.ts`、`runtimeStores.ts`、`runtimeLogger.ts`：负责项目根、数据根、设置文件、窗口状态和运行日志路径，修改会影响启动和数据位置。
 - `data/materials`、`data/registry` 和 Electron Store：真实数据，不能用测试命令随意操作。
-- `exports/notebooklm.md`：当前用户最终资料，不能混入秘密值、调试日志、内部状态或复杂中间结果。
+- `data/library/notebooklm/*/*.md`：当前用户最终资料，不能混入秘密值、调试日志、内部状态或复杂中间结果。
 
 ## 8. 架构边界
 
@@ -248,7 +256,8 @@ subtitle-only 材料包完成
 - Python 侧通过环境变量接收敏感配置，不从项目内 JSON 文件直接读取密钥。
 - `data` 是当前运行数据根；`desktop/dist`、`desktop/dist-electron` 是构建产物，不作为核心源码维护。
 - 删除真实材料包前必须通过路径安全检查，并在人工验收中覆盖。
-- `data/materials/{up_id}/{video_id}` 是当前内部材料目录，其中 `exports/notebooklm.md` 是用户最终出口；不应把内部状态暴露到最终清洗稿。
+- `data/materials/{up_id}/{video_id}` 是当前内部工作目录；完成后可以只保留轻量记录和成品引用。
+- `data/library` 是长期成品库；它保存 NotebookLM 清洗稿和邮件稿最终 Markdown，并承担自动发现去重和档案打开路径。
 - 字幕 Pipeline 是当前核心数据层；旧 Summary Pipeline 和 TTS 仍是暂停状态；最近更新邮件是独立通知层，只允许消费本地总结产物。
 - 邮件通知层只能读取本地消费层产物，不能直接调用 MiMo、不能读取旧 `summary/`，也不能对历史补全自动群发。
 - 开发模式下，`desktop/electron/runtimePaths.ts` 通过多个稳定标志探测项目根目录：`AGENTS.md`、`PRODUCT.md`、`ARCHITECTURE.md`、`src/distiller.py`、`desktop/package.json`。不再依赖 `PROJECT_CONTEXT.md`。
@@ -261,7 +270,7 @@ subtitle-only 材料包完成
 第一版目标目录：
 
 ```text
-data/materials/{up_id}/{video_id}/exports/notebooklm.md
+data/library/notebooklm/{UP 主}/{视频标题}.md
 ```
 
 第一版 Markdown 至少包含：

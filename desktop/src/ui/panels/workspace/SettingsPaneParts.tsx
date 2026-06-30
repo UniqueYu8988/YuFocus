@@ -1,6 +1,7 @@
 import {
   BilibiliCredentialsSettingsBlock,
   CurrentConfigSettingsBlock,
+  EnvironmentCheckSettingsBlock,
   FreshEmailSettingsBlock,
   MimoTextSettingsBlock,
   TranscriptionSettingsBlock,
@@ -8,6 +9,7 @@ import {
 import type {
   RuntimeSettingsFallback,
   SettingsDraftUpdater,
+  SettingsEnvironmentResult,
   SettingsStatusResult,
 } from '@/ui/panels/workspace/SettingsShared'
 
@@ -19,12 +21,16 @@ export function SettingsPaneContent({
   settingsStatus,
   settingsStatusLoading,
   settingsStatusError,
+  environmentCheck,
+  environmentCheckLoading,
+  environmentCheckError,
   mimoTextModels,
   transcriptionIcon,
   bilibiliIcon,
   settingsError,
   onSettingsDraftChange,
   onRefreshSettingsStatus,
+  onRefreshEnvironmentCheck,
 }: {
   runtimeModeLabel: string
   runtimeSettings: RuntimeSettingsFallback
@@ -33,12 +39,16 @@ export function SettingsPaneContent({
   settingsStatus: SettingsStatusResult | null
   settingsStatusLoading: boolean
   settingsStatusError: string
+  environmentCheck: SettingsEnvironmentResult | null
+  environmentCheckLoading: boolean
+  environmentCheckError: string
   mimoTextModels: readonly string[]
   transcriptionIcon: string
   bilibiliIcon: string
   settingsError: string | null
   onSettingsDraftChange: SettingsDraftUpdater
   onRefreshSettingsStatus: () => void
+  onRefreshEnvironmentCheck: () => void
 }) {
   return (
     <div className="grid w-full gap-7">
@@ -51,6 +61,13 @@ export function SettingsPaneContent({
         settingsStatusLoading={settingsStatusLoading}
         settingsStatusError={settingsStatusError}
         onRefreshSettingsStatus={onRefreshSettingsStatus}
+      />
+
+      <EnvironmentCheckSettingsBlock
+        environmentCheck={environmentCheck}
+        environmentCheckLoading={environmentCheckLoading}
+        environmentCheckError={environmentCheckError}
+        onRefreshEnvironmentCheck={onRefreshEnvironmentCheck}
       />
 
       <MimoTextSettingsBlock

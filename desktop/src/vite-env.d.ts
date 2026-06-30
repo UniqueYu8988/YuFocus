@@ -53,6 +53,27 @@ type SettingsStatus = {
   }
 }
 
+type EnvironmentCheckStatus = 'ok' | 'warning' | 'missing' | 'error'
+
+type EnvironmentCheckPayload = {
+  checkedAt: number
+  runtime: {
+    isPackaged: boolean
+    dataRoot: string
+    canonicalDataRoot: string
+    userDataRoot: string
+    backendRoot: string
+  }
+  items: Array<{
+    id: string
+    label: string
+    status: EnvironmentCheckStatus
+    message: string
+    detail?: string
+    nextAction?: string
+  }>
+}
+
 type LearningLibraryRefreshResult = {
   library: LearningLibraryPayload
   recordUpdates: number
@@ -131,10 +152,19 @@ type MaterialPackageSummary = {
   metricsInputTokens: number
   metricsOutputTokens: number
   metricsTotalTokens: number
+  metricsMimoCredits: number
   emailPushedAt: number
   updatedAt: number
+  libraryRoot: string
+  libraryIndexPath: string
+  libraryNotebooklmPath: string
+  libraryNotebooklmExists: boolean
+  libraryEmailPath: string
+  libraryEmailExists: boolean
   notebooklmPath: string
   notebooklmExists: boolean
+  emailPath: string
+  emailExists: boolean
   editorialSummaryStatus: string
   editorialSummaryPath: string
   editorialSummaryExists: boolean
@@ -288,6 +318,7 @@ type WorkflowDocumentPayload = {
       loadSettings: () => Promise<RuntimeSettings>
       saveSettings: (payload: RuntimeSettings) => Promise<RuntimeSettings>
       loadSettingsStatus: () => Promise<SettingsStatus>
+      runEnvironmentCheck: () => Promise<EnvironmentCheckPayload>
       getAutomationStatus: () => Promise<BackgroundAutomationStatus>
       runAutomationCheckNow: () => Promise<BackgroundAutomationStatus>
       setAutomationPaused: (payload: boolean | { paused: boolean; durationMs?: number }) => Promise<BackgroundAutomationStatus>
@@ -321,6 +352,10 @@ type WorkflowDocumentPayload = {
       }>
       listMaterialPackages: () => Promise<{
         rootDir: string
+        libraryRoot: string
+        libraryIndexPath: string
+        notebooklmLibraryDir: string
+        emailLibraryDir: string
         records: MaterialPackageSummary[]
       }>
       deleteMaterialPackage: (materialPath: string) => Promise<{ deletedPaths: string[]; skippedPaths?: string[] }>

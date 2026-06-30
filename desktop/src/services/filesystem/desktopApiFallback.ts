@@ -56,6 +56,28 @@ const defaultAutomationStatus = {
   checkIntervalMinutes: 360,
 }
 
+function buildPreviewEnvironmentCheck(): EnvironmentCheckPayload {
+  return {
+    checkedAt: Date.now(),
+    runtime: {
+      isPackaged: false,
+      dataRoot: '',
+      canonicalDataRoot: '',
+      userDataRoot: '',
+      backendRoot: '',
+    },
+    items: [
+      {
+        id: 'preview',
+        label: '浏览器预览',
+        status: 'warning',
+        message: '浏览器预览模式不能检查桌面端运行环境。',
+        nextAction: '请在 Electron 桌面端查看真实自检结果。',
+      },
+    ],
+  }
+}
+
 function buildPreviewAutomationPauseStatus(payload: boolean | { paused?: boolean; durationMs?: number }) {
   const paused = typeof payload === 'boolean' ? payload : Boolean(payload?.paused)
   const durationMs = typeof payload === 'object' ? Number(payload.durationMs ?? 0) || 0 : 0
@@ -129,11 +151,16 @@ export function ensureDesktopApiFallback() {
     }
     window.desktopAPI.pickMediaFile ??= async () => null
     window.desktopAPI.pickImageFile ??= async () => null
+    window.desktopAPI.runEnvironmentCheck ??= async () => buildPreviewEnvironmentCheck()
     window.desktopAPI.getAutomationStatus ??= async () => defaultAutomationStatus
     window.desktopAPI.runAutomationCheckNow ??= async () => defaultAutomationStatus
     window.desktopAPI.setAutomationPaused ??= async (payload) => buildPreviewAutomationPauseStatus(payload)
     window.desktopAPI.listMaterialPackages ??= async () => ({
       rootDir: '',
+      libraryRoot: '',
+      libraryIndexPath: '',
+      notebooklmLibraryDir: '',
+      emailLibraryDir: '',
       records: [],
     })
     window.desktopAPI.deleteMaterialPackage ??= async () => ({
@@ -211,6 +238,7 @@ export function ensureDesktopApiFallback() {
         message: '浏览器预览模式暂不连接 B 站账号。',
       },
     }),
+    runEnvironmentCheck: async () => buildPreviewEnvironmentCheck(),
     getAutomationStatus: async () => defaultAutomationStatus,
     runAutomationCheckNow: async () => defaultAutomationStatus,
     setAutomationPaused: async (payload) => buildPreviewAutomationPauseStatus(payload),
@@ -259,6 +287,10 @@ export function ensureDesktopApiFallback() {
     },
     listMaterialPackages: async () => ({
       rootDir: '',
+      libraryRoot: '',
+      libraryIndexPath: '',
+      notebooklmLibraryDir: '',
+      emailLibraryDir: '',
       records: [],
     }),
     deleteMaterialPackage: async () => ({

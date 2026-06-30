@@ -15,11 +15,12 @@ type SourceDiscoveryRuntimeDeps = {
   loadHistorySources?: () => PinnedBilibiliSource[]
   loadQueue: () => WorkbenchQueueItem[]
   listMaterialPackages: (settings: RuntimeSettings) => { records: MaterialPackageSummary[] }
+  listLibraryItems?: () => Array<{ bvid?: string; sourceId?: string }>
   appendRuntimeLog: (message: string) => void
   registryRoot: string
-  discoveryWindowMs: number
   sourceQueryBatchSize: number
   recentVideoPageSize: number
+  recentFeedLimit: number
 }
 
 export function createSourceDiscoveryRuntime({
@@ -28,18 +29,19 @@ export function createSourceDiscoveryRuntime({
   loadHistorySources,
   loadQueue,
   listMaterialPackages,
+  listLibraryItems,
   appendRuntimeLog,
   registryRoot,
-  discoveryWindowMs,
   sourceQueryBatchSize,
   recentVideoPageSize,
+  recentFeedLimit,
 }: SourceDiscoveryRuntimeDeps) {
   const collectKnownBvidsForDiscovery = (settings = loadSettings()) => {
     try {
-      return collectKnownWorkbenchBvids(loadQueue(), listMaterialPackages(settings).records)
+      return collectKnownWorkbenchBvids(loadQueue(), listMaterialPackages(settings).records, listLibraryItems?.() ?? [])
     } catch (error) {
       appendRuntimeLog(`known bvid material scan failed: ${error instanceof Error ? error.message : String(error)}`)
-      return collectKnownWorkbenchBvids(loadQueue(), [])
+      return collectKnownWorkbenchBvids(loadQueue(), [], listLibraryItems?.() ?? [])
     }
   }
 
@@ -49,9 +51,9 @@ export function createSourceDiscoveryRuntime({
       pinnedSources: loadPinnedSources(),
       knownBvids: collectKnownBvidsForDiscovery(settings),
       registryRoot,
-      discoveryWindowMs,
       sourceQueryBatchSize,
       recentVideoPageSize,
+      recentFeedLimit,
     })
   }
 

@@ -59,7 +59,7 @@ export type AutomationControllerDeps<Settings extends AutomationRuntimeSettings>
   writePauseState: (state: BackgroundAutomationPauseState) => void
   loadPinnedSources: () => unknown[]
   discoverPinnedSourceVideos: (settings: Settings, trigger?: BackgroundAutomationTrigger) => Promise<DiscoveryResult>
-  appendQueueItems: (items: WorkbenchQueueItem[]) => void
+  appendQueueItems: (items: WorkbenchQueueItem[]) => WorkbenchQueueItem[]
   loadQueue: () => WorkbenchQueueItem[]
   recoverQueue: (reason: string) => void
   runQueue: (reason: string, controls: QueueRunControls) => Promise<QueueRunResult>
@@ -206,10 +206,12 @@ export function createAutomationController<Settings extends AutomationRuntimeSet
       pausedUntil,
       reason: paused ? (durationMs ? 'duration' : 'manual') : '',
     })
-    refreshSchedule()
     if (!paused) {
+      refreshSchedule(300)
       scheduleRetryWake()
       scheduleIdleBackfill()
+    } else {
+      refreshSchedule()
     }
     return getStatus()
   }
@@ -272,7 +274,10 @@ export function createAutomationController<Settings extends AutomationRuntimeSet
       const pinnedSources = deps.loadPinnedSources()
       const discovery = await deps.discoverPinnedSourceVideos(settings, trigger)
       if (discovery.discovered.length) {
-        deps.appendQueueItems(discovery.discovered)
+        const queueAfterAppend = deps.appendQueueItems(discovery.discovered)
+        if (queueAfterAppend.some((item) => isWorkbenchQueueItemClaimable(item))) {
+          scheduleQueueProcessing(`automation-${trigger}`)
+        }
       } else if (deps.loadQueue().some((item) => isWorkbenchQueueItemClaimable(item))) {
         scheduleQueueProcessing(`automation-${trigger}`)
       }
@@ -282,6 +287,7 @@ export function createAutomationController<Settings extends AutomationRuntimeSet
       const failedCount = queue.filter((item) => item.status === 'failed').length
       const skippedCount = queue.filter((item) => item.status === 'skipped').length
       const doneCount = queue.filter((item) => item.status === 'done').length
+      const foldedIssueCount = failedCount + skippedCount
       const sourceHint = pinnedSources.length
         ? `检查 ${discovery.checkedSourceCount}/${pinnedSources.length} 个收藏来源`
         : '未收藏视频来源'
@@ -290,14 +296,12 @@ export function createAutomationController<Settings extends AutomationRuntimeSet
         ? `${claimableCount} 项可处理`
         : queuedCount
           ? `${queuedCount} 项等待重试`
-        : failedCount
-          ? `${failedCount} 项需要重试`
-          : skippedCount
-            ? `${skippedCount} 项已跳过`
+        : foldedIssueCount
+          ? `${foldedIssueCount} 项已折叠`
             : doneCount
               ? `${doneCount} 项已完成`
               : '队列为空'
-      lastResult = `${trigger === 'startup' ? '启动检查' : trigger === 'timer' ? '定时检查' : trigger === 'idle-backfill' ? '空闲补足' : '手动检查'}完成：${sourceHint}，24小时内${discoveryHint}，${queueHint}`
+      lastResult = `${trigger === 'startup' ? '启动检查' : trigger === 'timer' ? '定时检查' : trigger === 'idle-backfill' ? '空闲补足' : '手动检查'}完成：${sourceHint}，最近列表${discoveryHint}，${queueHint}`
       deps.appendRuntimeLog(`background automation check trigger=${trigger} result=${lastResult}`)
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error)

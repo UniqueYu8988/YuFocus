@@ -6,7 +6,8 @@ import { WorkflowPane } from '@/ui/pages/WorkflowPane'
 import { Button } from '@/ui/components/base/button'
 import {
   ArchivePaneContent,
-  getMaterialLibraryReadHtmlPath,
+  getMaterialCleanMarkdownPath,
+  getMaterialEmailMarkdownPath,
   getMaterialLibraryReadPath,
 } from '@/ui/panels/workspace/ArchivePaneParts'
 import {
@@ -25,13 +26,10 @@ import {
   type RuntimeSettingsFallback,
   type WorkbenchQueueItem,
 } from '@/ui/panels/workspace/WorkbenchShared'
-import {
-  WorkspaceDialogs,
-  type MarkdownDocumentKind,
-} from '@/ui/panels/workspace/WorkspaceDialogs'
 import { WorkspaceShell } from '@/ui/panels/workspace/WorkspaceShell'
 import {
   FOLLOW_SOURCE_WINDOW_SIZE,
+  ARCHIVE_RECORD_BATCH_SIZE,
   MIMO_TEXT_MODELS,
   SOURCE_VIDEO_WINDOW_SIZE,
   WORKBENCH_RECORD_BATCH_SIZE,
@@ -39,7 +37,6 @@ import {
   buildInitialDraft,
   buildRecordSearchText,
   buildWorkbenchSourceItems,
-  canOpenMaterialBrief,
   createWorkbenchQueueItem,
   filterFollowSources,
   filterKnowledgeMaterialRecords,
@@ -49,24 +46,22 @@ import {
   getDurationBarPercent,
   getArchiveMaterialRecords,
   getMaterialSourceKey,
-  getNotebookLmImportPath,
   getNotebookLmPathTitle,
   getQueueSourceKey,
   getVisibleWorkbenchRecordItems,
+  getVisibleArchiveRecordItems,
   getWorkbenchSourceMeta,
   getWorkbenchSourceStatus,
   getWorkbenchSourceTitle,
-  isRejectedModelDocument,
+  isFoldedWorkbenchQueueIssueItem,
   notifyMaterialPackagesChanged,
   normalizeWorkbenchSourceKey,
-  stripKnowledgeBriefMetadata,
 } from '@/ui/pages/WorkspacePaneUtils'
 import {
   ARCHIVE_ALL_GROUP_ID,
   buildArchiveCreatorGroups,
   findArchiveCreatorGroup,
 } from '@/ui/pages/archiveGrouping'
-import { copyTextToClipboard } from '@/services/filesystem/clipboard'
 import { useLearningStore } from '@/state/store'
 import archiveCurrentRecordIcon from '@/assets/archive-current-record.svg'
 import archiveOtherRecordsIcon from '@/assets/archive-other-records.svg'
@@ -128,21 +123,18 @@ export function WorkspacePane({
   const [followSourcePage, setFollowSourcePage] = useState(1)
   const [sourceVideoPage, setSourceVideoPage] = useState(1)
   const [workbenchRecordVisibleCount, setWorkbenchRecordVisibleCount] = useState(WORKBENCH_RECORD_BATCH_SIZE)
+  const [archiveRecordVisibleCount, setArchiveRecordVisibleCount] = useState(ARCHIVE_RECORD_BATCH_SIZE)
   const [knowledgeInventory, setKnowledgeInventory] = useState<KnowledgeInventory | null>(null)
   const [knowledgeQuery, setKnowledgeQuery] = useState('')
   const [knowledgeSourceFilter, setKnowledgeSourceFilter] = useState<KnowledgeSourceFilter>({ kind: 'all', title: '全部资料' })
   const [knowledgeLoading, setKnowledgeLoading] = useState(false)
   const [knowledgeError, setKnowledgeError] = useState('')
-  const [knowledgeBriefOpen, setKnowledgeBriefOpen] = useState(false)
-  const [knowledgeBriefTitle, setKnowledgeBriefTitle] = useState('')
-  const [knowledgeBriefPath, setKnowledgeBriefPath] = useState('')
-  const [knowledgeBriefContent, setKnowledgeBriefContent] = useState('')
-  const [knowledgeBriefLoading, setKnowledgeBriefLoading] = useState(false)
-  const [knowledgeBriefError, setKnowledgeBriefError] = useState('')
-  const [knowledgeBriefKind, setKnowledgeBriefKind] = useState<MarkdownDocumentKind>('brief')
   const [settingsStatus, setSettingsStatus] = useState<SettingsStatus | null>(null)
   const [settingsStatusLoading, setSettingsStatusLoading] = useState(false)
   const [settingsStatusError, setSettingsStatusError] = useState('')
+  const [environmentCheck, setEnvironmentCheck] = useState<EnvironmentCheckPayload | null>(null)
+  const [environmentCheckLoading, setEnvironmentCheckLoading] = useState(false)
+  const [environmentCheckError, setEnvironmentCheckError] = useState('')
   const [automationStatus, setAutomationStatus] = useState<BackgroundAutomationStatus | null>(null)
 
   const courseData = useLearningStore((state) => state.courseData)
@@ -174,6 +166,20 @@ export function WorkspacePane({
       setSettingsStatus(null)
     } finally {
       setSettingsStatusLoading(false)
+    }
+  }, [])
+
+  const refreshEnvironmentCheck = useCallback(async () => {
+    setEnvironmentCheckLoading(true)
+    setEnvironmentCheckError('')
+    try {
+      const result = await window.desktopAPI.runEnvironmentCheck()
+      setEnvironmentCheck(result)
+    } catch (error) {
+      setEnvironmentCheckError(error instanceof Error ? error.message : '无法完成运行环境自检。')
+      setEnvironmentCheck(null)
+    } finally {
+      setEnvironmentCheckLoading(false)
     }
   }, [])
 
@@ -417,7 +423,8 @@ export function WorkspacePane({
   useEffect(() => {
     if (view !== 'settings') return
     void refreshSettingsStatus()
-  }, [refreshSettingsStatus, view])
+    void refreshEnvironmentCheck()
+  }, [refreshEnvironmentCheck, refreshSettingsStatus, view])
 
   useEffect(() => {
     if (view !== 'knowledge') return
@@ -497,6 +504,11 @@ export function WorkspacePane({
     },
     [activeArchiveGroup?.records, libraryQuery],
   )
+  const visibleArchiveRecords = useMemo(
+    () => getVisibleArchiveRecordItems(archiveFilteredRecords, archiveRecordVisibleCount),
+    [archiveFilteredRecords, archiveRecordVisibleCount],
+  )
+  const canLoadMoreArchiveRecords = visibleArchiveRecords.length < archiveFilteredRecords.length
   const archiveStats = useMemo(
     () => buildArchiveStats(archiveMaterialRecords),
     [archiveMaterialRecords],
@@ -507,6 +519,10 @@ export function WorkspacePane({
       setActiveArchiveGroupId(ARCHIVE_ALL_GROUP_ID)
     }
   }, [activeArchiveGroupId, archiveCreatorGroups])
+
+  useEffect(() => {
+    setArchiveRecordVisibleCount(ARCHIVE_RECORD_BATCH_SIZE)
+  }, [activeArchiveGroupId, libraryQuery])
 
   const filteredKnowledgeMaterialRecords = useMemo(
     () => filterKnowledgeMaterialRecords({
@@ -553,11 +569,19 @@ export function WorkspacePane({
     () => buildWorkbenchSourceItems(sortedMaterialRecords, workbenchQueue),
     [sortedMaterialRecords, workbenchQueue],
   )
-  const visibleWorkbenchItems = useMemo(
-    () => getVisibleWorkbenchRecordItems(workbenchSourceItems, workbenchRecordVisibleCount),
-    [workbenchRecordVisibleCount, workbenchSourceItems],
+  const foldedWorkbenchIssueItems = useMemo(
+    () => workbenchSourceItems.filter(isFoldedWorkbenchQueueIssueItem),
+    [workbenchSourceItems],
   )
-  const canLoadMoreWorkbenchItems = visibleWorkbenchItems.length < workbenchSourceItems.length
+  const activeWorkbenchSourceItems = useMemo(
+    () => workbenchSourceItems.filter((item) => !isFoldedWorkbenchQueueIssueItem(item)),
+    [workbenchSourceItems],
+  )
+  const visibleWorkbenchItems = useMemo(
+    () => getVisibleWorkbenchRecordItems(activeWorkbenchSourceItems, workbenchRecordVisibleCount),
+    [activeWorkbenchSourceItems, workbenchRecordVisibleCount],
+  )
+  const canLoadMoreWorkbenchItems = visibleWorkbenchItems.length < activeWorkbenchSourceItems.length
   const runtimeModeLabel = window.desktopAPI.isElectron ? '原生桌面端' : '浏览器预览'
   const automationStatusLabel = automationStatus?.running
     ? '后台检查中'
@@ -772,49 +796,21 @@ export function WorkspacePane({
     pushToast(target.status === 'failed' ? '已重新加入队列' : '已加入队列', target.title, 'success')
   }
 
-  const handleOpenMarkdownDocument = async (title: string, targetPath: string, kind: MarkdownDocumentKind = 'brief') => {
-    if (!targetPath) return
-    setKnowledgeBriefOpen(true)
-    setKnowledgeBriefTitle(title)
-    setKnowledgeBriefPath(targetPath)
-    setKnowledgeBriefKind(kind)
-    setKnowledgeBriefContent('')
-    setKnowledgeBriefError('')
-    setKnowledgeBriefLoading(true)
-    try {
-      const content = await window.desktopAPI.readTextFile(targetPath)
-      setKnowledgeBriefContent(kind === 'brief' ? stripKnowledgeBriefMetadata(content) : content)
-    } catch (error) {
-      setKnowledgeBriefError(error instanceof Error ? error.message : '无法读取 Markdown 文档。')
-    } finally {
-      setKnowledgeBriefLoading(false)
-    }
-  }
-
-  const handleOpenMaterialMarkdown = async ({
+  const handleOpenMarkdownExternally = async ({
     title,
     targetPath,
+    fallbackError = '无法打开这份资料。',
   }: {
     title: string
     targetPath: string
+    fallbackError?: string
   }) => {
     if (!targetPath) return
     try {
-      const content = await window.desktopAPI.readTextFile(targetPath)
-      const readableContent = stripKnowledgeBriefMetadata(content)
-      if (!readableContent || isRejectedModelDocument(readableContent)) {
-        throw new Error('这份正文不是可读资料，可能是模型拒绝文本或空文件。请回到队列重新生成资料。')
-      }
-      setKnowledgeBriefOpen(true)
-      setKnowledgeBriefTitle(title)
-      setKnowledgeBriefPath(targetPath)
-      setKnowledgeBriefKind('brief')
-      setKnowledgeBriefContent(readableContent)
-      setKnowledgeBriefError('')
-      setKnowledgeBriefLoading(false)
-      pushToast('资料已打开', title, 'success')
+      await window.desktopAPI.openPath(targetPath)
+      pushToast('已交给外部应用打开', title, 'success')
     } catch (error) {
-      pushToast('打开失败', error instanceof Error ? error.message : '无法打开这份资料。', 'error')
+      pushToast('打开失败', error instanceof Error ? error.message : fallbackError, 'error')
     }
   }
 
@@ -832,12 +828,7 @@ export function WorkspacePane({
       const targetPath = typeof detail?.path === 'string' ? detail.path : ''
       if (!targetPath) return
       const title = typeof detail?.title === 'string' && detail.title.trim() ? detail.title : '未命名资料'
-      const kind: MarkdownDocumentKind = detail?.kind === 'chapter_map' ? 'chapter_map' : 'brief'
-      if (kind === 'chapter_map') {
-        void handleOpenMarkdownDocument(title, targetPath, kind)
-        return
-      }
-      void handleOpenMaterialMarkdown({
+      void handleOpenMarkdownExternally({
         title,
         targetPath,
       })
@@ -845,28 +836,13 @@ export function WorkspacePane({
 
     window.addEventListener('shijie:open-material-document', handleOpenMaterialDocument)
     return () => window.removeEventListener('shijie:open-material-document', handleOpenMaterialDocument)
-  }, [handleOpenMaterialMarkdown, handleOpenMarkdownDocument])
-
-  const handleCopyMarkdownDocument = async () => {
-    if (!knowledgeBriefContent) return
-    try {
-      await copyTextToClipboard(knowledgeBriefContent)
-      pushToast(knowledgeBriefKind === 'chapter_map' ? '结构图已复制' : '资料已复制', knowledgeBriefTitle, 'success')
-    } catch {
-      pushToast('复制失败', '可以在阅读窗口中手动选中文本复制。', 'error')
-    }
-  }
-
-  const handleRevealKnowledgeBrief = () => {
-    if (!knowledgeBriefPath) return
-    void window.desktopAPI.showItem(knowledgeBriefPath)
-  }
+  }, [handleOpenMarkdownExternally])
 
   const handleOpenKnowledgeBriefInLearning = async (record: MaterialInventoryRecord) => {
     try {
       const readablePath = getMaterialLibraryReadPath(record)
       if (readablePath) {
-        await handleOpenMaterialMarkdown({
+        await handleOpenMarkdownExternally({
           title: record.title,
           targetPath: readablePath,
         })
@@ -878,13 +854,31 @@ export function WorkspacePane({
     }
   }
 
-  const handleCopyNotebookLmImportPath = async (record: MaterialInventoryRecord) => {
-    const targetPath = getNotebookLmImportPath(record)
+  const handleOpenMaterialCleanMarkdown = async (record: MaterialInventoryRecord) => {
     try {
-      await copyTextToClipboard(targetPath)
-      pushToast('文件路径已复制', getNotebookLmPathTitle(record), 'success')
+      const readablePath = getMaterialCleanMarkdownPath(record)
+      if (!readablePath) throw new Error('这条视频还没有清洗稿。')
+      await handleOpenMarkdownExternally({
+        title: record.title,
+        targetPath: readablePath,
+        fallbackError: '无法打开清洗稿。',
+      })
     } catch (error) {
-      pushToast('复制失败', error instanceof Error ? error.message : '无法复制文件路径。', 'error')
+      pushToast('打开失败', error instanceof Error ? error.message : '无法打开清洗稿。', 'error')
+    }
+  }
+
+  const handleOpenMaterialEmailMarkdown = async (record: MaterialInventoryRecord) => {
+    try {
+      const readablePath = getMaterialEmailMarkdownPath(record)
+      if (!readablePath) throw new Error('这条视频还没有 email 稿。')
+      await handleOpenMarkdownExternally({
+        title: `${record.title} · email`,
+        targetPath: readablePath,
+        fallbackError: '无法打开 email 稿。',
+      })
+    } catch (error) {
+      pushToast('打开失败', error instanceof Error ? error.message : '无法打开 email 稿。', 'error')
     }
   }
 
@@ -918,50 +912,32 @@ export function WorkspacePane({
     }
   }
 
-  const workspaceDialogs = (
-    <WorkspaceDialogs
-      knowledgeBriefOpen={knowledgeBriefOpen}
-      knowledgeBriefTitle={knowledgeBriefTitle}
-      knowledgeBriefPath={knowledgeBriefPath}
-      knowledgeBriefContent={knowledgeBriefContent}
-      knowledgeBriefLoading={knowledgeBriefLoading}
-      knowledgeBriefError={knowledgeBriefError}
-      knowledgeBriefKind={knowledgeBriefKind}
-      onKnowledgeBriefOpenChange={setKnowledgeBriefOpen}
-      onCopyKnowledgeBrief={() => void handleCopyMarkdownDocument()}
-      onRevealKnowledgeBrief={handleRevealKnowledgeBrief}
-    />
-  )
-
   if (view === 'workbench') {
     return (
       <>
         <WorkspaceShell
           eyebrow="Queue"
           title="队列"
-          description="查看已经加入队列的视频、处理状态和已生成资料。视频来源选择已前移到最近页和侧边栏。"
           windowFocused={windowFocused}
         >
           <div className="grid min-h-0 w-full grid-cols-1 gap-5">
             <WorkbenchQueuePanel
               items={workbenchSourceItems}
               visibleItems={visibleWorkbenchItems}
+              foldedIssueItems={foldedWorkbenchIssueItems}
               canLoadMore={canLoadMoreWorkbenchItems}
               distillRequestState={distillRequestState}
               editorialSummaryBuildingPath=""
-              onLoadMore={() => setWorkbenchRecordVisibleCount((current) => Math.min(workbenchSourceItems.length, current + WORKBENCH_RECORD_BATCH_SIZE))}
+              onLoadMore={() => setWorkbenchRecordVisibleCount((current) => Math.min(activeWorkbenchSourceItems.length, current + WORKBENCH_RECORD_BATCH_SIZE))}
               getItemStatus={getWorkbenchSourceStatus}
               getItemMeta={getWorkbenchSourceMeta}
               getItemTitle={getWorkbenchSourceTitle}
-              canOpenBrief={canOpenMaterialBrief}
-              getNotebookLmPathTitle={getNotebookLmPathTitle}
               onRetryQueueItem={(queueId) => void handleStartQueuedVideo(queueId)}
-              onCopyNotebookLmPath={(record) => void handleCopyNotebookLmImportPath(record)}
-              onOpenBrief={(record) => void handleOpenKnowledgeBriefInLearning(record)}
+              onOpenCleanFile={(record) => void handleOpenMaterialCleanMarkdown(record)}
+              onOpenEmailFile={(record) => void handleOpenMaterialEmailMarkdown(record)}
             />
           </div>
         </WorkspaceShell>
-        {workspaceDialogs}
       </>
     )
   }
@@ -1004,7 +980,7 @@ export function WorkspacePane({
             onClearSourceFilter={() => setKnowledgeSourceFilter({ kind: 'all', title: '全部资料' })}
             onRevealLibraryPath={() => knowledgeInventory?.libraryPath ? void window.desktopAPI.showItem(knowledgeInventory.libraryPath) : undefined}
             onOpenMaterialRecord={(record) => void handleOpenKnowledgeBriefInLearning(record)}
-            onOpenKnowledgeRecord={(record) => void handleOpenMaterialMarkdown({
+            onOpenKnowledgeRecord={(record) => void handleOpenMarkdownExternally({
               title: record.title,
               targetPath: record.libraryPath,
             })}
@@ -1014,7 +990,6 @@ export function WorkspacePane({
             formatCompactNumber={formatCompactNumber}
           />
         </WorkspaceShell>
-        {workspaceDialogs}
       </>
     )
   }
@@ -1025,7 +1000,6 @@ export function WorkspacePane({
         <WorkspaceShell
           eyebrow="Archive"
           title="档案"
-          description="按 UP 主查看已生成的字幕清洗资料和 NotebookLM 导入稿。"
           windowFocused={windowFocused}
         >
           <ArchivePaneContent
@@ -1033,28 +1007,25 @@ export function WorkspacePane({
             groups={archiveCreatorGroups}
             activeGroup={activeArchiveGroup}
             query={libraryQuery}
-            records={archiveFilteredRecords}
+            records={visibleArchiveRecords}
+            totalRecordCount={archiveFilteredRecords.length}
+            canLoadMore={canLoadMoreArchiveRecords}
             materialRootDir={materialRootDir}
+            notebooklmLibraryDir={materialInventory?.notebooklmLibraryDir || ''}
+            emailLibraryDir={materialInventory?.emailLibraryDir || ''}
             canOpenRoot={Boolean(materialInventory?.rootDir)}
             onGroupChange={setActiveArchiveGroupId}
             onQueryChange={setLibraryQuery}
-            onOpenRoot={() => void window.desktopAPI.openPath(materialRootDir)}
-            onRefresh={() => {
-              void window.desktopAPI.listMaterialPackages().then((result) => {
-                setMaterialInventory(result)
-                notifyMaterialPackagesChanged()
-              })
-            }}
-            onOpenRecord={(record) => void handleOpenKnowledgeBriefInLearning(record)}
-            onCopyNotebookLmPath={(record) => void handleCopyNotebookLmImportPath(record)}
-            onRevealPath={(targetPath) => void window.desktopAPI.showItem(targetPath)}
+            onLoadMore={() => setArchiveRecordVisibleCount((current) => Math.min(archiveFilteredRecords.length, current + ARCHIVE_RECORD_BATCH_SIZE))}
+            onOpenRoot={() => void window.desktopAPI.openPath(materialInventory?.notebooklmLibraryDir || materialRootDir)}
+            onOpenRecord={(record) => void handleOpenMaterialCleanMarkdown(record)}
+            onOpenEmailRecord={(record) => void handleOpenMaterialEmailMarkdown(record)}
             onDeleteRecord={(record) => void handleDeleteMaterialPackage(record)}
             formatRelativeTime={formatRelativeTime}
             formatCompactNumber={formatCompactNumber}
             getNotebookLmPathTitle={getNotebookLmPathTitle}
           />
         </WorkspaceShell>
-        {workspaceDialogs}
       </>
     )
   }
@@ -1063,7 +1034,6 @@ export function WorkspacePane({
     return (
       <>
         <WorkflowPane windowFocused={windowFocused} />
-        {workspaceDialogs}
       </>
     )
   }
@@ -1085,15 +1055,18 @@ export function WorkspacePane({
           settingsStatus={settingsStatus}
           settingsStatusLoading={settingsStatusLoading}
           settingsStatusError={settingsStatusError}
+          environmentCheck={environmentCheck}
+          environmentCheckLoading={environmentCheckLoading}
+          environmentCheckError={environmentCheckError}
           mimoTextModels={MIMO_TEXT_MODELS}
           transcriptionIcon={settingsTranscriptionIcon}
           bilibiliIcon={settingsBilibiliIcon}
           settingsError={settingsError}
           onSettingsDraftChange={setSettingsDraft}
           onRefreshSettingsStatus={() => void refreshSettingsStatus()}
+          onRefreshEnvironmentCheck={() => void refreshEnvironmentCheck()}
         />
       </WorkspaceShell>
-      {workspaceDialogs}
     </>
   )
 }

@@ -1,11 +1,13 @@
 import {
   AudioLines,
+  CheckCircle2,
   Cookie,
   FolderOpen,
   Mail,
   RefreshCcw,
   Server,
   Sparkles,
+  TriangleAlert,
 } from 'lucide-react'
 import { Badge } from '@/ui/components/base/badge'
 import { Button } from '@/ui/components/base/button'
@@ -15,8 +17,16 @@ import {
   SettingsBlock,
   SettingsField,
   type SettingsDraftUpdater,
+  type SettingsEnvironmentResult,
   type SettingsStatusResult,
 } from '@/ui/panels/workspace/SettingsShared'
+
+function getEnvironmentStatusMeta(status: EnvironmentCheckStatus) {
+  if (status === 'ok') return { label: '可用', className: 'text-emerald-100', icon: CheckCircle2 }
+  if (status === 'warning') return { label: '提醒', className: 'text-sky-100', icon: TriangleAlert }
+  if (status === 'missing') return { label: '未配置', className: 'text-amber-100', icon: TriangleAlert }
+  return { label: '失败', className: 'text-red-100', icon: TriangleAlert }
+}
 
 export function CurrentConfigSettingsBlock({
   runtimeModeLabel,
@@ -83,6 +93,73 @@ export function CurrentConfigSettingsBlock({
           {settingsStatusError}
         </div>
       ) : null}
+    </SettingsBlock>
+  )
+}
+
+export function EnvironmentCheckSettingsBlock({
+  environmentCheck,
+  environmentCheckLoading,
+  environmentCheckError,
+  onRefreshEnvironmentCheck,
+}: {
+  environmentCheck: SettingsEnvironmentResult | null
+  environmentCheckLoading: boolean
+  environmentCheckError: string
+  onRefreshEnvironmentCheck: () => void
+}) {
+  return (
+    <SettingsBlock title="运行环境自检" className="order-1">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="space-y-1 text-[12px] leading-5 text-muted-foreground">
+          <div className="text-[13px] font-semibold text-foreground/90">
+            {environmentCheckLoading ? '正在检查运行环境' : environmentCheck ? '运行环境状态已刷新' : '尚未检查运行环境'}
+          </div>
+          {environmentCheck ? (
+            <div className="break-all">数据根：{environmentCheck.runtime.canonicalDataRoot}</div>
+          ) : null}
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="rounded-xl"
+          onClick={onRefreshEnvironmentCheck}
+          disabled={environmentCheckLoading}
+        >
+          <RefreshCcw size={12} />
+          刷新自检
+        </Button>
+      </div>
+
+      {environmentCheckError ? (
+        <div className="rounded-[10px] border border-amber-400/18 bg-amber-400/[0.08] px-3 py-2 text-[12px] leading-5 text-amber-100">
+          {environmentCheckError}
+        </div>
+      ) : null}
+
+      <div className="grid gap-2 md:grid-cols-2">
+        {(environmentCheck?.items ?? []).map((item) => {
+          const meta = getEnvironmentStatusMeta(item.status)
+          const Icon = meta.icon
+          return (
+            <div key={item.id} className="rounded-[10px] border border-white/[0.07] bg-white/[0.025] px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-[12px] font-semibold text-foreground/88">
+                  <Icon size={13} className={meta.className} />
+                  {item.label}
+                </div>
+                <Badge variant="outline" className={cn('h-5 border-white/0 bg-black/18 px-2 text-[10px]', meta.className)}>
+                  {meta.label}
+                </Badge>
+              </div>
+              <div className="mt-1 text-[12px] leading-5 text-muted-foreground">{item.message}</div>
+              {item.detail ? <div className="mt-1 break-all text-[11px] leading-5 text-foreground/58">{item.detail}</div> : null}
+              {item.nextAction ? <div className="mt-1 text-[11px] leading-5 text-amber-100/90">{item.nextAction}</div> : null}
+            </div>
+          )
+        })}
+      </div>
     </SettingsBlock>
   )
 }

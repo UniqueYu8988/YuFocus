@@ -6,6 +6,11 @@ import {
   getTextFileLength,
   readMaterialMetricsSummary,
 } from './materialStats'
+import {
+  listLibraryExportItems,
+  type LibraryExportItem,
+} from './libraryExportService'
+import { getComparablePath } from './pathSafety'
 
 type MaterialReadinessReport = {
   schema_version: 'shijie.material-readiness.v0.1'
@@ -41,10 +46,19 @@ export type MaterialPackageSummary = {
   metricsInputTokens: number
   metricsOutputTokens: number
   metricsTotalTokens: number
+  metricsMimoCredits: number
   emailPushedAt: number
   updatedAt: number
+  libraryRoot: string
+  libraryIndexPath: string
+  libraryNotebooklmPath: string
+  libraryNotebooklmExists: boolean
+  libraryEmailPath: string
+  libraryEmailExists: boolean
   notebooklmPath: string
   notebooklmExists: boolean
+  emailPath: string
+  emailExists: boolean
   editorialSummaryStatus: string
   editorialSummaryPath: string
   editorialSummaryExists: boolean
@@ -151,7 +165,14 @@ function isMaterialPackageDirectory(materialPath: string) {
   const manifestPath = path.join(materialPath, 'manifest.json')
   const rawTranscriptPath = path.join(materialPath, 'raw_transcript.txt')
   const notebooklmPath = path.join(materialPath, 'exports', 'notebooklm.md')
-  return fs.existsSync(manifestPath) && (fs.existsSync(rawTranscriptPath) || fs.existsSync(notebooklmPath))
+  const libraryRefsPath = path.join(materialPath, 'library_refs.json')
+  const runStatePath = path.join(materialPath, 'run_state.json')
+  return fs.existsSync(manifestPath) && (
+    fs.existsSync(rawTranscriptPath) ||
+    fs.existsSync(notebooklmPath) ||
+    fs.existsSync(libraryRefsPath) ||
+    fs.existsSync(runStatePath)
+  )
 }
 
 function collectMaterialPackagePaths(rootDir: string) {
@@ -176,6 +197,8 @@ function collectMaterialPackagePaths(rootDir: string) {
 export function listMaterialPackages(rootDir: string) {
   fs.mkdirSync(rootDir, { recursive: true })
 
+  const libraryRoot = path.resolve(rootDir, '..', 'library')
+  const libraryIndex = listLibraryExportItems(libraryRoot)
   const records: MaterialPackageSummary[] = []
   for (const materialPath of collectMaterialPackagePaths(rootDir)) {
     const entryName = path.basename(materialPath)
@@ -197,7 +220,22 @@ export function listMaterialPackages(rootDir: string) {
     const sourceUrl = sanitizeDisplayText(source.url ?? '')
     const creator = sanitizeDisplayText(source.creator ?? '')
     const textSourceType = sanitizeDisplayText(acquisition.text_source_type ?? '')
-    const notebooklmPath = path.join(materialPath, 'exports', 'notebooklm.md')
+    const comparableMaterialPath = getComparablePath(materialPath)
+    const libraryItem: LibraryExportItem | null = libraryIndex.items.find((item) => {
+      const itemMaterialPath = item.materialPath ? getComparablePath(item.materialPath) : ''
+      return Boolean(
+        (itemMaterialPath && itemMaterialPath === comparableMaterialPath) ||
+        (sourceId && (item.sourceId === sourceId || item.bvid === sourceId)),
+      )
+    }) ?? null
+    const localNotebooklmPath = path.join(materialPath, 'exports', 'notebooklm.md')
+    const localEmailPath = path.join(materialPath, 'delivery', 'email.md')
+    const libraryNotebooklmPath = libraryItem?.notebooklmPath || ''
+    const libraryEmailPath = libraryItem?.emailPath || ''
+    const libraryNotebooklmExists = Boolean(libraryNotebooklmPath && fs.existsSync(libraryNotebooklmPath))
+    const libraryEmailExists = Boolean(libraryEmailPath && fs.existsSync(libraryEmailPath))
+    const notebooklmPath = libraryNotebooklmExists ? libraryNotebooklmPath : localNotebooklmPath
+    const emailPath = libraryEmailExists ? libraryEmailPath : localEmailPath
     const editorialStatusPath = path.join(materialPath, 'summary', 'summary_status.json')
     const editorialSummaryPath = path.join(materialPath, 'summary', 'article.md')
     const editorialSummaryHtmlPath = path.join(materialPath, 'summary', 'article.html')
@@ -230,7 +268,7 @@ export function listMaterialPackages(rootDir: string) {
     const editorialSummaryReady = editorialSummaryStatus === 'summary_ready' && editorialSummaryUsable
     const hasLightweightMaterialFiles =
       fs.existsSync(manifestPath) &&
-      (fs.existsSync(rawTranscriptPath) || fs.existsSync(notebooklmPath) || fs.existsSync(editorialStatusPath))
+      (fs.existsSync(rawTranscriptPath) || fs.existsSync(notebooklmPath) || fs.existsSync(editorialStatusPath) || libraryNotebooklmExists || libraryEmailExists)
     if (!hasLightweightMaterialFiles) continue
     const sourceIndexSummary = readSourceIndexSummary(sourceIndexPath)
     const materialId = sanitizeDisplayText(manifest.material_id ?? entryName, entryName)
@@ -247,7 +285,7 @@ export function listMaterialPackages(rootDir: string) {
       materialPath,
       materialId,
       stage: lightweightStage,
-      ready: editorialSummaryReady || fs.existsSync(notebooklmPath) || fs.existsSync(rawTranscriptPath),
+      ready: editorialSummaryReady || fs.existsSync(notebooklmPath) || fs.existsSync(rawTranscriptPath) || libraryNotebooklmExists || libraryEmailExists,
       sourceIndexEntries: sourceIndexSummary.entryCount,
     })
     const workflowStage = lightweightStage
@@ -289,10 +327,19 @@ export function listMaterialPackages(rootDir: string) {
       metricsInputTokens: metricsSummary.inputTokens,
       metricsOutputTokens: metricsSummary.outputTokens,
       metricsTotalTokens: metricsSummary.totalTokens,
+      metricsMimoCredits: metricsSummary.mimoCredits,
       emailPushedAt,
       updatedAt: stat.mtimeMs,
+      libraryRoot,
+      libraryIndexPath: libraryIndex.indexPath,
+      libraryNotebooklmPath,
+      libraryNotebooklmExists,
+      libraryEmailPath,
+      libraryEmailExists,
       notebooklmPath,
       notebooklmExists: fs.existsSync(notebooklmPath),
+      emailPath,
+      emailExists: fs.existsSync(emailPath),
       editorialSummaryStatus,
       editorialSummaryPath,
       editorialSummaryExists: editorialSummaryReady,
@@ -321,6 +368,10 @@ export function listMaterialPackages(rootDir: string) {
 
   return {
     rootDir,
+    libraryRoot,
+    libraryIndexPath: libraryIndex.indexPath,
+    notebooklmLibraryDir: path.join(libraryRoot, 'notebooklm'),
+    emailLibraryDir: path.join(libraryRoot, 'email'),
     records: records.sort((left, right) => right.updatedAt - left.updatedAt),
   }
 }

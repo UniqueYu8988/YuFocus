@@ -20,7 +20,7 @@ export type WorkbenchSourceItem = {
 
 export type WorkbenchSourceStatus = {
   label: string
-  tone: 'red' | 'yellow' | 'green' | 'gray'
+  tone: 'red' | 'amber' | 'blue' | 'green' | 'gray'
   active: boolean
 }
 
@@ -107,7 +107,8 @@ export function WorkbenchStatusLight({ status }: { status: WorkbenchSourceStatus
         className={cn(
           'size-3.5 rounded-full shadow-[inset_0_-1px_1px_rgba(0,0,0,0.22),0_0_10px_rgba(255,255,255,0.05)]',
           status.tone === 'red' && 'bg-[#ff5f57] shadow-[inset_0_-1px_1px_rgba(0,0,0,0.24),0_0_10px_rgba(255,95,87,0.22)]',
-          status.tone === 'yellow' && 'bg-[#ffbd2e] shadow-[inset_0_-1px_1px_rgba(0,0,0,0.24),0_0_10px_rgba(255,189,46,0.20)]',
+          status.tone === 'amber' && 'bg-[#ffbd2e] shadow-[inset_0_-1px_1px_rgba(0,0,0,0.24),0_0_10px_rgba(255,189,46,0.20)]',
+          status.tone === 'blue' && 'bg-[#2f9bff] shadow-[inset_0_-1px_1px_rgba(0,0,0,0.24),0_0_10px_rgba(47,155,255,0.22)]',
           status.tone === 'green' && 'bg-[#28c840] shadow-[inset_0_-1px_1px_rgba(0,0,0,0.24),0_0_10px_rgba(40,200,64,0.22)]',
           status.tone === 'gray' && 'bg-white/18 shadow-[inset_0_-1px_1px_rgba(0,0,0,0.24)]',
           status.active && 'animate-pulse',

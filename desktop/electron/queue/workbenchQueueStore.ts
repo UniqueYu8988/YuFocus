@@ -54,7 +54,13 @@ export function createWorkbenchQueueStore({
 
   const appendQueueItems = (items: WorkbenchQueueItem[]) => {
     if (!items.length) return loadQueue()
-    return saveQueue(appendWorkbenchQueueItemsToList(loadQueue(), items))
+    const current = loadQueue()
+    const next = appendWorkbenchQueueItemsToList(current, items)
+    const unchanged = next.length === current.length && next.every((item, index) => (
+      item.queueId === current[index]?.queueId && item.bvid === current[index]?.bvid
+    ))
+    if (unchanged) return current
+    return saveQueue(next)
   }
 
   const updateQueueItem = (queueId: string, patch: Partial<WorkbenchQueueItem>) => {

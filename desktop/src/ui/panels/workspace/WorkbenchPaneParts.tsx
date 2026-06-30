@@ -49,6 +49,7 @@ export function WorkbenchPaneContent({
   automationLastCheckLabel,
   queueItems,
   pagedQueueItems,
+  foldedQueueIssueItems = [],
   queuePageSize,
   canClearQueue,
   materialRootDir,
@@ -115,6 +116,7 @@ export function WorkbenchPaneContent({
   automationLastCheckLabel: string
   queueItems: WorkbenchSourceItem[]
   pagedQueueItems: PageSlice<WorkbenchSourceItem>
+  foldedQueueIssueItems?: WorkbenchSourceItem[]
   queuePageSize: number
   canClearQueue: boolean
   materialRootDir: string
@@ -227,6 +229,7 @@ export function WorkbenchPaneContent({
       <WorkbenchQueuePanel
         items={queueItems}
         visibleItems={pagedQueueItems.items}
+        foldedIssueItems={foldedQueueIssueItems}
         canLoadMore={pagedQueueItems.page < pagedQueueItems.totalPages}
         distillRequestState={distillRequestState}
         editorialSummaryBuildingPath={editorialSummaryBuildingPath}
@@ -234,11 +237,9 @@ export function WorkbenchPaneContent({
         getItemStatus={getItemStatus}
         getItemMeta={getItemMeta}
         getItemTitle={getItemTitle}
-        canOpenBrief={canOpenBrief}
-        getNotebookLmPathTitle={getNotebookLmPathTitle}
         onRetryQueueItem={onRetryQueueItem}
-        onCopyNotebookLmPath={onCopyNotebookLmPath}
-        onOpenBrief={onOpenBrief}
+        onOpenCleanFile={onOpenBrief}
+        onOpenEmailFile={onOpenBrief}
       />
     </div>
   )

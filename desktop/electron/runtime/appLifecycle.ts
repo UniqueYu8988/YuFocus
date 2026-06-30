@@ -8,6 +8,7 @@ type AppLifecycleDeps = {
   windowController: WindowController
   recoverInterruptedWorkbenchQueue: (reason: string) => unknown
   refreshBackgroundAutomationSchedule: () => unknown
+  runBackgroundAutomationCheck: (trigger: 'startup') => unknown
 }
 
 export function registerAppLifecycle({
@@ -15,6 +16,7 @@ export function registerAppLifecycle({
   windowController,
   recoverInterruptedWorkbenchQueue,
   refreshBackgroundAutomationSchedule,
+  runBackgroundAutomationCheck,
 }: AppLifecycleDeps) {
   const singleInstanceLock = app.requestSingleInstanceLock()
   if (!singleInstanceLock) {
@@ -46,6 +48,7 @@ export function registerAppLifecycle({
       windowController.createTray()
       recoverInterruptedWorkbenchQueue('startup')
       refreshBackgroundAutomationSchedule()
+      void runBackgroundAutomationCheck('startup')
     })
   }
 

@@ -116,7 +116,11 @@ export function materialRecordMatchesBvid(record: MaterialPackageSummary, bvid: 
   return record.sourceId === bvid || tryExtractBilibiliBvid(record.sourceUrl || record.name || '') === bvid
 }
 
-export function collectKnownWorkbenchBvids(queue: WorkbenchQueueItem[], materialRecords: MaterialPackageSummary[]) {
+export function collectKnownWorkbenchBvids(
+  queue: WorkbenchQueueItem[],
+  materialRecords: MaterialPackageSummary[],
+  libraryItems: Array<{ bvid?: string; sourceId?: string }> = [],
+) {
   const known = new Set<string>()
   for (const item of queue) {
     if (item.bvid) known.add(item.bvid)
@@ -125,6 +129,10 @@ export function collectKnownWorkbenchBvids(queue: WorkbenchQueueItem[], material
     if (record.sourceId) known.add(record.sourceId)
     const bvid = tryExtractBilibiliBvid(record.sourceUrl || record.name || '')
     if (bvid) known.add(bvid)
+  }
+  for (const item of libraryItems) {
+    if (item.bvid) known.add(item.bvid)
+    if (item.sourceId) known.add(item.sourceId)
   }
   return known
 }
@@ -225,28 +233,28 @@ export async function discoverPinnedSourceVideos(options: {
   pinnedSources: PinnedBilibiliSource[]
   knownBvids: Set<string>
   registryRoot: string
-  discoveryWindowMs: number
   sourceQueryBatchSize: number
   recentVideoPageSize: number
+  recentFeedLimit: number
 }): Promise<SourceDiscoveryResult> {
   const {
     settings,
     pinnedSources,
     knownBvids,
     registryRoot,
-    discoveryWindowMs,
     sourceQueryBatchSize,
     recentVideoPageSize,
+    recentFeedLimit,
   } = options
 
   if (!pinnedSources.length) {
     return { discovered: [], checkedSourceCount: 0, totalVideoCount: 0 }
   }
 
-  const discovered: WorkbenchQueueItem[] = []
+  const candidateVideos: { video: BilibiliVideoMetadata; sourceName: string }[] = []
+  const candidateBvids = new Set<string>()
   let checkedSourceCount = 0
   let totalVideoCount = 0
-  const now = Date.now()
 
   for (let index = 0; index < pinnedSources.length; index += sourceQueryBatchSize) {
     const batch = pinnedSources.slice(index, index + sourceQueryBatchSize)
@@ -261,15 +269,22 @@ export async function discoverPinnedSourceVideos(options: {
 
     for (const source of response.sources) {
       for (const video of source.videos) {
-        if (!isVideoPublishedInDiscoveryWindow(video, discoveryWindowMs, now)) continue
         if (knownBvids.has(video.bvid)) continue
-        knownBvids.add(video.bvid)
-        discovered.push(createBackgroundQueueItem(video, source.name))
+        if (candidateBvids.has(video.bvid)) continue
+        candidateBvids.add(video.bvid)
+        candidateVideos.push({ video, sourceName: source.name })
       }
     }
   }
 
-  discovered.sort((left, right) => (right.pubdate || 0) - (left.pubdate || 0))
+  const discovered = candidateVideos
+    .sort((left, right) => (right.video.pubdate || 0) - (left.video.pubdate || 0))
+    .slice(0, Math.max(1, recentFeedLimit))
+    .map(({ video, sourceName }) => {
+      knownBvids.add(video.bvid)
+      return createBackgroundQueueItem(video, sourceName)
+    })
+
   return {
     discovered,
     checkedSourceCount,

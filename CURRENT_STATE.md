@@ -2,7 +2,7 @@
 
 本文件只记录项目“现在”的状态，不保存完整历史。
 
-最后更新：2026-06-30
+最后更新：2026-07-01
 
 ## 当前阶段
 
@@ -47,8 +47,8 @@
 - 本轮已把代码、文档和目录迁移收敛为一个 Git 稳定存档点；`data/` 真实运行数据由 `.gitignore` 排除。
 - “最近”页已完成：顶部已精简为只保留刷新图标；左侧栏显示“最近”和固定 UP 视频来源，固定 UP 以圆形头像加名称呈现，并通过侧边栏“管理固定 UP”弹窗设置；右侧默认显示最近视频，点击左侧某个 UP 后显示该 UP 的视频列表；用户可勾选视频并手动加入队列。真实桌面端手动刷新后只更新元数据，不自动触发下载、转写或制作。
 - 主导航命名已收敛为“最近 / 队列 / 档案 / 流程 / 设置”；档案页已接入只读 UP 主分组，并改为上下结构：上方横向展示 UP / 全部 / 拾遗圆形头像入口，头像右上角显示对应视频数量角标；下方显示当前分组的视频资料卡片；当前不迁移、不删除、不改写真实资料。
-- 档案页视觉密度已进一步优化：头像数量角标改为半透明毛玻璃效果；顶部统计只保留总字数、占用、耗时、Token 四项；UP 主头像条和资料列表合并为一个轻量容器；资料列表删除阶段、原字、清洗、文稿、HTML、长稿等低价值标签，改为突出标题、BV / 来源、更新时间、字数、占用、耗时和 Token。
-- UP 主自动同步调度升级已完成，并已追加后台自动运行补丁：工作台队列强制一次只处理 1 条；固定 UP 会同步出 `trackedBilibiliSources` 追踪状态；侧边栏固定 UP 列表按 tracking 优先级展示，并可通过提高 / 降低按钮保存 UP 历史补足优先级；后台自动化默认对齐下一个整点，每小时检查启用 `trackFresh` 的 UP，新发现视频以 `fresh` 来源自动入队；当没有 fresh 和可立即领取的队列项时，会从 registry 或 B 站历史分页中按 UP 优先级补 `history` 任务，并保存每个 UP 的 `historyPage` / `historyReachedEnd` 游标；队列空闲后会触发 `idle-backfill` 继续补下一条历史任务，不再等下一个整点；未来才到期的 retry 项不会阻塞历史补足，retry 到点会自动唤醒；付费、充电、权限受限、`HTTP 412` 或无音频轨等不可重试媒体访问错误会标记为 `skipped / 已跳过`，不再自动重试；最近页已提供暂停 2h、5h、手动暂停和恢复入口，并新增一条极简实时状态提示，用来显示正在处理的视频、等待数量、暂停状态、下次检查时间或同步异常；临时失败会按 5 分钟、30 分钟、2 小时最多重试 3 次，配置类失败会暂停后台同步；队列页已改为轻量记录流，初始 10 条，滚动加载，去除旧外框、分页器、清空 / 删除类按钮，并显示单条已完成视频的总耗时和 Token；真实运行中已看到 2026-06-28 21:00 至 2026-06-29 02:00 多次准点后台检查和自动队列处理记录；本轮只读统计 `data/materials` 为 288 个文件，未执行删除、迁移或重命名材料操作。
+- 档案页视觉密度已进一步优化：头像数量角标改为半透明毛玻璃效果；顶部统计只保留总字数、占用、耗时、MiMo Credits 四项；UP 主头像条和资料列表合并为一个轻量容器；资料列表删除阶段、原字、清洗、文稿、HTML、长稿等低价值标签，改为突出标题、BV / 来源、更新时间、字数、占用、耗时和 MiMo Credits。
+- UP 主自动同步调度升级已完成，并已追加后台自动运行补丁：工作台队列强制一次只处理 1 条；固定 UP 会同步出 `trackedBilibiliSources` 追踪状态；侧边栏固定 UP 列表按 tracking 优先级展示，并可通过提高 / 降低按钮保存 UP 历史补足优先级；后台自动化默认对齐下一个整点，每小时检查启用 `trackFresh` 的 UP，新发现视频以 `fresh` 来源自动入队；当没有 fresh 和可立即领取的队列项时，会从 registry 或 B 站历史分页中按 UP 优先级补 `history` 任务，并保存每个 UP 的 `historyPage` / `historyReachedEnd` 游标；队列空闲后会触发 `idle-backfill` 继续补下一条历史任务，不再等下一个整点；未来才到期的 retry 项不会阻塞历史补足，retry 到点会自动唤醒；付费、充电、权限受限、`HTTP 412` 或无音频轨等不可重试媒体访问错误会标记为 `skipped / 已跳过`，不再自动重试；最近页已提供暂停 2h、5h、手动暂停和恢复入口，并新增一条极简实时状态提示，用来显示正在处理的视频、等待数量、暂停状态、下次检查时间或同步异常；临时失败会按 5 分钟、30 分钟、2 小时最多重试 3 次，配置类失败会暂停后台同步；队列页已改为轻量记录流，初始 10 条，滚动加载，去除旧外框、分页器、清空 / 删除类按钮，并显示单条已完成视频的总耗时和 MiMo Credits；真实运行中已看到 2026-06-28 21:00 至 2026-06-29 02:00 多次准点后台检查和自动队列处理记录；本轮只读统计 `data/materials` 为 288 个文件，未执行删除、迁移或重命名材料操作。
 - B 站多语言字幕误合并补丁已完成：同一分 P 同时存在中文和英文字幕时，正文只使用中文轨；没有中文时才使用英文兜底，避免中英两套完整字幕同时进入 `raw_transcript.txt`、`content.md` 和 `exports/notebooklm.md`。已生成的旧材料包不会自动改写，需重跑对应视频后才会得到新产物。
 - MiMo 字幕清洗默认模型已从 `mimo-v2.5-pro` 切换为非 Pro 的 `mimo-v2.5`；旧设置中保存的 Pro 值在加载和后台运行时都会自动降级，降低 Token Plan Credits 消耗。
 - MiMo UP 定制清洗提示词实验层已完成：`src/distiller.py` 已新增 7 个重点 UP 的清洗 profile；`desktop/scripts/generate_mimo_cleaning_prompt_lab.py` 可在 `data/temp/mimo-cleaning-prompt-lab/` 中循环生成 baseline / profiled / iteration-2 对比结果，并支持 `--reevaluate-existing` 不重复消耗 MiMo token 重评质量；真实小样本最终 7/7 通过。该机制尚未接入正式 `data/materials` 生成链路。
@@ -59,6 +59,16 @@
 - 本地 brief / email 成稿门控补丁已完成：任务文件 `docs/tasks/local-brief-output-guard-fix.md` 已记录完成结果。Markdown 输出预算从 256 提升到 1024，brief / email 增加自我分析文字、过短、无标题和半句截断检查，失败会用严格成稿提示词自动重试一次。中文样本 `BV1i5jy6bECe` 重跑后 `exports/brief.local.md` 为 1100 字、`delivery/email.md` 为 558 字，均无过程性文字，`quality.riskLevel=low`。
 - 最近更新邮件转发生产化补丁已完成：正式 MiMo 清洗回到通用高保真逐字清洗，UP 定制 prompt 只保留为 `data/temp/mimo-cleaning-prompt-lab/` 实验层；本地 brief 升级为事实门控版高信息密度总结，Ollama 上下文和输出预算提高；新增 `desktop/electron/services/emailDeliveryService.ts` 使用 `nodemailer` 发送邮件，只允许 `queueSource === 'fresh'` 的最近更新视频在本地总结和质量门控通过后发送。`history`、`manual`、`retry`、`follow_source` 不发送；重复内容通过 `delivery/email_status.json` 跳过；SMTP 密码不写入状态、日志或产物；邮件失败不影响队列完成。
 - UI 板块切换性能补丁已完成：撤回“双面板常驻 hidden”方案，保持当前主面板单独挂载；“最近”页新增内存快照缓存，切回时优先恢复上一次本地数据，切换左侧不同 UP 来源不再触发完整本地快照重载。该补丁不修改队列、转写、MiMo 清洗、本地总结、邮件发送或真实材料数据。
+- 下一阶段“桌面便携版和安装包体验优化”已开启，见 `docs/tasks/package-desktop-portable-release.md` 和 `docs/plans/package-desktop-portable-release-plan.md`。第一目标是生成可双击运行的 Windows x64 便携版；外部模型保持按需调用，不把 SenseVoice、CUDA、Ollama 或 Qwen3 模型打进第一版安装包。
+- 桌面便携版阶段 1-3 已完成首轮落地：`npm run build:portable` 已生成 `desktop/release/视界专注_v0.1.0_x64.exe` 和 `desktop/release/视界专注_v0.1.0_share.zip`；受控启动确认便携版页面标题为“视界专注”；设置页新增“运行环境自检”，可检查内置后端脚本、Python、Python 依赖、本地 SenseVoice、Ollama、MiMo、B 站凭据和 SMTP。自检不加载 SenseVoice 模型，不生成 Ollama 文本，不调用 MiMo 或 SMTP，不展示秘密值。
+- 桌面便携版第一版已完成：新增 `desktop/scripts/check-packaged-portable-smoke.mjs`，自动启动便携 exe、打开最近 / 队列 / 档案 / 流程 / 设置、调用环境自检并检查启动日志。第一版安装包结论为暂不进入 NSIS 安装器阶段；当前以便携版作为可双击使用形态，外部 Python / SenseVoice / Ollama / Qwen3 继续按需调用。
+- 便携版最近页自动同步条幅循环闪烁问题已修复：重复历史补足视频被队列去重后，不再触发保存、广播和队列处理；自动化检查发现结果非空时，也会再次确认队列中是否有可领取任务，避免 `idle-backfill` 高频循环。已重新生成 `desktop/release/视界专注_v0.1.0_x64.exe`，桌面快捷方式仍指向该文件。
+- 付费、权限受限、HTTP 412、无音频轨等失败视频已从队列主列表中折叠：没有资料产物的 `failed / skipped` 队列记录会进入“无法获取的视频”折叠区，默认不占用正常队列视线，也不再在后台状态里显示为“需要重试”；历史补全可以继续寻找后续可处理视频。已重新生成便携版 exe。
+- 队列与档案页 UI 密度优化已完成：队列页去掉内部滚动容器，避免双重滚轮；队列和档案页删除标题下解释性副标题；队列和档案列表均改为初始 5 条、向下滚动后再追加 5 条；档案页删除 UP 区域最外层大圆角框、“UP 主”标题和重复的分组标题行，首行直接显示 UP 头像，选中态改为头像彩色圆环和角标变色，资料列表改为顺序列表。已重新生成便携版 exe。
+- 最近视频和历史补全自动入队修复已完成：fresh 自动发现不再按 24 小时时间窗过滤，而是从各 UP 最近页汇总候选、按发布时间排序，最多取 9 条未知视频进入 `fresh` 队列；“最近”页也同步显示 9 条。应用启动后会立即执行一次 `startup` 检查，自动同步从暂停恢复后会尽快触发检查；队列达到 200 条上限时，新增任务和可处理任务优先保留在已完成 / 已失败记录前，避免历史补全被终态旧记录挤掉。历史补全仍以 `history` 入队，不触发邮件；只有 `fresh` 最近更新继续走清洗、本地总结、质量门控和邮件转发。已重新生成便携版 exe。
+- 长期资料库文件管理已进入成品库优先阶段：`data/library` 是最终 Markdown 出口，队列完成材料后会把清洗稿同步到 `data/library/notebooklm/{UP 主}/`，把邮件稿同步到 `data/library/email/{UP 主}/`，文件名默认只保留视频标题；同一 UP 下标题冲突时才追加 ` (2)` 这类短后缀。可获得发布时间时会把成品文件修改时间设置为视频发布时间；`data/library/index.json` 记录 BV、标题、UP、发布日期、来源材料包和成品路径，用于长期去重和追踪。已有 196 份 NotebookLM 清洗稿和 2 份邮件稿已同步到长期成品库，现有 196 个 `data/materials` 材料包已瘦身为 786 个轻量记录文件。
+- 档案和队列的消耗显示已从原始 total token 改为 MiMo Credits 估算：材料清单仍保留输入 / 输出 / 总 token 底账，界面使用 `input_tokens * 100 + output_tokens * 200` 展示更接近 MiMo Token Plan 控制台的扣费口径；已重新生成便携版 exe 和分享包。
+- 睡前体验收束已完成代码侧改造：档案和队列的 Markdown 图标直接用系统外部应用打开清洗稿 / email 稿，旧内部 Markdown 查看器 UI 已删除；最近页刷新 / 暂停图标已移动到视频列表标题行右侧并删除“仅元数据”标签；最近页和队列状态命名已收敛为更短的彩色状态。高频开发阶段新增 `desktop/scripts/start-dev-desktop.ps1` 作为开发版快捷方式入口，便携版只作为阶段存档或分享包。
 
 ## 已知问题
 
@@ -79,14 +89,14 @@
 
 ## 当前风险
 
-- `data/materials` 中的资料包可能包含真实资料；清空队列已与材料删除解耦，但单条“删除资料包”仍会删除真实文件，必须谨慎确认。
+- `data/materials` 当前主要保留轻量记录和成品引用；清空队列已与材料删除解耦，但单条“删除资料包”仍会同时删除对应材料目录和 `data/library` 成品 Markdown，必须谨慎确认。
 - `data/registry` 中保存 UP 主视频列表历史，删除会让历史视频列表丢失，刷新稳定性下降。
 - Electron Store 文件可能包含 B 站 Cookie、MiMo Key、MiniMax Key、SMTP 授权码等秘密值，不能展示内容或提交。
 - 启动 Electron 会写运行日志；前端初次加载队列后可能写回 Electron Store；打开灵犀可能写回 `knowledge_library.json`。
 - 打开设置页存在 B 站状态检测入口；本轮只刷新了指定 TED 来源，没有公开秘密值。
 - 旧版遗留数据仍在项目中，不能删除真实资料；遗留代码只允许在确认无入口、无引用、无数据风险后小步剪枝。
 - 字幕清洗产物是后续唯一主线数据基础；总结、邮件、TTS 不应继续绑在字幕清洗主流程里。
-- `data/materials/{up_id}/{video_id}/exports/notebooklm.md` 是当前 NotebookLM 主输出；不能写入秘密值、调试日志、内部状态或复杂中间结果。
+- `data/library/notebooklm/{UP 主}/{视频标题}.md` 是当前 NotebookLM 主输出；不能写入秘密值、调试日志、内部状态或复杂中间结果。
 - `docs/VERIFICATION_BACKLOG.md` 只是不确定问题清单，不能当作当前 Bug 直接修。
 - `docs/history/legacy-md/`、`README.md` 和历史文档里有旧路线内容，使用前必须与当前基线文档核对。
 - `docs/history/legacy-md/cleanup-baseline.md` 是旧系统优化清理记录，已退出日常工作流。
@@ -99,9 +109,10 @@
 2. 下一步如继续本地消费层，应优先观察真实队列自动生成的 `exports/brief.local.md`、`delivery/email.md`、`work/quality/local_check.json` 和 `delivery/email_status.json` 阅读质量；真实 SMTP 发送只建议先用 1 条 fresh 小样本验证。
 3. MiMo prompt lab 结果仍只能写入 `data/temp/mimo-cleaning-prompt-lab/`，不要覆盖已有正式 `data/materials` 清洗稿。
 4. 普通后续任务继续按 `AGENTS.md` 新工作流小步推进。
-5. 后续真实运行继续小批量进行，先核对队列和 `data/materials`，再加入新视频。
+5. 后续真实运行继续小批量进行，先核对队列、`data/library` 成品和 `data/materials` 轻记录，再加入新视频。
 6. 如果继续剪枝，下一步应优先审计旧学习库 / 精读稿兼容链是否仍有真实数据读取价值；不删除旧数据，不碰 subtitle-only 主线。
 7. 如果继续架构收敛，下一步只能做“小步抽离 UI 页面中的纯 action / selector”，不要直接拆 `WorkspacePane.tsx` 或改 pipeline 行为。
+8. 如果继续使用体验优化，下一步优先执行桌面便携版构建基线：先跑 `npm run build:portable`，再按计划验证打包版启动、数据根、后端脚本路径和外部模型按需调用。
 
 ## 暂时不做
 
@@ -174,6 +185,13 @@
 - 本地 brief / email 输出门控检查：`BV1i5jy6bECe` 中文样本只重跑本地消费层后，brief / email 均为完整 Markdown 成稿；检查确认不含“我现在需要 / 首先我会 / 用户希望 / 接下来我”等过程性文字，不在半句处截断；`decision.importance=5`，`quality.riskLevel=low`。
 - 最近更新邮件转发生产化检查：`python -m py_compile src/distiller.py` 通过；`node desktop/scripts/check-mimo-cleaning-production-mode.mjs` 通过，确认生产清洗不注入 UP profile；`node desktop/scripts/check-fresh-email-delivery.mjs` 通过，覆盖 fresh dry-run、重复发送跳过、history 禁止发送、邮件关闭跳过、状态文件不含 SMTP 密码、邮件正文不附带本机材料路径和 SMTP 报错脱敏；`node desktop/scripts/check-local-consumption-layer.mjs`、`node desktop/scripts/check-local-ollama-adapter.mjs`、`node desktop/scripts/check-subtitle-only-queue-mode.mjs`、`node desktop/scripts/check-product-refactor-surface.mjs`、`check-home-dashboard-safety`、`check-up-sync-scheduler`、`check-queue-record-feed`、`check-efficiency-observability` 和 `npx tsc --noEmit` 均通过；`git diff --check` 仅有 Windows 换行提示，退出码 0。
 - UI 板块切换性能检查：`node desktop/scripts/check-ui-panel-switch-performance.mjs`、`node desktop/scripts/check-home-dashboard-safety.mjs`、`node desktop/scripts/check-product-refactor-surface.mjs` 和 `npx tsc --noEmit` 均通过；浏览器预览 smoke test 未发现控制台错误。
+- 桌面便携版和环境自检检查：`npm run build:portable` 通过；`node desktop/scripts/check-packaged-environment-check.mjs`、`npx tsc --noEmit`、`python -m py_compile src/distiller.py src/bilibili_api.py src/local_audio_client.py src/config.py`、`node desktop/scripts/check-subtitle-only-queue-mode.mjs`、`node desktop/scripts/check-product-refactor-surface.mjs`、`node desktop/scripts/check-home-dashboard-safety.mjs` 均通过。打包版受控启动日志只出现窗口创建和空闲检查，未发现模型、转写、邮件或 distiller 调用痕迹。
+- 打包版核心页面 smoke test：`node desktop/scripts/check-packaged-portable-smoke.mjs` 通过，确认最新便携 exe 页面标题为“视界专注”，可访问最近 / 队列 / 档案 / 流程 / 设置，环境自检包含后端脚本、Python、依赖、SenseVoice、Ollama、MiMo、B 站凭据和 SMTP，且启动日志新增部分不含模型、转写、邮件或 distiller 调用。
+- 便携版自动同步条幅修复检查：`node desktop/scripts/check-auto-sync-idle-backfill-loop.mjs` 通过，覆盖重复历史项不启动队列处理、真正新增且可领取的历史项仍会自动启动队列；`check-up-sync-scheduler`、`check-home-dashboard-safety`、`npx tsc --noEmit`、`npm run build:portable` 和 `check-packaged-portable-smoke` 均通过。
+- 失败队列项折叠检查：`node scripts/check-folded-queue-issues.mjs`、`node scripts/check-queue-record-feed.mjs`、`node desktop/scripts/check-up-sync-scheduler.mjs`、`npx tsc --noEmit`、`npm run build:portable` 和 `node desktop/scripts/check-packaged-portable-smoke.mjs` 均通过。
+- 队列与档案页 UI 密度优化检查：`node scripts/check-queue-record-feed.mjs`、`node scripts/check-archive-up-grouping.mjs`、`node scripts/check-folded-queue-issues.mjs`、`node scripts/check-efficiency-observability.mjs`、`node desktop/scripts/check-home-dashboard-safety.mjs`、`node desktop/scripts/check-product-refactor-surface.mjs`、`npx tsc --noEmit`、`npm run build:portable` 和 `node desktop/scripts/check-packaged-portable-smoke.mjs` 均通过。
+- 最近视频和历史补全自动入队检查：只读统计当前 Store 队列为 200 条、196 条 `done`、4 条 `failed`、0 条可领取任务，确认满队列会阻塞旧追加策略；`node desktop/scripts/check-recent-and-history-autopilot.mjs` 通过，覆盖最近列表不再使用 24 小时时间窗、最多 9 条 fresh 候选、启动立即检查、恢复后快速检查、满队列时新增 history 任务优先保留；`node desktop/scripts/check-up-sync-scheduler.mjs`、`node desktop/scripts/check-auto-sync-idle-backfill-loop.mjs`、`node desktop/scripts/check-fresh-email-delivery.mjs`、`node desktop/scripts/check-subtitle-only-queue-mode.mjs`、`npx tsc --noEmit`、`npm run build:portable` 和 `node desktop/scripts/check-packaged-portable-smoke.mjs` 均通过；`git diff --check` 仅有 Windows 换行提示。
+- 长期成品库检查：`node desktop/scripts/check-long-term-library-export.mjs` 通过，覆盖 NotebookLM / email 成品按 UP 分目录写入、标题文件名、同名短后缀、发布日期 mtime、索引去重和不删除原材料；`node desktop/scripts/migrate-materials-to-library.mjs --dry-run` 通过并显示可迁移 196 份 NotebookLM、2 份邮件稿；真实迁移后 `data/library/index.json` 为 196 条，`data/library/notebooklm` 为 196 个 Markdown，`data/library/email` 为 2 个 Markdown，`data/materials` 目录数量前后保持 1779；`node desktop/scripts/check-fresh-email-delivery.mjs`、`node desktop/scripts/check-up-sync-scheduler.mjs`、`node desktop/scripts/check-subtitle-only-queue-mode.mjs` 和 `npx tsc --noEmit` 均通过。
 - 本地 Ollama 冒烟测试：`shijie-qwen3-8b-q4-chat` 在 `http://127.0.0.1:11434/api/chat` 下可用；brief 约 `7.95s`、邮件草稿约 `3.8s`、JSON 判断约 `2.63s`。运行时显示 100% GPU，context `4096`。输出可能带空 `<think>` 标签，后续 adapter 需要过滤。
 - 真实自动同步运行证据：`data/logs/runtime.log` 记录 2026-06-28 21:00、22:00、23:00、2026-06-29 00:00、01:00、02:00 的准点后台检查，并产生队列处理记录。
 - 数据安全核验：本轮只读统计 `data/materials` 文件数为 288；未执行删除、迁移、重命名或真实清空材料操作。

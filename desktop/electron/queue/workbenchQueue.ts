@@ -166,12 +166,15 @@ export function getNextWorkbenchQueueRetryAt(items: WorkbenchQueueItem[], now = 
 export function appendWorkbenchQueueItemsToList(current: WorkbenchQueueItem[], items: WorkbenchQueueItem[]) {
   if (!items.length) return current
   const known = new Set(current.map((item) => item.bvid).filter(Boolean))
-  const merged = [...current]
+  const pendingCurrent = current.filter((item) => item.status === 'queued' || item.status === 'processing')
+  const terminalCurrent = current.filter((item) => item.status !== 'queued' && item.status !== 'processing')
+  const freshItems: WorkbenchQueueItem[] = []
   for (const item of items) {
     if (known.has(item.bvid)) continue
     known.add(item.bvid)
-    merged.push(item)
+    freshItems.push(item)
   }
+  const merged = [...pendingCurrent, ...freshItems, ...terminalCurrent]
   return normalizeWorkbenchQueue(merged)
 }
 

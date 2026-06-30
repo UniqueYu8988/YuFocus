@@ -35,6 +35,8 @@ type AutomationRuntimeDeps = {
   isMaterialRecordCleaned: (record: MaterialPackageSummary | null) => boolean
   archiveMaterialRecord: (record: MaterialPackageSummary | null) => unknown
   pushMaterialEmail?: (record: MaterialPackageSummary | null, context: { queueSource?: WorkbenchQueueItem['queueSource'] }) => Promise<unknown>
+  syncMaterialLibrary?: (materialPath: string, context: { queueItem: WorkbenchQueueItem }) => { status?: string; reason?: string }
+  slimMaterialPackage?: (materialPath: string, context: { queueItem: WorkbenchQueueItem }) => { status?: string; reason?: string }
   runDistiller: (payload: DistillPayload) => Promise<DistillResult>
   runMaterialSummary: (payload: MaterialSummaryPayload) => Promise<MaterialSummaryResult>
   runLocalConsumption?: (materialPath: string) => Promise<{ status?: string; error?: string }>
@@ -63,6 +65,8 @@ export function createAutomationRuntime({
   isMaterialRecordCleaned,
   archiveMaterialRecord,
   pushMaterialEmail,
+  syncMaterialLibrary,
+  slimMaterialPackage,
   runDistiller,
   runMaterialSummary,
   runLocalConsumption,
@@ -114,6 +118,8 @@ export function createAutomationRuntime({
       isMaterialRecordCleaned,
       archiveMaterialRecord,
       pushMaterialEmail,
+      syncMaterialLibrary,
+      slimMaterialPackage,
       runDistiller,
       runMaterialSummary,
       runLocalConsumption,

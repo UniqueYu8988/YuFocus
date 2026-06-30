@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   loadSettings: () => ipcRenderer.invoke('settings:load'),
   saveSettings: (payload: unknown) => ipcRenderer.invoke('settings:save', payload),
   loadSettingsStatus: () => ipcRenderer.invoke('settings:status'),
+  runEnvironmentCheck: () => ipcRenderer.invoke('settings:environment-check'),
   getAutomationStatus: () => ipcRenderer.invoke('automation:status'),
   runAutomationCheckNow: () => ipcRenderer.invoke('automation:check-now'),
   setAutomationPaused: (payload: boolean | { paused: boolean; durationMs?: number }) => ipcRenderer.invoke('automation:set-paused', payload),

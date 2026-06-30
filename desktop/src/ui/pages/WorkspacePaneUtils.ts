@@ -34,7 +34,8 @@ type ArchiveFilterItem = {
 
 export const FOLLOW_SOURCE_WINDOW_SIZE = 8
 export const SOURCE_VIDEO_WINDOW_SIZE = 6
-export const WORKBENCH_RECORD_BATCH_SIZE = 10
+export const WORKBENCH_RECORD_BATCH_SIZE = 5
+export const ARCHIVE_RECORD_BATCH_SIZE = 5
 
 export const MIMO_TEXT_MODELS = ['mimo-v2.5'] as const
 
@@ -101,6 +102,7 @@ export function formatRelativeTime(timestamp: number) {
 
 export function formatCompactNumber(value: number) {
   if (!Number.isFinite(value) || value <= 0) return '0'
+  if (value >= 100000000) return `${(value / 100000000).toFixed(2)} 亿`
   if (value >= 10000) return `${(value / 10000).toFixed(1)} 万`
   return String(Math.round(value))
 }
@@ -195,15 +197,19 @@ export function getWorkbenchSourceTitle(item: WorkbenchSourceItem) {
   return item.record?.title || item.queue?.title || '未命名资料'
 }
 
+export function isFoldedWorkbenchQueueIssueItem(item: WorkbenchSourceItem) {
+  return Boolean(item.queue && !item.record && (item.queue.status === 'failed' || item.queue.status === 'skipped'))
+}
+
 export function getWorkbenchSourceStatus(item: WorkbenchSourceItem) {
   const record = item.record
 
   if (item.queue?.status === 'processing') {
-    return { label: '正在处理', tone: 'red' as const, active: true }
+    return { label: '制作中', tone: 'blue' as const, active: true }
   }
 
   if (item.queue?.status === 'failed' && !record) {
-    return { label: '处理失败', tone: 'red' as const, active: false }
+    return { label: '失败', tone: 'red' as const, active: false }
   }
 
   if (item.queue?.status === 'skipped' && !record) {
@@ -211,7 +217,7 @@ export function getWorkbenchSourceStatus(item: WorkbenchSourceItem) {
   }
 
   if (record?.editorialSummaryStatus === 'failed') {
-    return { label: '编稿失败', tone: 'red' as const, active: false }
+    return { label: '需检查', tone: 'amber' as const, active: false }
   }
 
   if (
@@ -219,22 +225,22 @@ export function getWorkbenchSourceStatus(item: WorkbenchSourceItem) {
     record?.workflowStage === 'needs_deepening' ||
     record?.workflowStage === 'dossier_incomplete'
   ) {
-    return { label: '需要处理', tone: 'red' as const, active: false }
+    return { label: '需检查', tone: 'amber' as const, active: false }
   }
 
   if (record?.editorialSummaryExists) {
-    return { label: '精读稿完成', tone: 'green' as const, active: false }
+    return { label: '已完成', tone: 'green' as const, active: false }
   }
 
   if (record && canOpenMaterialBrief(record)) {
-    return { label: '资料已完成', tone: 'green' as const, active: false }
+    return { label: '已完成', tone: 'green' as const, active: false }
   }
 
   if (record?.notebooklmExists || record?.rawTranscriptExists || item.queue?.status === 'done') {
-    return { label: '字幕清理完成', tone: 'yellow' as const, active: false }
+    return { label: '已完成', tone: 'green' as const, active: false }
   }
 
-  return { label: '待处理', tone: 'gray' as const, active: false }
+  return { label: '排队中', tone: 'amber' as const, active: false }
 }
 
 export function getWorkbenchSourceMeta(item: WorkbenchSourceItem) {
@@ -245,7 +251,7 @@ export function getWorkbenchSourceMeta(item: WorkbenchSourceItem) {
       record.creator,
       record.textLength ? `${formatCompactNumber(record.textLength)} 字` : '',
       record.metricsElapsedSeconds ? `耗时 ${formatElapsedSeconds(record.metricsElapsedSeconds)}` : '',
-      record.metricsTotalTokens ? `Token ${formatCompactNumber(record.metricsTotalTokens)}` : '',
+      record.metricsMimoCredits ? `MiMo Credits ${formatCompactNumber(record.metricsMimoCredits)}` : '',
       formatRelativeTime(record.updatedAt),
     ].filter(Boolean)
   }
@@ -333,6 +339,7 @@ export function buildArchiveStats(records: MaterialInventoryRecord[]): ArchiveSt
     totalBytes: records.reduce((sum, record) => sum + (record.byteSize || 0), 0),
     totalElapsedSeconds: records.reduce((sum, record) => sum + (record.metricsElapsedSeconds || 0), 0),
     totalTokens: records.reduce((sum, record) => sum + (record.metricsTotalTokens || 0), 0),
+    totalMimoCredits: records.reduce((sum, record) => sum + (record.metricsMimoCredits || 0), 0),
     issues: records.filter(hasMaterialIssue).length,
     latestUpdatedAt,
   }
@@ -456,4 +463,8 @@ export function buildWorkbenchSourceItems(records: MaterialInventoryRecord[], qu
 
 export function getVisibleWorkbenchRecordItems(items: WorkbenchSourceItem[], visibleCount: number) {
   return items.slice(0, Math.max(0, visibleCount))
+}
+
+export function getVisibleArchiveRecordItems(records: MaterialInventoryRecord[], visibleCount: number) {
+  return records.slice(0, Math.max(0, visibleCount))
 }

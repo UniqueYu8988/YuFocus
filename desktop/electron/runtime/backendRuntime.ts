@@ -134,13 +134,22 @@ function copyDirectoryRecursive(sourceDir: string, targetDir: string) {
 
 function resolvePackagedBackendResourceRoot() {
   const context = getBackendRuntimeContext()
+  const portableExecutableDir = process.env.PORTABLE_EXECUTABLE_DIR || ''
   const candidates = [
     path.join(context.resourcesPath, 'backend'),
     path.join(path.dirname(context.execPath), 'resources', 'backend'),
-  ]
+    portableExecutableDir ? path.join(portableExecutableDir, 'resources', 'backend') : '',
+    portableExecutableDir ? path.join(portableExecutableDir, 'win-unpacked', 'resources', 'backend') : '',
+    path.join(context.dataRoot, 'resources', 'backend'),
+    path.join(context.dataRoot, 'win-unpacked', 'resources', 'backend'),
+    path.join(context.devProjectRoot, 'src'),
+  ].filter((candidate, index, allCandidates) => (
+    Boolean(candidate) &&
+    allCandidates.findIndex((other) => other && getComparablePath(other) === getComparablePath(candidate)) === index
+  ))
 
   for (const candidate of candidates) {
-    if (fs.existsSync(path.join(candidate, 'distiller.py')) && fs.existsSync(path.join(candidate, 'main.py'))) {
+    if (fs.existsSync(path.join(candidate, 'distiller.py'))) {
       return candidate
     }
   }

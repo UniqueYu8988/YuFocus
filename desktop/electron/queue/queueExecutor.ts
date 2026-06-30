@@ -34,6 +34,16 @@ type LocalConsumptionResultLike = {
   error?: string
 }
 
+type LibraryExportResultLike = {
+  status?: 'ok' | 'skipped' | string
+  reason?: string
+}
+
+type MaterialSlimResultLike = {
+  status?: 'ok' | 'skipped' | string
+  reason?: string
+}
+
 export type QueueExecutorResult = {
   processed: number
   failed: number
@@ -55,6 +65,8 @@ export type QueueExecutorDeps<Settings, DistillResult extends DistillResultLike>
   isMaterialRecordCleaned: (record: MaterialPackageSummary | null) => boolean
   archiveMaterialRecord: (record: MaterialPackageSummary | null) => unknown
   pushMaterialEmail?: (record: MaterialPackageSummary | null, context: { queueSource?: WorkbenchQueueItem['queueSource'] }) => Promise<unknown>
+  syncMaterialLibrary?: (materialPath: string, context: { queueItem: WorkbenchQueueItem }) => LibraryExportResultLike
+  slimMaterialPackage?: (materialPath: string, context: { queueItem: WorkbenchQueueItem }) => MaterialSlimResultLike
   runDistiller: (payload: DistillRequest) => Promise<DistillResult>
   runMaterialSummary: (payload: MaterialSummaryRequest) => Promise<MaterialSummaryResultLike>
   runLocalConsumption?: (materialPath: string) => Promise<LocalConsumptionResultLike>
@@ -104,6 +116,42 @@ async function tryPushMaterialEmail<Settings, DistillResult extends DistillResul
     await deps.pushMaterialEmail(record, { queueSource })
   } catch (error) {
     deps.appendRuntimeLog(`workbench queue email push skipped: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+function trySyncMaterialLibrary<Settings, DistillResult extends DistillResultLike>(
+  deps: QueueExecutorDeps<Settings, DistillResult>,
+  materialPath: string,
+  queueItem: WorkbenchQueueItem,
+) {
+  if (!deps.syncMaterialLibrary || !materialPath) return ''
+  try {
+    const result = deps.syncMaterialLibrary(materialPath, { queueItem })
+    deps.appendRuntimeLog(`workbench queue library export ${result.status || 'ok'} materialPath=${materialPath}: ${result.reason || ''}`)
+    return result.status === 'ok' || result.status === 'skipped'
+      ? ''
+      : `成品库同步异常：${result.reason || '未知状态。'}`
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    deps.appendRuntimeLog(`workbench queue library export failed materialPath=${materialPath} message=${message}`)
+    return `成品库同步失败：${message}`
+  }
+}
+
+function trySlimMaterialPackage<Settings, DistillResult extends DistillResultLike>(
+  deps: QueueExecutorDeps<Settings, DistillResult>,
+  materialPath: string,
+  queueItem: WorkbenchQueueItem,
+) {
+  if (!deps.slimMaterialPackage || !materialPath) return ''
+  try {
+    const result = deps.slimMaterialPackage(materialPath, { queueItem })
+    deps.appendRuntimeLog(`workbench queue material slim ${result.status || 'ok'} materialPath=${materialPath}: ${result.reason || ''}`)
+    return ''
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    deps.appendRuntimeLog(`workbench queue material slim failed materialPath=${materialPath} message=${message}`)
+    return `材料瘦身失败：${message}`
   }
 }
 
@@ -180,10 +228,12 @@ export async function runWorkbenchQueueExecutor<Settings, DistillResult extends 
       if (!localConsumptionNote) {
         await tryPushMaterialEmail(deps, refreshedRecord, target.queueSource)
       }
+      const libraryExportNote = trySyncMaterialLibrary(deps, materialPath, target)
+      const materialSlimNote = trySlimMaterialPackage(deps, materialPath, target)
       deps.updateQueueItem(target.queueId, {
           status: 'done',
           materialPath,
-          lastError: localConsumptionNote,
+          lastError: [localConsumptionNote, libraryExportNote, materialSlimNote].filter(Boolean).join('；'),
           nextRetryAt: 0,
           failedAt: 0,
         })
@@ -192,10 +242,12 @@ export async function runWorkbenchQueueExecutor<Settings, DistillResult extends 
     } else if (!isSubtitleOnly && deps.isMaterialRecordSummaryReady(existingRecord)) {
       deps.archiveMaterialRecord(existingRecord)
       await tryPushMaterialEmail(deps, existingRecord, target.queueSource)
+      const libraryExportNote = trySyncMaterialLibrary(deps, materialPath, target)
+      const materialSlimNote = trySlimMaterialPackage(deps, materialPath, target)
       deps.updateQueueItem(target.queueId, {
         status: 'done',
         materialPath,
-        lastError: '',
+        lastError: [libraryExportNote, materialSlimNote].filter(Boolean).join('；'),
         nextRetryAt: 0,
         failedAt: 0,
       })
@@ -234,10 +286,12 @@ export async function runWorkbenchQueueExecutor<Settings, DistillResult extends 
       if (isSubtitleOnly && !localConsumptionNote) {
         await tryPushMaterialEmail(deps, refreshedRecord, target.queueSource)
       }
+      const libraryExportNote = trySyncMaterialLibrary(deps, materialPath, target)
+      const materialSlimNote = trySlimMaterialPackage(deps, materialPath, target)
       deps.updateQueueItem(target.queueId, {
         status: 'done',
         materialPath,
-        lastError: localConsumptionNote,
+        lastError: [localConsumptionNote, libraryExportNote, materialSlimNote].filter(Boolean).join('；'),
         nextRetryAt: 0,
         failedAt: 0,
       })

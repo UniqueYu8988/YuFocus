@@ -10,6 +10,7 @@ import type { KnowledgeLibraryFile } from './knowledgeLibrary'
 import type { LearningLibraryState, LearningRecord } from '../legacy/learningLibraryStore'
 import type { MaterialPackageSummary } from './materialInventory'
 import type { WorkbenchQueueItem } from '../queue/workbenchQueue'
+import { removeLibraryExportItem } from './libraryExportService'
 
 export type MaterialDeleteResult = {
   deletedPaths: string[]
@@ -27,6 +28,7 @@ export type WorkbenchQueueClearResult = {
 export type MaterialDeletionDeps<Settings> = {
   loadSettings: () => Settings
   resolveMaterialOutputDir: (settings: Settings) => string
+  resolveLibraryRoot: (settings: Settings) => string
   resolveKnowledgeOutputDir: (settings: Settings) => string
   resolveOutputRoot: (settings: Settings) => string
   listMaterialPackages: (settings: Settings) => { records: MaterialPackageSummary[] }
@@ -45,6 +47,7 @@ export type MaterialDeletionDeps<Settings> = {
 export function createMaterialDeletion<Settings>(deps: MaterialDeletionDeps<Settings>) {
   const deleteMaterialPackage = (settings: Settings, materialPath: string): MaterialDeleteResult => {
     const rootDir = deps.resolveMaterialOutputDir(settings)
+    const libraryRootDir = deps.resolveLibraryRoot(settings)
     const knowledgeRootDir = deps.resolveKnowledgeOutputDir(settings)
     const outputRootDir = deps.resolveOutputRoot(settings)
     const safeMaterialPath = assertPathInside(materialPath, rootDir, '资料包')
@@ -55,6 +58,13 @@ export function createMaterialDeletion<Settings>(deps: MaterialDeletionDeps<Sett
     deletePathIfExists(safeMaterialPath, deletedPaths)
 
     const sourceId = sanitizeDisplayText(record?.sourceId ?? '')
+    removeLibraryExportItem({
+      libraryRoot: libraryRootDir,
+      materialPath: safeMaterialPath,
+      sourceId,
+      deletedPaths,
+      skippedPaths,
+    })
 
     const knowledgeLibrary = deps.loadKnowledgeLibraryFile(settings)
     const nextKnowledgeRecords = knowledgeLibrary.records.filter((item) => {

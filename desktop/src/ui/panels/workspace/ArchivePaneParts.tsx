@@ -1,4 +1,5 @@
-import { Clock, Copy, Database, Eye, FileText, FolderOpen, HardDrive, RefreshCcw, Search, Trash2, Type, UserRound } from 'lucide-react'
+import { Clock, Database, FileText, HardDrive, Mail, Search, Trash2, Type, UserRound } from 'lucide-react'
+import { useEffect, useRef } from 'react'
 import { Button } from '@/ui/components/base/button'
 import { cn } from '@/ui/components/utils'
 import type { ArchiveCreatorGroup } from '@/ui/pages/archiveGrouping'
@@ -13,6 +14,7 @@ export type ArchiveStats = {
   totalBytes: number
   totalElapsedSeconds: number
   totalTokens: number
+  totalMimoCredits: number
   todayNew: number
   weekNew: number
   issues: number
@@ -20,10 +22,19 @@ export type ArchiveStats = {
 }
 
 export function getMaterialLibraryReadPath(record: MaterialInventoryRecord) {
-  if (record.editorialSummaryExists && record.editorialSummaryPath) return record.editorialSummaryPath
   if (record.notebooklmExists && record.notebooklmPath) return record.notebooklmPath
+  if (record.emailExists && record.emailPath) return record.emailPath
+  if (record.editorialSummaryExists && record.editorialSummaryPath) return record.editorialSummaryPath
   if (record.rawTranscriptExists && record.rawTranscriptPath) return record.rawTranscriptPath
   return ''
+}
+
+export function getMaterialCleanMarkdownPath(record: MaterialInventoryRecord) {
+  return record.notebooklmExists && record.notebooklmPath ? record.notebooklmPath : ''
+}
+
+export function getMaterialEmailMarkdownPath(record: MaterialInventoryRecord) {
+  return record.emailExists && record.emailPath ? record.emailPath : ''
 }
 
 export function getMaterialLibraryReadHtmlPath(record: MaterialInventoryRecord) {
@@ -49,7 +60,7 @@ export function isMaterialLongDraft(record: MaterialInventoryRecord) {
 export function hasMaterialIssue(record: MaterialInventoryRecord) {
   return (
     record.editorialSummaryStatus === 'failed' ||
-    (!record.rawTranscriptExists && !record.notebooklmExists && !record.editorialSummaryExists) ||
+    (!record.rawTranscriptExists && !record.notebooklmExists && !record.emailExists && !record.editorialSummaryExists) ||
     (record.editorialSummaryStatus === 'summary_ready' && !record.editorialSummaryExists)
   )
 }
@@ -92,15 +103,18 @@ export function ArchivePaneContent({
   activeGroup,
   query,
   records,
+  totalRecordCount,
+  canLoadMore,
   materialRootDir,
+  notebooklmLibraryDir,
+  emailLibraryDir,
   canOpenRoot,
   onGroupChange,
   onQueryChange,
+  onLoadMore,
   onOpenRoot,
-  onRefresh,
   onOpenRecord,
-  onCopyNotebookLmPath,
-  onRevealPath,
+  onOpenEmailRecord,
   onDeleteRecord,
   formatRelativeTime,
   formatCompactNumber,
@@ -111,20 +125,25 @@ export function ArchivePaneContent({
   activeGroup: ArchiveCreatorGroup | null
   query: string
   records: MaterialInventoryRecord[]
+  totalRecordCount: number
+  canLoadMore: boolean
   materialRootDir: string
+  notebooklmLibraryDir: string
+  emailLibraryDir: string
   canOpenRoot: boolean
   onGroupChange: (groupId: string) => void
   onQueryChange: (query: string) => void
+  onLoadMore: () => void
   onOpenRoot: () => void
-  onRefresh: () => void
   onOpenRecord: (record: MaterialInventoryRecord) => void
-  onCopyNotebookLmPath: (record: MaterialInventoryRecord) => void
-  onRevealPath: (targetPath: string) => void
+  onOpenEmailRecord: (record: MaterialInventoryRecord) => void
   onDeleteRecord: (record: MaterialInventoryRecord) => void
   formatRelativeTime: (timestamp: number) => string
   formatCompactNumber: (value: number) => string
   getNotebookLmPathTitle: (record: MaterialInventoryRecord) => string
 }) {
+  const loadMoreRef = useRef<HTMLDivElement | null>(null)
+  const loadMoreArmedRef = useRef(false)
   const statItems = [
     {
       label: '总字数',
@@ -145,12 +164,34 @@ export function ArchivePaneContent({
       accent: 'text-amber-100 bg-amber-300/[0.10] ring-amber-200/[0.15]',
     },
     {
-      label: 'Token',
-      value: formatCompactNumber(stats.totalTokens),
+      label: 'MiMo Credits',
+      value: formatCompactNumber(stats.totalMimoCredits),
       icon: <Database size={13} />,
       accent: 'text-violet-100 bg-violet-300/[0.10] ring-violet-200/[0.15]',
     },
   ]
+
+  useEffect(() => {
+    const armLoadMore = (event: WheelEvent) => {
+      if (event.deltaY > 0) loadMoreArmedRef.current = true
+    }
+    document.addEventListener('wheel', armLoadMore, { passive: true })
+    return () => document.removeEventListener('wheel', armLoadMore)
+  }, [])
+
+  useEffect(() => {
+    if (!canLoadMore) return
+    const target = loadMoreRef.current
+    if (!target) return
+    const observer = new IntersectionObserver((entries) => {
+      if (!loadMoreArmedRef.current) return
+      if (!entries.some((entry) => entry.isIntersecting)) return
+      loadMoreArmedRef.current = false
+      onLoadMore()
+    }, { root: null, rootMargin: '180px 0px', threshold: 0.01 })
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [canLoadMore, onLoadMore])
 
   return (
     <div className="grid w-full gap-5">
@@ -168,27 +209,17 @@ export function ArchivePaneContent({
         ))}
       </section>
 
-      <section className="grid min-h-[520px] gap-4" data-archive-vertical-avatar-layout="true">
-        <div className="min-w-0 rounded-[22px] border border-white/[0.06] bg-[#1f1f1f]/92 p-3 shadow-[0_24px_70px_rgba(0,0,0,0.22)]">
-          <div className="flex items-center justify-between gap-2 px-1 pb-3">
-            <div>
-              <div className="text-[13px] font-semibold text-foreground">UP 主</div>
-              <div className="mt-0.5 text-[10px] text-muted-foreground">选择一个来源，下方直接展开对应资料。</div>
-            </div>
-            <div className="shrink-0 text-[10px] text-muted-foreground">
-              {stats.latestUpdatedAt ? `最近 ${formatRelativeTime(stats.latestUpdatedAt)}` : '暂无更新'}
-            </div>
-          </div>
-          <div className="flex gap-2.5 overflow-x-auto border-b border-white/[0.055] px-1 pb-3" data-archive-avatar-strip="true" aria-label="按 UP 主筛选档案">
+      <section className="grid gap-3" data-archive-vertical-avatar-layout="true">
+          <div className="flex gap-3 overflow-x-auto px-1 pb-1 pt-1" data-archive-avatar-strip="true" aria-label="按 UP 主筛选档案">
             {groups.map((group) => (
               <button
                 key={group.id}
                 type="button"
                 className={cn(
-                  'group flex w-[74px] shrink-0 flex-col items-center gap-2 rounded-[16px] px-2 py-2 text-center transition-colors',
+                  'group flex w-[76px] shrink-0 flex-col items-center gap-2 px-1 py-1.5 text-center transition-colors',
                   activeGroup?.id === group.id
-                    ? 'bg-white/[0.055] text-sky-50 ring-1 ring-sky-200/[0.18]'
-                    : 'text-muted-foreground hover:bg-white/[0.04] hover:text-foreground',
+                    ? 'text-sky-50'
+                    : 'text-muted-foreground hover:text-foreground',
                 )}
                 onClick={() => onGroupChange(group.id)}
                 title={group.subtitle ? `${group.title} · ${group.subtitle}` : group.title}
@@ -200,16 +231,7 @@ export function ArchivePaneContent({
           </div>
 
           <div className="flex flex-wrap items-center gap-3 px-1 py-3">
-            <div className="flex min-w-[180px] flex-1 items-center gap-3">
-              {activeGroup ? <ArchiveGroupAvatar group={activeGroup} count={activeGroup.count} active /> : null}
-              <div className="min-w-0">
-                <div className="text-[14px] font-semibold text-foreground">{activeGroup?.title || '全部'}</div>
-                <div className="mt-0.5 text-[11px] text-muted-foreground">
-                  {activeGroup ? `${activeGroup.count} 份资料${activeGroup.latestUpdatedAt ? ` · 最近 ${formatRelativeTime(activeGroup.latestUpdatedAt)}` : ''}` : '按 UP 主整理清洗资料'}
-                </div>
-              </div>
-            </div>
-            <div className="flex min-w-0 flex-1 items-center gap-2 border-b border-white/[0.12] px-1 pb-1">
+            <div className="flex min-w-[260px] flex-1 items-center gap-2 border-b border-white/[0.12] px-1 pb-1">
               <Search size={13} className="shrink-0 text-muted-foreground" />
               <input
                 value={query}
@@ -225,25 +247,26 @@ export function ArchivePaneContent({
               className="size-8 rounded-lg text-foreground/68 hover:bg-white/[0.07] hover:text-foreground"
               onClick={onOpenRoot}
               disabled={!canOpenRoot}
-              aria-label="打开档案目录"
-              title={materialRootDir}
+              aria-label="打开清洗稿成品库"
+              title={`清洗稿成品库：${notebooklmLibraryDir || materialRootDir}`}
             >
-              <FolderOpen size={14} />
+              <FileText size={14} />
             </Button>
             <Button
               type="button"
               size="icon"
               variant="ghost"
               className="size-8 rounded-lg text-foreground/68 hover:bg-white/[0.07] hover:text-foreground"
-              onClick={onRefresh}
-              aria-label="刷新档案"
-              title="刷新档案"
+              onClick={() => void window.desktopAPI.openPath(emailLibraryDir)}
+              disabled={!canOpenRoot}
+              aria-label="打开 email 成品库"
+              title={`email 成品库：${emailLibraryDir || materialRootDir}`}
             >
-              <RefreshCcw size={14} />
+              <Mail size={14} />
             </Button>
           </div>
 
-          <div className="grid gap-2">
+          <div className="grid gap-2" data-archive-linear-record-list="true">
             {records.map((record) => (
               <ArchiveRecordRow
                 key={record.path}
@@ -252,14 +275,26 @@ export function ArchivePaneContent({
                 formatCompactNumber={formatCompactNumber}
                 getNotebookLmPathTitle={getNotebookLmPathTitle}
                 onOpenRecord={onOpenRecord}
-                onCopyNotebookLmPath={onCopyNotebookLmPath}
-                onRevealPath={onRevealPath}
+                onOpenEmailRecord={onOpenEmailRecord}
                 onDeleteRecord={onDeleteRecord}
               />
             ))}
 
+            {canLoadMore ? (
+              <div ref={loadMoreRef} className="flex justify-center py-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-8 rounded-full px-4 text-[11px] text-foreground/58 hover:bg-white/[0.05] hover:text-foreground"
+                  onClick={onLoadMore}
+                >
+                  继续加载 {Math.max(0, totalRecordCount - records.length)}
+                </Button>
+              </div>
+            ) : null}
+
             {!records.length ? (
-              <div className="flex min-h-[260px] flex-col items-center justify-center gap-3 rounded-[18px] border border-white/[0.05] bg-black/10 px-4 py-8 text-center">
+              <div className="flex min-h-[260px] flex-col items-center justify-center gap-3 border-y border-white/[0.05] bg-black/10 px-4 py-8 text-center">
                 <FileText className="size-8 text-muted-foreground/70" />
                 <div className="text-[13px] font-semibold text-foreground">
                   {query.trim() ? '没有匹配的档案' : activeGroup?.kind === 'pinned' ? `${activeGroup.title} 暂无资料` : '档案还是空的'}
@@ -270,7 +305,6 @@ export function ArchivePaneContent({
               </div>
             ) : null}
           </div>
-        </div>
       </section>
     </div>
   )
@@ -280,20 +314,27 @@ function ArchiveGroupAvatar({ group, count, active = false }: { group: ArchiveCr
   const badgeLabel = count > 99 ? '99+' : String(count)
   if (group.face) {
     return (
-      <span className="relative flex size-11 shrink-0 overflow-visible" data-archive-avatar-with-count="true">
+      <span className={cn(
+        'relative flex size-[52px] shrink-0 items-center justify-center overflow-visible rounded-full transition-colors',
+        active && 'ring-2 ring-sky-300/80 shadow-[0_0_0_4px_rgba(125,211,252,0.10),0_0_22px_rgba(56,189,248,0.22)]',
+      )} data-archive-avatar-with-count="true" data-archive-active-avatar-ring={active ? 'true' : undefined}>
         <span className={cn(
           'flex size-11 overflow-hidden rounded-full bg-white/[0.035] ring-1 ring-white/[0.055]',
-          active && 'ring-sky-200/35',
         )}>
-        <img
-          src={group.face}
-          alt={`${group.title} 头像`}
-          className="size-full object-cover"
-          loading="lazy"
-          referrerPolicy="no-referrer"
-        />
+          <img
+            src={group.face}
+            alt={`${group.title} 头像`}
+            className="size-full object-cover"
+            loading="lazy"
+            referrerPolicy="no-referrer"
+          />
         </span>
-        <span className="absolute -right-1.5 -top-1.5 min-w-5 rounded-full border border-white/[0.20] bg-white/[0.18] px-1 text-center text-[10px] font-bold leading-5 text-white shadow-[0_8px_18px_rgba(0,0,0,0.28)] backdrop-blur-md ring-1 ring-white/[0.15]" aria-label={`${group.title} 视频数量 ${count}`}>
+        <span className={cn(
+          'absolute -right-0.5 -top-0.5 min-w-5 rounded-full border px-1 text-center text-[10px] font-bold leading-5 shadow-[0_8px_18px_rgba(0,0,0,0.28)] backdrop-blur-md ring-1',
+          active
+            ? 'border-sky-100/40 bg-sky-300 text-slate-950 ring-sky-100/35'
+            : 'border-white/[0.20] bg-white/[0.18] text-white ring-white/[0.15]',
+        )} aria-label={`${group.title} 视频数量 ${count}`}>
           {badgeLabel}
         </span>
       </span>
@@ -302,13 +343,16 @@ function ArchiveGroupAvatar({ group, count, active = false }: { group: ArchiveCr
 
   return (
     <span className={cn(
-      'relative flex size-11 shrink-0 items-center justify-center rounded-full bg-white/[0.035] text-foreground/50 ring-1 ring-white/[0.055]',
-      active && 'bg-sky-300/[0.09] text-sky-50 ring-sky-200/35',
-      group.kind === 'all' && 'rounded-2xl',
-      group.kind === 'misc' && 'rounded-2xl',
-    )} data-archive-avatar-with-count="true">
+      'relative flex size-[52px] shrink-0 items-center justify-center rounded-full bg-white/[0.035] text-foreground/50 ring-1 ring-white/[0.055] transition-colors',
+      active && 'bg-sky-300/[0.09] text-sky-50 ring-2 ring-sky-300/80 shadow-[0_0_0_4px_rgba(125,211,252,0.10),0_0_22px_rgba(56,189,248,0.22)]',
+    )} data-archive-avatar-with-count="true" data-archive-active-avatar-ring={active ? 'true' : undefined}>
       <UserRound size={16} aria-hidden="true" />
-      <span className="absolute -right-1.5 -top-1.5 min-w-5 rounded-full border border-white/[0.20] bg-white/[0.18] px-1 text-center text-[10px] font-bold leading-5 text-white shadow-[0_8px_18px_rgba(0,0,0,0.28)] backdrop-blur-md ring-1 ring-white/[0.15]" aria-label={`${group.title} 视频数量 ${count}`}>
+      <span className={cn(
+        'absolute -right-0.5 -top-0.5 min-w-5 rounded-full border px-1 text-center text-[10px] font-bold leading-5 shadow-[0_8px_18px_rgba(0,0,0,0.28)] backdrop-blur-md ring-1',
+        active
+          ? 'border-sky-100/40 bg-sky-300 text-slate-950 ring-sky-100/35'
+          : 'border-white/[0.20] bg-white/[0.18] text-white ring-white/[0.15]',
+      )} aria-label={`${group.title} 视频数量 ${count}`}>
         {badgeLabel}
       </span>
     </span>
@@ -321,8 +365,7 @@ function ArchiveRecordRow({
   formatCompactNumber,
   getNotebookLmPathTitle,
   onOpenRecord,
-  onCopyNotebookLmPath,
-  onRevealPath,
+  onOpenEmailRecord,
   onDeleteRecord,
 }: {
   record: MaterialInventoryRecord
@@ -330,17 +373,17 @@ function ArchiveRecordRow({
   formatCompactNumber: (value: number) => string
   getNotebookLmPathTitle: (record: MaterialInventoryRecord) => string
   onOpenRecord: (record: MaterialInventoryRecord) => void
-  onCopyNotebookLmPath: (record: MaterialInventoryRecord) => void
-  onRevealPath: (targetPath: string) => void
+  onOpenEmailRecord: (record: MaterialInventoryRecord) => void
   onDeleteRecord: (record: MaterialInventoryRecord) => void
 }) {
-  const readPath = getMaterialLibraryReadPath(record)
+  const readPath = getMaterialCleanMarkdownPath(record)
+  const emailPath = getMaterialEmailMarkdownPath(record)
   const sourceLabel = getMaterialSourceLabel(record)
   const wordCount = getMaterialPrimaryTextLength(record)
-  const hasMetrics = record.metricsExists && (record.metricsElapsedSeconds > 0 || record.metricsTotalTokens > 0)
+  const hasMetrics = record.metricsExists && (record.metricsElapsedSeconds > 0 || record.metricsMimoCredits > 0)
 
   return (
-    <article className="rounded-[16px] border border-white/[0.045] bg-white/[0.018] px-3 py-3 transition-colors hover:border-white/[0.08] hover:bg-white/[0.035]">
+    <article className="border-b border-white/[0.055] px-1 py-3 transition-colors hover:bg-white/[0.018]">
       <div className="flex flex-wrap items-start gap-3">
         <button
           type="button"
@@ -366,7 +409,7 @@ function ArchiveRecordRow({
             {hasMetrics ? (
               <>
                 {record.metricsElapsedSeconds > 0 ? <span>{formatElapsedSeconds(record.metricsElapsedSeconds)}</span> : null}
-                {record.metricsTotalTokens > 0 ? <span>{formatCompactNumber(record.metricsTotalTokens)} token</span> : null}
+                {record.metricsMimoCredits > 0 ? <span>{formatCompactNumber(record.metricsMimoCredits)} MiMo Credits</span> : null}
               </>
             ) : null}
           </div>
@@ -381,33 +424,24 @@ function ArchiveRecordRow({
               className="size-7 rounded-lg text-foreground/68 hover:bg-emerald-400/[0.10] hover:text-emerald-100"
               disabled={!readPath}
               onClick={() => onOpenRecord(record)}
-              aria-label="打开"
-              title="打开"
+              aria-label="打开清洗稿"
+              title={`${getNotebookLmPathTitle(record)}（外部应用）`}
             >
-              <Eye size={13} />
+              <FileText size={13} />
             </Button>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="size-7 rounded-lg text-foreground/68 hover:bg-amber-400/[0.10] hover:text-amber-100"
-              onClick={() => onCopyNotebookLmPath(record)}
-              aria-label="复制路径"
-              title={getNotebookLmPathTitle(record)}
-            >
-              <Copy size={13} />
-            </Button>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="size-7 rounded-lg text-foreground/68 hover:bg-white/[0.07] hover:text-foreground"
-              onClick={() => onRevealPath(readPath || record.path)}
-              aria-label="定位"
-              title="定位"
-            >
-              <FolderOpen size={13} />
-            </Button>
+            {emailPath ? (
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="size-7 rounded-lg text-foreground/68 hover:bg-sky-400/[0.10] hover:text-sky-100"
+                onClick={() => onOpenEmailRecord(record)}
+                aria-label="打开 email 稿"
+                title="打开 email 稿（外部应用）"
+              >
+                <Mail size={13} />
+              </Button>
+            ) : null}
             <Button
               type="button"
               size="icon"

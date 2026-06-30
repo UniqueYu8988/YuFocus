@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { cn } from '@/ui/components/utils'
 
 export type SettingsStatusResult = Awaited<ReturnType<typeof window.desktopAPI.loadSettingsStatus>>
+export type SettingsEnvironmentResult = Awaited<ReturnType<typeof window.desktopAPI.runEnvironmentCheck>>
 export type AutomationStatusResult = Awaited<ReturnType<typeof window.desktopAPI.getAutomationStatus>>
 export type RuntimeSettingsFallback = Awaited<ReturnType<typeof window.desktopAPI.loadSettings>> | null
 export type MimoVoicePreset = {

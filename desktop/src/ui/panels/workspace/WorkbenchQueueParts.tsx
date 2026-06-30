@@ -1,8 +1,8 @@
-import type { UIEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
-  Copy,
-  GraduationCap,
+  FileText,
   LoaderCircle,
+  Mail,
   Play,
 } from 'lucide-react'
 import { Button } from '@/ui/components/base/button'
@@ -16,6 +16,7 @@ import {
 export function WorkbenchQueuePanel({
   items,
   visibleItems,
+  foldedIssueItems = [],
   canLoadMore,
   distillRequestState,
   editorialSummaryBuildingPath,
@@ -23,14 +24,13 @@ export function WorkbenchQueuePanel({
   getItemStatus,
   getItemMeta,
   getItemTitle,
-  canOpenBrief,
-  getNotebookLmPathTitle,
   onRetryQueueItem,
-  onCopyNotebookLmPath,
-  onOpenBrief,
+  onOpenCleanFile,
+  onOpenEmailFile,
 }: {
   items: WorkbenchSourceItem[]
   visibleItems: WorkbenchSourceItem[]
+  foldedIssueItems?: WorkbenchSourceItem[]
   canLoadMore: boolean
   distillRequestState: string
   editorialSummaryBuildingPath: string
@@ -38,46 +38,70 @@ export function WorkbenchQueuePanel({
   getItemStatus: (item: WorkbenchSourceItem) => WorkbenchSourceStatus
   getItemMeta: (item: WorkbenchSourceItem) => string[]
   getItemTitle: (item: WorkbenchSourceItem) => string
-  canOpenBrief: (record: MaterialInventoryRecord) => boolean
-  getNotebookLmPathTitle: (record: MaterialInventoryRecord) => string
   onRetryQueueItem: (queueId: string) => void
-  onCopyNotebookLmPath: (record: MaterialInventoryRecord) => void
-  onOpenBrief: (record: MaterialInventoryRecord) => void
+  onOpenCleanFile: (record: MaterialInventoryRecord) => void
+  onOpenEmailFile: (record: MaterialInventoryRecord) => void
 }) {
-  const handleScroll = (event: UIEvent<HTMLDivElement>) => {
+  const [issuesOpen, setIssuesOpen] = useState(false)
+  const loadMoreRef = useRef<HTMLDivElement | null>(null)
+  const loadMoreArmedRef = useRef(false)
+
+  useEffect(() => {
+    const armLoadMore = (event: WheelEvent) => {
+      if (event.deltaY > 0) loadMoreArmedRef.current = true
+    }
+    document.addEventListener('wheel', armLoadMore, { passive: true })
+    return () => document.removeEventListener('wheel', armLoadMore)
+  }, [])
+
+  useEffect(() => {
     if (!canLoadMore) return
-    const target = event.currentTarget
-    const distanceToBottom = target.scrollHeight - target.scrollTop - target.clientHeight
-    if (distanceToBottom <= 72) onLoadMore()
-  }
+    const target = loadMoreRef.current
+    if (!target) return
+    const observer = new IntersectionObserver((entries) => {
+      if (!loadMoreArmedRef.current) return
+      if (!entries.some((entry) => entry.isIntersecting)) return
+      loadMoreArmedRef.current = false
+      onLoadMore()
+    }, { root: null, rootMargin: '160px 0px', threshold: 0.01 })
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [canLoadMore, onLoadMore])
+
+  const hasMainItems = visibleItems.length > 0
+  const failedIssueCount = foldedIssueItems.filter((item) => item.queue?.status === 'failed').length
+  const skippedIssueCount = foldedIssueItems.filter((item) => item.queue?.status === 'skipped').length
 
   return (
     <section data-queue-record-feed="true">
       {items.length ? (
         <div
-          className="max-h-[calc(100vh-210px)] min-h-[240px] space-y-2 overflow-y-auto pr-1"
-          onScroll={handleScroll}
+          className="min-h-[240px] space-y-2"
           aria-label="队列记录流"
         >
-          {visibleItems.map((item) => (
-            <WorkbenchQueueRow
-              key={item.key}
-              item={item}
-              status={item.record && editorialSummaryBuildingPath === item.record.path
-                ? { label: '正在编稿', tone: 'red', active: true }
-                : getItemStatus(item)}
-              meta={getItemMeta(item)}
-              title={getItemTitle(item)}
-              canOpenBrief={canOpenBrief}
-              getNotebookLmPathTitle={getNotebookLmPathTitle}
-              distillRequestState={distillRequestState}
-              onRetryQueueItem={onRetryQueueItem}
-              onCopyNotebookLmPath={onCopyNotebookLmPath}
-              onOpenBrief={onOpenBrief}
-            />
-          ))}
+          {hasMainItems ? (
+            visibleItems.map((item) => (
+              <WorkbenchQueueRow
+                key={item.key}
+                item={item}
+                status={item.record && editorialSummaryBuildingPath === item.record.path
+                  ? { label: '制作中', tone: 'blue', active: true }
+                  : getItemStatus(item)}
+                meta={getItemMeta(item)}
+                title={getItemTitle(item)}
+                distillRequestState={distillRequestState}
+                onRetryQueueItem={onRetryQueueItem}
+                onOpenCleanFile={onOpenCleanFile}
+                onOpenEmailFile={onOpenEmailFile}
+              />
+            ))
+          ) : (
+            <div className="rounded-[14px] border border-white/6 bg-white/[0.018] px-4 py-3 text-[12px] leading-6 text-muted-foreground">
+              暂无正在处理或等待处理的记录。
+            </div>
+          )}
           {canLoadMore ? (
-            <div className="flex justify-center py-2">
+            <div ref={loadMoreRef} className="flex justify-center py-2">
               <Button
                 type="button"
                 variant="ghost"
@@ -86,6 +110,50 @@ export function WorkbenchQueuePanel({
               >
                 继续加载
               </Button>
+            </div>
+          ) : null}
+          {foldedIssueItems.length ? (
+            <div className="rounded-[14px] border border-white/[0.06] bg-white/[0.018]">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                onClick={() => setIssuesOpen((open) => !open)}
+                aria-expanded={issuesOpen}
+                data-folded-queue-issues="true"
+              >
+                <span className="min-w-0">
+                  <span className="block text-[12px] font-medium text-foreground/72">
+                    已折叠 {foldedIssueItems.length} 条无法获取的视频
+                  </span>
+                  <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                    {failedIssueCount ? `${failedIssueCount} 条失败` : ''}
+                    {failedIssueCount && skippedIssueCount ? ' · ' : ''}
+                    {skippedIssueCount ? `${skippedIssueCount} 条已跳过` : ''}
+                    {!failedIssueCount && !skippedIssueCount ? '不会影响后续历史补全。' : ' · 不影响后续历史补全。'}
+                  </span>
+                </span>
+                <span className="shrink-0 rounded-full bg-white/[0.055] px-2 py-0.5 text-[10px] text-foreground/55">
+                  {issuesOpen ? '收起' : '展开'}
+                </span>
+              </button>
+              {issuesOpen ? (
+                <div className="space-y-2 border-t border-white/[0.05] p-2">
+                  {foldedIssueItems.map((item) => (
+                    <WorkbenchQueueRow
+                      key={item.key}
+                      item={item}
+                      status={getItemStatus(item)}
+                      meta={getItemMeta(item)}
+                      title={getItemTitle(item)}
+                      distillRequestState={distillRequestState}
+                      folded
+                      onRetryQueueItem={onRetryQueueItem}
+                      onOpenCleanFile={onOpenCleanFile}
+                      onOpenEmailFile={onOpenEmailFile}
+                    />
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -103,28 +171,25 @@ function WorkbenchQueueRow({
   status,
   meta,
   title,
-  canOpenBrief,
-  getNotebookLmPathTitle,
   distillRequestState,
   onRetryQueueItem,
-  onCopyNotebookLmPath,
-  onOpenBrief,
+  onOpenCleanFile,
+  onOpenEmailFile,
+  folded = false,
 }: {
   item: WorkbenchSourceItem
   status: WorkbenchSourceStatus
   meta: string[]
   title: string
-  canOpenBrief: (record: MaterialInventoryRecord) => boolean
-  getNotebookLmPathTitle: (record: MaterialInventoryRecord) => string
   distillRequestState: string
   onRetryQueueItem: (queueId: string) => void
-  onCopyNotebookLmPath: (record: MaterialInventoryRecord) => void
-  onOpenBrief: (record: MaterialInventoryRecord) => void
+  onOpenCleanFile: (record: MaterialInventoryRecord) => void
+  onOpenEmailFile: (record: MaterialInventoryRecord) => void
+  folded?: boolean
 }) {
   const queueItem = item.queue
   const record = item.record
-  const queueItemCanRetry = Boolean(queueItem && !record && distillRequestState !== 'loading' && queueItem.status === 'failed')
-  const recordCanOpenBrief = record ? canOpenBrief(record) : false
+  const queueItemCanRetry = Boolean(!folded && queueItem && !record && distillRequestState !== 'loading' && queueItem.status === 'failed')
   const failedMessage = (queueItem?.status === 'failed' || queueItem?.status === 'skipped') && queueItem.lastError ? queueItem.lastError : ''
   return (
     <div
@@ -133,7 +198,7 @@ function WorkbenchQueueRow({
       title={queueItemCanRetry ? '点击重新处理' : undefined}
       className={cn(
         'rounded-[16px] border px-4 py-3 transition-colors',
-        record ? 'border-white/6 bg-white/[0.026]' : 'border-amber-300/10 bg-amber-300/[0.045]',
+        record ? 'border-white/6 bg-white/[0.026]' : folded ? 'border-white/[0.045] bg-black/10' : 'border-amber-300/10 bg-amber-300/[0.045]',
         queueItemCanRetry && 'cursor-pointer hover:border-amber-200/25 hover:bg-amber-300/[0.06]',
       )}
       onClick={() => {
@@ -154,7 +219,8 @@ function WorkbenchQueueRow({
             <span className={cn(
               'shrink-0 rounded-full px-2 py-0.5 text-[10px]',
               status.tone === 'red' && 'bg-red-400/10 text-red-100/78',
-              status.tone === 'yellow' && 'bg-yellow-300/10 text-yellow-100/76',
+              status.tone === 'amber' && 'bg-amber-300/10 text-amber-100/78',
+              status.tone === 'blue' && 'bg-sky-300/10 text-sky-100/82',
               status.tone === 'green' && 'bg-emerald-300/10 text-emerald-100/76',
               status.tone === 'gray' && 'bg-white/[0.055] text-foreground/58',
             )}>
@@ -174,32 +240,35 @@ function WorkbenchQueueRow({
           {record ? (
             <Button
               variant="ghost"
-              className="h-7 rounded-lg px-2 text-[11px] text-foreground/62 hover:bg-white/[0.055] hover:text-foreground"
+              size="icon"
+              className="size-7 rounded-lg text-foreground/62 hover:bg-emerald-400/[0.10] hover:text-emerald-100"
+              disabled={!record.notebooklmExists}
               onClick={(event) => {
                 event.stopPropagation()
-                onCopyNotebookLmPath(record)
+                onOpenCleanFile(record)
               }}
-              aria-label={getNotebookLmPathTitle(record)}
-              title={getNotebookLmPathTitle(record)}
+              aria-label="打开清洗稿"
+              title="打开清洗稿（外部应用）"
             >
-              <Copy size={12} />
-              路径
+              <FileText size={12} />
             </Button>
           ) : null}
-          {record ? (
-            recordCanOpenBrief ? (
+          {record?.emailExists ? (
               <Button
                 variant="ghost"
-                className="h-7 rounded-lg px-2 text-[11px] text-foreground/62 hover:bg-white/[0.055] hover:text-foreground"
-                onClick={() => onOpenBrief(record)}
-                aria-label="打开资料"
-                title="打开资料"
+                size="icon"
+                className="size-7 rounded-lg text-foreground/62 hover:bg-sky-400/[0.10] hover:text-sky-100"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onOpenEmailFile(record)
+                }}
+                aria-label="打开 email 稿"
+                title="打开 email 稿（外部应用）"
               >
-                <GraduationCap size={12} />
-                查看
+                <Mail size={12} />
               </Button>
-            ) : null
-          ) : queueItem && (queueItem.status === 'processing' || queueItem.status === 'failed') ? (
+          ) : null}
+          {!record && !folded && queueItem && (queueItem.status === 'processing' || queueItem.status === 'failed') ? (
             <Button
               type="button"
               variant="ghost"
@@ -209,11 +278,11 @@ function WorkbenchQueueRow({
                 event.stopPropagation()
                 onRetryQueueItem(queueItem.queueId)
               }}
-              aria-label={queueItem.status === 'failed' ? '重新处理' : '正在处理'}
-              title={queueItem.status === 'failed' ? '重新处理' : '正在处理'}
+              aria-label={queueItem.status === 'failed' ? '重新处理' : '制作中'}
+              title={queueItem.status === 'failed' ? '重新处理' : '制作中'}
             >
               {queueItem.status === 'processing' ? <LoaderCircle size={12} className="animate-spin" /> : <Play size={12} fill="currentColor" />}
-              {queueItem.status === 'processing' ? '处理中' : '重试'}
+              {queueItem.status === 'processing' ? '制作中' : '重试'}
             </Button>
           ) : null}
         </div>

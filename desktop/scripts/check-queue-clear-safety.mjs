@@ -8,9 +8,16 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shijie-queue-clear-safety
 const electronRoot = path.resolve(import.meta.dirname, '..', 'electron')
 const materialDeletionSource = fs.readFileSync(path.join(electronRoot, 'services', 'materialDeletion.ts'), 'utf-8')
   .replace("from './pathSafety'", "from './pathSafety.ts'")
+  .replace("from './libraryExportService'", "from './libraryExportService.ts'")
   .replace("from '../runtime/settings'", "from './settings.ts'")
 fs.writeFileSync(path.join(tempDir, 'materialDeletion.ts'), materialDeletionSource, 'utf-8')
 fs.copyFileSync(path.join(electronRoot, 'services', 'pathSafety.ts'), path.join(tempDir, 'pathSafety.ts'))
+fs.writeFileSync(
+  path.join(tempDir, 'libraryExportService.ts'),
+  fs.readFileSync(path.join(electronRoot, 'services', 'libraryExportService.ts'), 'utf-8')
+    .replace("from './pathSafety'", "from './pathSafety.ts'"),
+  'utf-8',
+)
 fs.copyFileSync(path.join(electronRoot, 'runtime', 'settings.ts'), path.join(tempDir, 'settings.ts'))
 
 const { createMaterialDeletion } = await import(pathToFileURL(path.join(tempDir, 'materialDeletion.ts')).href)
@@ -29,6 +36,7 @@ const deletion = createMaterialDeletion({
     throw new Error('清空队列不应读取材料设置。')
   },
   resolveMaterialOutputDir: () => 'memory://materials',
+  resolveLibraryRoot: () => 'memory://library',
   resolveKnowledgeOutputDir: () => 'memory://knowledge',
   resolveOutputRoot: () => 'memory://data',
   listMaterialPackages: () => {

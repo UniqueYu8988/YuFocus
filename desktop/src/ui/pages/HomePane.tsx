@@ -99,6 +99,49 @@ function SourceAvatar({ src, name, className = 'size-9 rounded-xl' }: { src: str
   )
 }
 
+function getVideoStatusMeta({
+  hasMaterial,
+  queueStatus,
+}: {
+  hasMaterial: boolean
+  queueStatus?: QueueItem['status']
+}) {
+  if (hasMaterial || queueStatus === 'done') {
+    return {
+      label: '已完成',
+      className: 'border-emerald-400/22 bg-emerald-300/[0.08] text-emerald-100',
+    }
+  }
+  if (queueStatus === 'processing') {
+    return {
+      label: '制作中',
+      className: 'border-sky-400/24 bg-sky-300/[0.09] text-sky-100',
+    }
+  }
+  if (queueStatus === 'queued') {
+    return {
+      label: '排队中',
+      className: 'border-amber-300/24 bg-amber-300/[0.08] text-amber-100',
+    }
+  }
+  if (queueStatus === 'failed') {
+    return {
+      label: '失败',
+      className: 'border-red-300/24 bg-red-400/[0.08] text-red-100',
+    }
+  }
+  if (queueStatus === 'skipped') {
+    return {
+      label: '已跳过',
+      className: 'border-white/[0.09] bg-white/[0.045] text-foreground/58',
+    }
+  }
+  return {
+    label: '未入队',
+    className: 'border-white/[0.07] bg-black/12 text-foreground/55',
+  }
+}
+
 export function HomePane({ windowFocused, activeSourceId, onActiveSourceChange }: HomePaneProps) {
   const [pinnedSources, setPinnedSources] = useState<PinnedSource[]>(() => homePaneSnapshotCache?.pinnedSources ?? [])
   const [selectedVideoIds, setSelectedVideoIds] = useState<string[]>([])
@@ -289,7 +332,7 @@ export function HomePane({ windowFocused, activeSourceId, onActiveSourceChange }
       }))
 
     if (!nextItems.length) {
-      setError('选中的视频已经在队列中，或已有资料。')
+      setError('选中的视频已经在队列中，或已完成。')
       setSelectedVideoIds([])
       return
     }
@@ -325,7 +368,7 @@ export function HomePane({ windowFocused, activeSourceId, onActiveSourceChange }
     }
     return Array.from(byBvid.values())
       .sort((left, right) => (right.pubdate || 0) - (left.pubdate || 0))
-      .slice(0, 8)
+      .slice(0, 9)
   }, [pinnedSources, videoPayload?.sources])
   const activeSource = useMemo(
     () => pinnedSources.find((source) => source.mid === activeSourceId) ?? null,
@@ -410,72 +453,6 @@ export function HomePane({ windowFocused, activeSourceId, onActiveSourceChange }
       eyebrow="Overview"
       title={activeSource ? activeSource.name : '最近'}
       windowFocused={windowFocused}
-      actions={(
-        <div className="flex items-center gap-2">
-          {activeSource ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-8 rounded-xl text-[11px]"
-              disabled={!selectedQueueableCount || queueSaving}
-              onClick={() => void handleAddSelectedVideosToQueue()}
-            >
-              <ListPlus size={13} />
-              {queueSaving ? '正在加入' : selectedQueueableCount ? `加入队列 ${selectedQueueableCount}` : '加入队列'}
-            </Button>
-          ) : null}
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-9 rounded-full text-foreground/62 hover:bg-white/[0.055] hover:text-foreground"
-            disabled={loading || refreshing || pinnedSources.length === 0}
-            onClick={() => void handleRefreshData()}
-            aria-label={refreshing ? '正在刷新视频元数据' : '刷新视频元数据'}
-            title="刷新视频元数据，不会下载或转写"
-          >
-            <RefreshCw size={15} className={cn(refreshing && 'animate-spin')} />
-          </Button>
-          <div className="relative">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className={cn(
-                'size-9 rounded-full text-foreground/62 hover:bg-white/[0.055] hover:text-foreground',
-                automationStatus?.paused && 'bg-amber-300/[0.08] text-amber-100',
-              )}
-              onClick={() => setPauseMenuOpen((open) => !open)}
-              aria-label={automationStatus?.paused ? '同步已暂停，点击管理' : '暂停同步'}
-              title={automationStatus?.paused ? `同步已暂停至：${formatPauseUntil(automationStatus.pausedUntil)}` : '暂停同步'}
-            >
-              {automationStatus?.paused ? <Play size={15} /> : <Pause size={15} />}
-            </Button>
-            {pauseMenuOpen ? (
-              <div className="absolute right-0 top-10 z-20 w-44 overflow-hidden rounded-2xl border border-white/[0.08] bg-[#111318] p-1.5 shadow-2xl shadow-black/35">
-                <div className="px-2 py-1.5 text-[10px] leading-4 text-muted-foreground">
-                  {automationStatus?.paused ? `已暂停：${formatPauseUntil(automationStatus.pausedUntil)}` : '暂停后当前视频会完成，不再领取下一条。'}
-                </div>
-                <button type="button" className="w-full rounded-xl px-2 py-1.5 text-left text-[11px] text-foreground/82 hover:bg-white/[0.055]" onClick={() => void handleSetAutomationPause(2 * 60 * 60 * 1000)}>
-                  暂停 2 小时
-                </button>
-                <button type="button" className="w-full rounded-xl px-2 py-1.5 text-left text-[11px] text-foreground/82 hover:bg-white/[0.055]" onClick={() => void handleSetAutomationPause(5 * 60 * 60 * 1000)}>
-                  暂停 5 小时
-                </button>
-                <button type="button" className="w-full rounded-xl px-2 py-1.5 text-left text-[11px] text-foreground/82 hover:bg-white/[0.055]" onClick={() => void handleSetAutomationPause()}>
-                  暂停到手动恢复
-                </button>
-                {automationStatus?.paused ? (
-                  <button type="button" className="mt-1 w-full rounded-xl bg-emerald-300/[0.09] px-2 py-1.5 text-left text-[11px] text-emerald-100 hover:bg-emerald-300/[0.14]" onClick={() => void handleResumeAutomation()}>
-                    恢复同步
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        </div>
-      )}
     >
       <div className="mx-auto grid w-full max-w-5xl gap-5">
         <section className="overflow-hidden rounded-2xl border border-white/[0.055] bg-white/[0.018]">
@@ -493,9 +470,70 @@ export function HomePane({ windowFocused, activeSourceId, onActiveSourceChange }
                 </p>
               </div>
             </div>
-            <Badge variant="outline" className="shrink-0 border-white/[0.08] bg-black/15 text-foreground/65">
-              仅元数据
-            </Badge>
+            <div className="flex shrink-0 items-center gap-2">
+              {activeSource ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 rounded-xl text-[11px]"
+                  disabled={!selectedQueueableCount || queueSaving}
+                  onClick={() => void handleAddSelectedVideosToQueue()}
+                >
+                  <ListPlus size={13} />
+                  {queueSaving ? '正在加入' : selectedQueueableCount ? `加入队列 ${selectedQueueableCount}` : '加入队列'}
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 rounded-lg text-foreground/62 hover:bg-white/[0.055] hover:text-foreground"
+                disabled={loading || refreshing || pinnedSources.length === 0}
+                onClick={() => void handleRefreshData()}
+                aria-label={refreshing ? '正在刷新视频元数据' : '刷新视频元数据'}
+                title="刷新视频元数据，不会下载或转写"
+              >
+                <RefreshCw size={14} className={cn(refreshing && 'animate-spin')} />
+              </Button>
+              <div className="relative">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className={cn(
+                    'size-8 rounded-lg text-foreground/62 hover:bg-white/[0.055] hover:text-foreground',
+                    automationStatus?.paused && 'bg-amber-300/[0.08] text-amber-100',
+                  )}
+                  onClick={() => setPauseMenuOpen((open) => !open)}
+                  aria-label={automationStatus?.paused ? '同步已暂停，点击管理' : '暂停同步'}
+                  title={automationStatus?.paused ? `同步已暂停至：${formatPauseUntil(automationStatus.pausedUntil)}` : '暂停同步'}
+                >
+                  {automationStatus?.paused ? <Play size={14} /> : <Pause size={14} />}
+                </Button>
+                {pauseMenuOpen ? (
+                  <div className="absolute right-0 top-9 z-20 w-44 overflow-hidden rounded-2xl border border-white/[0.08] bg-[#111318] p-1.5 shadow-2xl shadow-black/35">
+                    <div className="px-2 py-1.5 text-[10px] leading-4 text-muted-foreground">
+                      {automationStatus?.paused ? `已暂停：${formatPauseUntil(automationStatus.pausedUntil)}` : '暂停后当前视频会完成，不再领取下一条。'}
+                    </div>
+                    <button type="button" className="w-full rounded-xl px-2 py-1.5 text-left text-[11px] text-foreground/82 hover:bg-white/[0.055]" onClick={() => void handleSetAutomationPause(2 * 60 * 60 * 1000)}>
+                      暂停 2 小时
+                    </button>
+                    <button type="button" className="w-full rounded-xl px-2 py-1.5 text-left text-[11px] text-foreground/82 hover:bg-white/[0.055]" onClick={() => void handleSetAutomationPause(5 * 60 * 60 * 1000)}>
+                      暂停 5 小时
+                    </button>
+                    <button type="button" className="w-full rounded-xl px-2 py-1.5 text-left text-[11px] text-foreground/82 hover:bg-white/[0.055]" onClick={() => void handleSetAutomationPause()}>
+                      暂停到手动恢复
+                    </button>
+                    {automationStatus?.paused ? (
+                      <button type="button" className="mt-1 w-full rounded-xl bg-emerald-300/[0.09] px-2 py-1.5 text-left text-[11px] text-emerald-100 hover:bg-emerald-300/[0.14]" onClick={() => void handleResumeAutomation()}>
+                        恢复同步
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </div>
           </div>
           <div
             className={cn(
@@ -528,7 +566,7 @@ export function HomePane({ windowFocused, activeSourceId, onActiveSourceChange }
                 <SourceAvatar src={activeSource.face} name={activeSource.name} className="size-12 rounded-full" />
                 <p className="text-sm font-medium text-foreground/80">{activeSource.name} 还没有本地视频数据</p>
                 <p className="max-w-md text-xs leading-5 text-muted-foreground">
-                  点击右上角刷新图标后，只会刷新视频标题、BV 号和发布时间，不会下载或转写。
+                  点击列表右侧刷新图标后，只会刷新视频标题、BV 号和发布时间，不会下载或转写。
                 </p>
               </div>
             ) : !activeSource && visibleVideos.length === 0 ? (
@@ -536,7 +574,7 @@ export function HomePane({ windowFocused, activeSourceId, onActiveSourceChange }
                 <Video size={24} className="text-foreground/35" />
                 <p className="text-sm font-medium text-foreground/80">还没有本地视频数据</p>
                 <p className="max-w-md text-xs leading-5 text-muted-foreground">
-                  在左侧固定 UP 后点击右上角刷新图标，这里只会保存标题、BV 号和发布时间。
+                  在左侧固定 UP 后点击列表右侧刷新图标，这里只会保存标题、BV 号和发布时间。
                 </p>
               </div>
             ) : (
@@ -546,19 +584,10 @@ export function HomePane({ windowFocused, activeSourceId, onActiveSourceChange }
                   const hasMaterial = materialBvids.has(video.bvid)
                   const selected = selectedVideoIds.includes(video.bvid)
                   const selectable = activeSource ? !hasMaterial && !queueItem : false
-                  const status = hasMaterial
-                    ? '已有资料'
-                    : queueItem?.status === 'processing'
-                      ? '处理中'
-                      : queueItem?.status === 'queued'
-                        ? '等待中'
-                        : queueItem?.status === 'failed'
-                          ? '处理失败'
-                          : queueItem?.status === 'skipped'
-                            ? '已跳过'
-                          : queueItem?.status === 'done'
-                            ? '已处理'
-                            : '未入队'
+                  const status = getVideoStatusMeta({
+                    hasMaterial,
+                    queueStatus: queueItem?.status,
+                  })
                   return (
                     <li key={video.bvid} className="flex items-center gap-3 px-4 py-3">
                       {activeSource ? (
@@ -575,7 +604,7 @@ export function HomePane({ windowFocused, activeSourceId, onActiveSourceChange }
                           onClick={() => handleToggleSourceVideo(video.bvid)}
                           aria-pressed={selected}
                           aria-label={selected ? '取消选择视频' : '选择视频加入队列'}
-                          title={selectable ? '选择后可加入队列' : '已在队列中或已有资料'}
+                          title={selectable ? '选择后可加入队列' : '已在队列中或已完成'}
                         >
                           {selected ? '✓' : '+'}
                         </button>
@@ -591,13 +620,9 @@ export function HomePane({ windowFocused, activeSourceId, onActiveSourceChange }
                       </div>
                       <Badge
                         variant="outline"
-                        className={cn(
-                          'shrink-0 border-white/[0.07] bg-black/12 text-[10px] text-foreground/55',
-                          hasMaterial && 'border-emerald-400/20 text-emerald-300/80',
-                          queueItem?.status === 'processing' && 'border-sky-400/20 text-sky-300/80',
-                        )}
+                        className={cn('shrink-0 text-[10px]', status.className)}
                       >
-                        {status}
+                        {status.label}
                       </Badge>
                     </li>
                   )
